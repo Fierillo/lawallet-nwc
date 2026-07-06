@@ -8,6 +8,12 @@ import type { LUD21VerifySuccess, LUD21VerifyError } from '@/types/lnurl'
 import { eventBus } from '@/lib/events/event-bus'
 import { ActivityEvent, invoiceLogMetadata, logActivity } from '@/lib/activity-log'
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Accept',
+}
+
 /**
  * LUD-21 (LNURL verify) endpoint.
  *
@@ -39,7 +45,7 @@ export const GET = withErrorHandling(
         status: 'ERROR',
         reason: 'Invalid payment hash',
       }
-      return NextResponse.json(error, { status: 400 })
+      return NextResponse.json(error, { status: 400, headers: CORS_HEADERS })
     }
 
     // Find the stored invoice. We need to confirm the payment hash actually
@@ -85,7 +91,7 @@ export const GET = withErrorHandling(
         preimage: invoice.preimage,
         pr: invoice.bolt11,
       }
-      return NextResponse.json(response)
+      return NextResponse.json(response, { headers: CORS_HEADERS })
     }
 
     // If expired, report as not settled (still returns pr for client to know)
@@ -96,7 +102,7 @@ export const GET = withErrorHandling(
         preimage: null,
         pr: invoice.bolt11,
       }
-      return NextResponse.json(response)
+      return NextResponse.json(response, { headers: CORS_HEADERS })
     }
 
     // Query the user's default wallet to check current status.
@@ -110,7 +116,7 @@ export const GET = withErrorHandling(
         preimage: null,
         pr: invoice.bolt11,
       }
-      return NextResponse.json(response)
+      return NextResponse.json(response, { headers: CORS_HEADERS })
     }
 
     let nwcClient: NWCClient | null = null
@@ -159,7 +165,7 @@ export const GET = withErrorHandling(
         preimage,
         pr: invoice.bolt11,
       }
-      return NextResponse.json(response)
+      return NextResponse.json(response, { headers: CORS_HEADERS })
     } catch (error) {
       logger.warn(
         { paymentHash, error: error instanceof Error ? error.message : String(error) },
@@ -186,7 +192,7 @@ export const GET = withErrorHandling(
         preimage: null,
         pr: invoice.bolt11,
       }
-      return NextResponse.json(response)
+      return NextResponse.json(response, { headers: CORS_HEADERS })
     } finally {
       try {
         nwcClient?.close()
@@ -194,5 +200,11 @@ export const GET = withErrorHandling(
         // ignore close errors
       }
     }
-  }
+  },
+  { headers: CORS_HEADERS }
+)
+
+export const OPTIONS = withErrorHandling(
+  async () => new NextResponse(null, { status: 204, headers: CORS_HEADERS }),
+  { headers: CORS_HEADERS }
 )

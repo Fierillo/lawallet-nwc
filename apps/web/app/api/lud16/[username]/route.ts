@@ -14,6 +14,12 @@ import {
 } from '@/lib/wallet/resolve-payment-route'
 import { getSettings } from '@/lib/settings'
 import { lncurlHealTarget } from '@/lib/wallet/lncurl-wallet'
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Accept',
+}
 import {
   getLud16AvatarMetadataEntry,
   warmNostrProfileForLud16,
@@ -42,7 +48,7 @@ export const GET = withErrorHandling(
         metadata: JSON.stringify([
           ['text/plain', `LaWallet LNURL verification for ${host}: ${probe}`],
         ]),
-      } as LUD06Response & { status: 'OK' })
+      } as LUD06Response & { status: 'OK' }, { headers: CORS_HEADERS })
     }
 
     // Load the address along with every piece resolveWalletRoute needs: its
@@ -150,7 +156,7 @@ export const GET = withErrorHandling(
         }
         const body = (await remote.json()) as LUD06Response
         logger.info({ username, remoteUrl }, 'LUD16 alias proxied')
-        return NextResponse.json(body)
+        return NextResponse.json(body, { headers: CORS_HEADERS })
       } catch (err) {
         if (err instanceof NotFoundError) throw err
         logger.warn(
@@ -191,20 +197,29 @@ export const GET = withErrorHandling(
       ...(avatarEntry ? [avatarEntry] : []),
     ]
 
-    return NextResponse.json({
-      status: 'OK',
-      tag: 'payRequest',
-      callback,
-      minSendable: 1000, // 1 satoshi in msats
-      maxSendable: 1000000000, // 1,000,000 sats in msats
-      metadata: JSON.stringify(metadata),
-      // LUD-12: declare the max comment length we accept on the callback.
-      // See: https://github.com/lnurl/luds/blob/luds/12.md
-      commentAllowed: LUD12_MAX_COMMENT_LENGTH,
-      payerData: {
-        name: { mandatory: false },
-        email: { mandatory: false }
-      }
-    } as LUD06Response)
-  }
+    return NextResponse.json(
+      {
+        status: 'OK',
+        tag: 'payRequest',
+        callback,
+        minSendable: 1000, // 1 satoshi in msats
+        maxSendable: 1000000000, // 1,000,000 sats in msats
+        metadata: JSON.stringify(metadata),
+        // LUD-12: declare the max comment length we accept on the callback.
+        // See: https://github.com/lnurl/luds/blob/luds/12.md
+        commentAllowed: LUD12_MAX_COMMENT_LENGTH,
+        payerData: {
+          name: { mandatory: false },
+          email: { mandatory: false },
+        },
+      } as LUD06Response,
+      { headers: CORS_HEADERS }
+    )
+  },
+  { headers: CORS_HEADERS }
+)
+
+export const OPTIONS = withErrorHandling(
+  async () => new NextResponse(null, { status: 204, headers: CORS_HEADERS }),
+  { headers: CORS_HEADERS }
 )

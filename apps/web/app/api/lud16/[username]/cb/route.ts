@@ -24,6 +24,12 @@ import { resolveWalletRoute } from '@/lib/wallet/resolve-payment-route'
 import { DriverError, driverForWallet } from '@/lib/wallet/drivers'
 import { eventBus } from '@/lib/events/event-bus'
 import { getSettings } from '@/lib/settings'
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Accept',
+}
 import {
   createLncurlRemoteWallet,
   lncurlHealTarget,
@@ -296,6 +302,12 @@ export const GET = withErrorHandling(
       verify,
     }
 
-    return NextResponse.json(response)
-  }
+    return NextResponse.json(response, { headers: CORS_HEADERS })
+  },
+  { headers: CORS_HEADERS }
+)
+
+export const OPTIONS = withErrorHandling(
+  async () => new NextResponse(null, { status: 204, headers: CORS_HEADERS }),
+  { headers: CORS_HEADERS }
 )

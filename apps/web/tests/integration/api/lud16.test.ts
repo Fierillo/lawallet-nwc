@@ -72,9 +72,15 @@ vi.mock('light-bolt11-decoder', () => ({
   }),
 }))
 
-import { GET as Lud16Get } from '@/app/api/lud16/[username]/route'
+import {
+  GET as Lud16Get,
+  OPTIONS as Lud16Options,
+} from '@/app/api/lud16/[username]/route'
 import { getLud16AvatarMetadataEntry } from '@/lib/nostr/lud16-avatar'
-import { GET as Lud16CbGet } from '@/app/api/lud16/[username]/cb/route'
+import {
+  GET as Lud16CbGet,
+  OPTIONS as Lud16CbOptions,
+} from '@/app/api/lud16/[username]/cb/route'
 import { LNURL_VERIFY_USERNAME } from '@/lib/domain-onboarding'
 import { closeAllServerNwcClients } from '@/lib/wallet/drivers/nwc-client-cache'
 import { getSettings } from '@/lib/settings'
@@ -151,6 +157,14 @@ describe('GET /api/lud16/[username]', () => {
     expect(body.minSendable).toBe(1000)
     expect(body.maxSendable).toBe(1000000000)
     expect(body.commentAllowed).toBe(200)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
+  })
+
+  it('returns CORS headers for metadata OPTIONS', async () => {
+    const res = await Lud16Options(createNextRequest('/api/lud16/alice') as any)
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
   })
 
   it('embeds the cached Nostr avatar as a base64 image in the metadata', async () => {
@@ -385,6 +399,7 @@ describe('GET /api/lud16/[username]/cb', () => {
     expect(body.verify).toBe(
       `https://app.test.com/api/lud16/alice/verify/${'a'.repeat(64)}`
     )
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
     // A fresh invoice must announce itself on the bus so any connected
     // dashboard (address detail / admin home / invoices feed) refetches
     // without a manual reload.
@@ -465,6 +480,13 @@ describe('GET /api/lud16/[username]/cb', () => {
 
     expect(res.status).toBe(404)
     expect(prismaMock.invoice.upsert).not.toHaveBeenCalled()
+  })
+
+  it('returns CORS headers for callback OPTIONS', async () => {
+    const res = await Lud16CbOptions(createNextRequest('/api/lud16/alice/cb') as any)
+
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*')
   })
 
   // ─── LUD-12 (comment) ─────────────────────────────────────────────────
