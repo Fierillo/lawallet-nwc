@@ -220,6 +220,6 @@ export const GET = withErrorHandling(
 )
 
 export const OPTIONS = withErrorHandling(
-  async () => new NextResponse(null, { status: 204, headers: CORS_HEADERS }),
+  async (_req: NextRequest) => new NextResponse(null, { status: 204, headers: CORS_HEADERS }),
   { headers: CORS_HEADERS }
 )
