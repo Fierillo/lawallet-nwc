@@ -4,7 +4,11 @@ import type { Card } from '@/types/card'
 import { authenticateWithPermission } from '@/lib/auth/unified-auth'
 import { Permission } from '@/lib/auth/permissions'
 import { withErrorHandling } from '@/types/server/error-handler'
-import { NotFoundError, ValidationError } from '@/types/server/errors'
+import {
+  ConflictError,
+  NotFoundError,
+  ValidationError
+} from '@/types/server/errors'
 import { idParam, updateCardSchema } from '@/lib/validation/schemas'
 import { validateBody, validateParams } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
@@ -27,6 +31,7 @@ export const GET = withErrorHandling(
         otc: true,
         kind: true,
         blockedAt: true,
+        disabledAt: true,
         design: {
           select: {
             id: true,
@@ -61,25 +66,26 @@ export const GET = withErrorHandling(
       throw new NotFoundError('Card not found')
     }
 
-  // Transform to match Card type
-  const transformedCard: Card = {
-    id: card.id,
-    design: card.design,
-    ntag424: card.ntag424
-      ? {
-          ...card.ntag424,
-          createdAt: card.ntag424.createdAt
-        }
-      : undefined,
-    createdAt: card.createdAt,
-    title: card.title || undefined,
-    lastUsedAt: card.lastUsedAt || undefined,
-    pubkey: card.user?.pubkey,
-    username: card.user?.lightningAddresses?.[0]?.username || undefined,
-    otc: card.otc || undefined,
-    kind: card.kind,
-    blocked: card.blockedAt !== null
-  }
+    // Transform to match Card type
+    const transformedCard: Card = {
+      id: card.id,
+      design: card.design,
+      ntag424: card.ntag424
+        ? {
+            ...card.ntag424,
+            createdAt: card.ntag424.createdAt
+          }
+        : undefined,
+      createdAt: card.createdAt,
+      title: card.title || undefined,
+      lastUsedAt: card.lastUsedAt || undefined,
+      pubkey: card.user?.pubkey,
+      username: card.user?.lightningAddresses?.[0]?.username || undefined,
+      otc: card.otc || undefined,
+      kind: card.kind,
+      blocked: card.blockedAt !== null,
+      disabled: card.disabledAt !== null
+    }
 
     return NextResponse.json(transformedCard)
   }
@@ -92,7 +98,7 @@ export const GET = withErrorHandling(
  *   - `remoteWalletId: <id>` rebinds the card to that wallet. The wallet
  *     must be owned by the caller's user record and must not be REVOKED.
  *   - `remoteWalletId: null` unbinds; the card falls back to the owner's
- *     default wallet at run-time.
+ *     primary-address wallet at run-time.
  *
  * Cross-field validation lives here (not in Zod) for the same reason as
  * the LA PUT — the rules depend on database state, not just the body
@@ -111,14 +117,14 @@ export const PATCH = withErrorHandling(
 
     const card = await prisma.card.findUnique({
       where: { id },
-      select: { id: true, userId: true, remoteWalletId: true },
+      select: { id: true, userId: true, remoteWalletId: true }
     })
     if (!card) throw new NotFoundError('Card not found')
 
     let nextWalletId: string | null = null
     if (body.remoteWalletId !== null) {
       const wallet = await prisma.remoteWallet.findUnique({
-        where: { id: body.remoteWalletId },
+        where: { id: body.remoteWalletId }
       })
       // The card's owner is the wallet ownership anchor. If the card has
       // no owner yet (orphan in the inventory), only an ADMIN can be
@@ -146,16 +152,24 @@ export const PATCH = withErrorHandling(
         remoteWalletId: true,
         kind: true,
         blockedAt: true,
+        disabledAt: true,
         design: {
-          select: { id: true, imageUrl: true, description: true, createdAt: true },
+          select: {
+            id: true,
+            imageUrl: true,
+            description: true,
+            createdAt: true
+          }
         },
         ntag424: {
           select: {
-            cid: true, ctr: true, createdAt: true,
-          },
+            cid: true,
+            ctr: true,
+            createdAt: true
+          }
         },
-        user: { select: { pubkey: true } },
-      },
+        user: { select: { pubkey: true } }
+      }
     })
 
     eventBus.emit({ type: 'cards:updated', timestamp: Date.now() })
@@ -178,8 +192,8 @@ export const PATCH = withErrorHandling(
         metadata: {
           cardId: id,
           previousRemoteWalletId: card.remoteWalletId,
-          remoteWalletId: nextWalletId,
-        },
+          remoteWalletId: nextWalletId
+        }
       })
       if (nextWalletId) {
         logActivity.fireAndForget({
@@ -187,7 +201,7 @@ export const PATCH = withErrorHandling(
           event: ActivityEvent.NWC_ASSIGNED_TO_CARD,
           message: `Wallet assigned to card ${id}`,
           userId: card.userId ?? undefined,
-          metadata: { cardId: id, remoteWalletId: nextWalletId },
+          metadata: { cardId: id, remoteWalletId: nextWalletId }
         })
       }
     }
@@ -207,10 +221,11 @@ export const PATCH = withErrorHandling(
       remoteWalletId: updated.remoteWalletId ?? null,
       kind: updated.kind,
       blocked: updated.blockedAt !== null,
+      disabled: updated.disabledAt !== null
     }
 
     return NextResponse.json(transformedCard)
-  },
+  }
 )
 
 export const DELETE = withErrorHandling(
@@ -233,6 +248,31 @@ export const DELETE = withErrorHandling(
 
     // Delete card and its associated ntag424 in a transaction
     await prisma.$transaction(async tx => {
+      // Serialize deletion with the payment-claim CTE, which also locks the
+      // Card row before creating an attempt. Without this lock/check, deleting
+      // a card can cascade-delete a PENDING attempt while its irreversible NWC
+      // request is still running, losing both idempotency and transaction history.
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "Card"
+        WHERE "id" = ${id}
+        FOR UPDATE
+      `
+      if (!locked[0]) throw new NotFoundError('Card not found')
+
+      const unresolvedPayment = await tx.cardPaymentAttempt.findFirst({
+        where: {
+          cardId: id,
+          status: { in: ['PENDING', 'UNKNOWN'] }
+        },
+        select: { id: true }
+      })
+      if (unresolvedPayment) {
+        throw new ConflictError(
+          'Card has an unresolved payment and cannot be deleted yet'
+        )
+      }
+
       // Delete the card first (this will remove the foreign key reference)
       await tx.card.delete({
         where: { id }
@@ -252,7 +292,7 @@ export const DELETE = withErrorHandling(
       category: 'CARD',
       event: ActivityEvent.CARD_DELETED,
       message: `Card deleted (${id})`,
-      metadata: { cardId: id, ntag424Cid: card.ntag424Cid },
+      metadata: { cardId: id, ntag424Cid: card.ntag424Cid }
     })
 
     return NextResponse.json({

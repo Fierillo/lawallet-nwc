@@ -24,6 +24,7 @@ import {
   getLud16AvatarMetadataEntry,
   warmNostrProfileForLud16,
 } from '@/lib/nostr/lud16-avatar'
+import { getPrimaryRemoteWalletForUser } from '@/lib/wallet/primary-wallet'
 
 /** Abort the remote LUD-16 fetch for ALIAS mode after this many ms. */
 const ALIAS_FETCH_TIMEOUT_MS = 5000
@@ -51,11 +52,10 @@ export const GET = withErrorHandling(
       } as LUD06Response & { status: 'OK' }, { headers: CORS_HEADERS })
     }
 
-    // Load the address along with every piece resolveWalletRoute needs: its
-    // bound RemoteWallet (CUSTOM) and the owner's default RemoteWallet
-    // (DEFAULT), plus the legacy NWCConnection / `user.nwc` fallbacks for
-    // un-migrated accounts. One query, no N+1. Must stay in lockstep with
-    // the /cb route's query so metadata and callback can't disagree.
+    // Load the address along with its bound RemoteWallet (CUSTOM_NWC). The
+    // DEFAULT_NWC wallet is derived from the user's primary address below.
+    // Must stay in lockstep with the /cb route's query so metadata and
+    // callback can't disagree.
     const lightningAddress = await prisma.lightningAddress.findUnique({
       where: { username },
       include: {
@@ -66,11 +66,6 @@ export const GET = withErrorHandling(
             // pubkey drives the cached-Nostr-avatar embed in the payRequest
             // metadata below.
             pubkey: true,
-            remoteWallets: {
-              where: { isDefault: true },
-              select: { id: true, type: true, config: true, status: true },
-              take: 1,
-            },
           },
         },
       },
@@ -80,11 +75,13 @@ export const GET = withErrorHandling(
       throw new NotFoundError('Lightning address not found')
     }
 
+    const primaryWallet = await getPrimaryRemoteWalletForUser(lightningAddress.user.id)
+
     const route = resolveWalletRoute({
       mode: lightningAddress.mode,
       redirect: lightningAddress.redirect,
       remoteWallet: lightningAddress.remoteWallet,
-      defaultRemoteWallet: lightningAddress.user.remoteWallets[0] ?? null,
+      defaultRemoteWallet: primaryWallet,
     })
 
     // IDLE (disabled by the owner) is always a dead end — no LNURL here.
@@ -110,7 +107,7 @@ export const GET = withErrorHandling(
         {
           mode: lightningAddress.mode,
           boundWallet: lightningAddress.remoteWallet,
-          defaultWallet: lightningAddress.user.remoteWallets[0] ?? null,
+          defaultWallet: primaryWallet,
         },
         settings,
       )

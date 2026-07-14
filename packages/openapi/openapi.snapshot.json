@@ -227,10 +227,34 @@
         "properties": {
           "pr": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 8192
           }
         },
         "required": [
+          "pr"
+        ]
+      },
+      "CardScanCallbackQuery": {
+        "type": "object",
+        "properties": {
+          "p": {
+            "type": "string",
+            "minLength": 1
+          },
+          "c": {
+            "type": "string",
+            "minLength": 1
+          },
+          "pr": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "p",
+          "c",
           "pr"
         ]
       },
@@ -433,6 +457,31 @@
           "mode"
         ]
       },
+      "WalletAliasProbeRequest": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "maxLength": 254,
+            "pattern": "^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
+          }
+        },
+        "required": [
+          "address"
+        ]
+      },
+      "WalletCardUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "linkDefaultWallet": {
+            "type": "boolean"
+          }
+        },
+        "description": "Owner-scoped card update. Provide exactly one action: set `enabled` to enable or disable the card, or set `linkDefaultWallet` to true to bind it to the caller’s primary remote wallet."
+      },
       "UserRoleUpdateRequest": {
         "type": "object",
         "properties": {
@@ -521,6 +570,10 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 120
+          },
+          "isDefault": {
+            "type": "boolean",
+            "default": false
           }
         },
         "description": "Provision a disposable LNCurl wallet. The server mints the NWC connection string; the new wallet becomes the default and inherits the previous wallet’s bindings."
@@ -2299,7 +2352,7 @@
         "tags": [
           "Cards"
         ],
-        "summary": "Resolve a scanned card and return the LNURL-pay flow entry point.",
+        "summary": "Resolve a scanned card and return the LNURL-withdraw flow entry point.",
         "description": "The first LNURL request on tap. Send the request header `x-request-action: info` to get the card’s public status JSON (design, image, owner, paired/used) instead of the LNURL withdraw request — so a client can show the card identity without running the withdraw flow. Non-sensitive only (never keys/OTC/SUN params).",
         "operationId": "cards.scan",
         "security": [],
@@ -2346,27 +2399,31 @@
                           "type": "string",
                           "format": "uri"
                         },
-                        "maxSendable": {
+                        "k1": {
+                          "type": "string"
+                        },
+                        "maxWithdrawable": {
                           "type": "integer"
                         },
-                        "minSendable": {
+                        "minWithdrawable": {
                           "type": "integer"
                         },
-                        "metadata": {
+                        "defaultDescription": {
                           "type": "string"
                         },
                         "tag": {
                           "type": "string",
                           "enum": [
-                            "payRequest"
+                            "withdrawRequest"
                           ]
                         }
                       },
                       "required": [
                         "callback",
-                        "maxSendable",
-                        "minSendable",
-                        "metadata",
+                        "k1",
+                        "maxWithdrawable",
+                        "minWithdrawable",
+                        "defaultDescription",
                         "tag"
                       ]
                     },
@@ -2522,7 +2579,7 @@
         "tags": [
           "Cards"
         ],
-        "summary": "LNURL-pay callback for a scanned card.",
+        "summary": "LNURL-withdraw callback for a scanned card.",
         "operationId": "cards.scan.callback",
         "security": [],
         "parameters": [
@@ -2541,24 +2598,68 @@
               "minLength": 1
             },
             "required": true,
+            "name": "p",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "c",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "required": true,
             "name": "pr",
             "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "LNURL-pay callback response.",
+            "description": "LUD-03 callback response.",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "pr": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "OK"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ERROR"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason"
+                      ]
                     }
-                  },
-                  "required": [
-                    "pr"
                   ]
                 }
               }
@@ -4988,6 +5089,299 @@
           },
           "404": {
             "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/cards/{id}": {
+      "patch": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Update one of the caller’s cards.",
+        "description": "Enables or disables an owner-scoped card, or binds it to the caller’s active primary remote wallet. Blocked cards cannot be updated.",
+        "operationId": "wallet.cards.update",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletCardUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Card updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "pubkey": {
+                      "type": "string"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "remoteWalletId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "SIMPLE",
+                        "MASTER"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "description": "A card paired to the caller. Never includes NTAG424 keys (only the public `cid`/`ctr` on `ntag424`)."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/addresses/alias-probe": {
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Probe a Lightning Address before using it as an alias.",
+        "description": "Checks LUD-16 reachability and reports optional LUD-21 and NIP-57 capabilities. LUD-16 support determines whether the alias can be saved.",
+        "operationId": "wallet.addresses.probeAlias",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletAliasProbeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Alias capabilities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string"
+                    },
+                    "canSave": {
+                      "type": "boolean"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "properties": {
+                        "lud16": {
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ok",
+                            "message"
+                          ]
+                        },
+                        "lud21": {
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ok",
+                            "message"
+                          ]
+                        },
+                        "nip57": {
+                          "type": "object",
+                          "properties": {
+                            "ok": {
+                              "type": "boolean"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "ok",
+                            "message"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "lud16",
+                        "lud21",
+                        "nip57"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "address",
+                    "canSave",
+                    "checks"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8594,7 +8988,9 @@
                                     "type": "string",
                                     "enum": [
                                       "connecting",
-                                      "subscribed",
+                                      "negotiating",
+                                      "ready",
+                                      "disconnected",
                                       "error",
                                       "closed"
                                     ]
@@ -8663,11 +9059,27 @@
                                   "type": "integer",
                                   "minimum": 0
                                 },
+                                "webhooksPending": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
                                 "nwcRequests": {
                                   "type": "integer",
                                   "minimum": 0
                                 },
                                 "nwcRequestErrors": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "nwcPayments": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "nwcPaymentDuplicates": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "nwcPaymentsPending": {
                                   "type": "integer",
                                   "minimum": 0
                                 },
@@ -8680,6 +9092,18 @@
                                   "minimum": 0
                                 },
                                 "catchupErrors": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "deadProbesRun": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "deadProbesTimedOut": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "walletsDeclaredDead": {
                                   "type": "integer",
                                   "minimum": 0
                                 }
@@ -8725,6 +9149,31 @@
                                       "null"
                                     ]
                                   },
+                                  "feesPaidMsats": {
+                                    "type": [
+                                      "integer",
+                                      "null"
+                                    ],
+                                    "minimum": 0
+                                  },
+                                  "invoice": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "preimage": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "settledAt": {
+                                    "type": [
+                                      "integer",
+                                      "null"
+                                    ]
+                                  },
                                   "receivedAt": {
                                     "type": "string"
                                   },
@@ -8734,6 +9183,22 @@
                                       "pending",
                                       "delivered",
                                       "failed"
+                                    ]
+                                  },
+                                  "webhookAttempts": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "webhookLastError": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "webhookNextAttemptAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
                                     ]
                                   },
                                   "recovered": {
@@ -8751,6 +9216,12 @@
                                 ]
                               },
                               "maxItems": 100
+                            },
+                            "degraded": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
                             }
                           },
                           "required": [

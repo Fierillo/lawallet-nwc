@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createHmac } from 'crypto'
+import { createHash, createHmac } from 'crypto'
 import { NextRequest } from 'next/server'
 import { assertResponse } from '@/tests/helpers/api-helpers'
 import { prismaMock, resetPrismaMock } from '@/tests/helpers/prisma-mock'
@@ -43,7 +43,9 @@ vi.mock('@/lib/activity-log', () => ({
     NWC_PAYMENT_RECEIVED: 'nwc.payment_received',
     NWC_PAYMENT_SENT: 'nwc.payment_sent',
     NWC_LISTENER_ERROR: 'nwc.listener_error',
+    NWC_WALLET_DEAD: 'nwc.wallet_dead',
     INVOICE_PAID: 'invoice.paid',
+    CARD_PAYMENT: 'card.payment',
   },
   invoiceLogMetadata: vi.fn(() => ({})),
   logActivity: { fireAndForget: (...args: unknown[]) => fireAndForgetMock(...args) },
@@ -53,6 +55,10 @@ import { POST } from '@/app/api/webhooks/nwc/route'
 import { eventBus } from '@/lib/events/event-bus'
 
 const HASH = 'a'.repeat(64)
+const SENT_PREIMAGE = '11'.repeat(32)
+const SENT_HASH = createHash('sha256')
+  .update(Buffer.from(SENT_PREIMAGE, 'hex'))
+  .digest('hex')
 
 const paymentReceived = {
   type: 'payment_received',
@@ -239,6 +245,65 @@ describe('POST /api/webhooks/nwc', () => {
     )
   })
 
+  it.each(['DIRECT', 'LISTENER'] as const)(
+    'reconciles an unresolved %s card attempt from a verified payment_sent notification',
+    async transport => {
+      vi.mocked(prismaMock.cardPaymentAttempt.findUnique).mockResolvedValue({
+        id: 'attempt-1',
+        requestId: 'request-1',
+        cardId: 'card-1',
+        counter: 7,
+        walletId: 'wallet-1',
+        paymentHash: SENT_HASH,
+        bolt11: 'lnbc1cardinvoice',
+        amountMsats: 21_000,
+        transport,
+        status: 'UNKNOWN',
+        preimage: null,
+        feesPaidMsats: null,
+        errorCode: 'PAYMENT_OUTCOME_UNKNOWN',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        resolvedAt: null,
+      } as never)
+      vi.mocked(prismaMock.cardPaymentAttempt.updateMany).mockResolvedValue({
+        count: 1,
+      } as never)
+
+      const res = await POST(
+        signedRequest({
+          ...paymentReceived,
+          type: 'payment_sent',
+          payment: {
+            ...paymentReceived.payment,
+            paymentHash: SENT_HASH,
+            preimage: SENT_PREIMAGE,
+          },
+        })
+      )
+      await assertResponse(res, 200)
+
+      expect(prismaMock.cardPaymentAttempt.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: 'attempt-1',
+            status: { in: ['PENDING', 'UNKNOWN'] },
+            transport,
+          },
+          data: expect.objectContaining({
+            status: 'SUCCEEDED',
+            transport,
+            preimage: SENT_PREIMAGE,
+            resolvedAt: expect.any(Date),
+          }),
+        })
+      )
+      expect(eventBus.emit).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'cards:updated' })
+      )
+    }
+  )
+
   it('logs listener_error at WARN without touching invoices', async () => {
     const res = await POST(
       signedRequest({
@@ -253,5 +318,78 @@ describe('POST /api/webhooks/nwc', () => {
     expect(fireAndForgetMock).toHaveBeenCalledWith(
       expect.objectContaining({ event: 'nwc.listener_error', level: 'WARN' })
     )
+  })
+
+  const walletDead = {
+    type: 'wallet_dead',
+    eventKey: 'dead-1',
+    walletId: 'wallet-1',
+    receivedAt: Date.now(),
+    unresponsiveSeconds: 4 * 3600,
+    relaysConnected: true,
+  }
+
+  it('archives an ACTIVE LNCurl wallet as DEAD on wallet_dead', async () => {
+    vi.mocked(prismaMock.remoteWallet.findUnique).mockResolvedValue({
+      id: 'wallet-1',
+      userId: 'user-1',
+      status: 'ACTIVE',
+      config: { provider: 'lncurl' },
+      name: 'LNCurl wallet',
+    } as never)
+    vi.mocked(prismaMock.remoteWallet.updateMany).mockResolvedValue({
+      count: 1,
+    } as never)
+
+    const res = await POST(signedRequest(walletDead))
+    await assertResponse(res, 200)
+    expect(prismaMock.remoteWallet.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'wallet-1', status: 'ACTIVE' },
+        data: expect.objectContaining({ status: 'DEAD', isDefault: false }),
+      })
+    )
+    expect(fireAndForgetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'nwc.wallet_dead',
+        level: 'WARN',
+        userId: 'user-1',
+      })
+    )
+  })
+
+  it("never archives a non-LNCurl wallet — the user's own NWC is left alone", async () => {
+    vi.mocked(prismaMock.remoteWallet.findUnique).mockResolvedValue({
+      id: 'wallet-1',
+      userId: 'user-1',
+      status: 'ACTIVE',
+      config: { provider: 'nwc' },
+      name: 'My Alby',
+    } as never)
+
+    const res = await POST(signedRequest(walletDead))
+    await assertResponse(res, 200)
+    expect(prismaMock.remoteWallet.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('is idempotent: a wallet_dead replay for a non-ACTIVE wallet is a no-op', async () => {
+    vi.mocked(prismaMock.remoteWallet.findUnique).mockResolvedValue({
+      id: 'wallet-1',
+      userId: 'user-1',
+      status: 'DEAD',
+      config: { provider: 'lncurl' },
+      name: 'LNCurl wallet',
+    } as never)
+
+    const res = await POST(signedRequest(walletDead))
+    await assertResponse(res, 200)
+    expect(prismaMock.remoteWallet.updateMany).not.toHaveBeenCalled()
+  })
+
+  it('rejects a wallet_dead payload with relaysConnected:false (schema pins it true)', async () => {
+    const res = await POST(
+      signedRequest({ ...walletDead, relaysConnected: false })
+    )
+    expect(res.status).toBe(400)
   })
 })

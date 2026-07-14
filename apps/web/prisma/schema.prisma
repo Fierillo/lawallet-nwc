@@ -98,6 +98,18 @@ enum NostrProfileImageKind {
   COVER
 }
 
+enum CardPaymentTransport {
+  DIRECT
+  LISTENER
+}
+
+enum CardPaymentStatus {
+  PENDING
+  SUCCEEDED
+  REJECTED
+  UNKNOWN
+}
+
 model User {
   id                 String             @id
   pubkey             String             @unique
@@ -160,16 +172,16 @@ model Ntag424 {
 }
 
 model LightningAddress {
-  username        String               @id
-  userId          String
-  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  mode            LightningAddressMode @default(DEFAULT_NWC)
-  redirect        String?
-  remoteWalletId  String?
-  remoteWallet    RemoteWallet?        @relation(fields: [remoteWalletId], references: [id], onDelete: SetNull)
-  isPrimary       Boolean              @default(false)
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  username       String               @id
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mode           LightningAddressMode @default(DEFAULT_NWC)
+  redirect       String?
+  remoteWalletId String?
+  remoteWallet   RemoteWallet?        @relation(fields: [remoteWalletId], references: [id], onDelete: SetNull)
+  isPrimary      Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
 
   @@index([userId])
   @@index([remoteWalletId])
@@ -204,20 +216,20 @@ model RemoteWallet {
 }
 
 model Card {
-  id             String    @id @default(uuid())
-  designId       String
-  ntag424Cid     String?   @unique
-  createdAt      DateTime  @default(now())
-  title          String?
-  lastUsedAt     DateTime?
+  id                  String    @id @default(uuid())
+  designId            String
+  ntag424Cid          String?   @unique
+  createdAt           DateTime  @default(now())
+  title               String?
+  lastUsedAt          DateTime?
   // `userId` is the card's current *holder* (owner). A ONE_TIME activation
   // claim transfers this to the new claimer. Pay-time wallet resolution and
   // `users/[userId]/cards` both key off this field.
-  userId         String?
-  username       String?
-  otc            String?
-  remoteWalletId String?
-  kind           CardKind  @default(SIMPLE)
+  userId              String?
+  username            String?
+  otc                 String?
+  remoteWalletId      String?
+  kind                CardKind  @default(SIMPLE)
   // One-time, replay-protected programming token for the BoltCard QR. Minted
   // only while the card is still "fresh" (never tapped) and consumed by the
   // first `/write` fetch, so the key-export URL can't be replayed. Null when
@@ -229,12 +241,16 @@ model Card {
   // re-paired, activated, or programmed — only re-wiped (the reset keys stay
   // re-fetchable) until an operator explicitly deletes it. Null = not blocked.
   blockedAt           DateTime?
+  // Reversible owner-controlled pause. Disabled cards remain paired and visible
+  // in the wallet, but cannot produce payable LNURL-withdraw responses.
+  disabledAt          DateTime?
 
   design           CardDesign            @relation(fields: [designId], references: [id])
   ntag424          Ntag424?              @relation(fields: [ntag424Cid], references: [cid])
   user             User?                 @relation(fields: [userId], references: [id])
   remoteWallet     RemoteWallet?         @relation(fields: [remoteWalletId], references: [id], onDelete: SetNull)
   activationTokens CardActivationToken[]
+  paymentAttempts  CardPaymentAttempt[]
 
   @@index([userId])
   @@index([remoteWalletId])
@@ -263,6 +279,38 @@ model CardActivationToken {
 
   @@index([cardId])
   @@index([status])
+}
+
+/// Durable, idempotent record of a BoltCard payment. `walletId` is an audit
+/// snapshot rather than a relation: deleting a RemoteWallet configuration must
+/// not erase payment history or make the wallet impossible to delete.
+///
+/// At most one PENDING/UNKNOWN attempt may exist for a card. PostgreSQL enforces
+/// that invariant with a partial unique index in the migration because Prisma
+/// cannot represent partial indexes in this schema.
+model CardPaymentAttempt {
+  id            String               @id @default(cuid())
+  requestId     String               @unique
+  cardId        String
+  card          Card                 @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  counter       Int
+  walletId      String
+  paymentHash   String
+  bolt11        String
+  amountMsats   Int
+  transport     CardPaymentTransport
+  status        CardPaymentStatus    @default(PENDING)
+  preimage      String?
+  feesPaidMsats Int?
+  errorCode     String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  resolvedAt    DateTime?
+
+  @@unique([cardId, counter])
+  @@unique([walletId, paymentHash])
+  @@index([cardId, createdAt])
+  @@index([status, updatedAt])
 }
 
 model AlbySubAccount {
@@ -325,8 +373,8 @@ model ActivityLog {
 }
 
 model NostrProfileCache {
-  npub               String                    @id
-  pubkey             String                    @unique
+  npub               String                   @id
+  pubkey             String                   @unique
   name               String?
   displayName        String?
   about              String?
@@ -340,8 +388,8 @@ model NostrProfileCache {
   fetchedAt          DateTime?
   lastFetchAttemptAt DateTime?
   lastFetchError     String?
-  createdAt          DateTime                  @default(now())
-  updatedAt          DateTime                  @updatedAt
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
   images             NostrProfileImageCache[]
 
   @@index([fetchedAt])

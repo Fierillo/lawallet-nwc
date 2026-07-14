@@ -20,13 +20,23 @@ const envSchema = z.object({
     .default('4100')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .describe('HTTP port for /health, /status and /nwc/request'),
+    .describe(
+      'HTTP port for health, status, legacy proxy and idempotent payment APIs'
+    ),
 
   LISTENER_AUTH_SECRET: z
     .string()
     .min(32, 'LISTENER_AUTH_SECRET must be at least 32 characters long')
     .describe(
-      'Shared secret: signs webhooks to apps/web, guards the HTTP API as a bearer token'
+      'Webhook signing secret; also guards HTTP as a compatibility fallback'
+    ),
+
+  LISTENER_REQUEST_AUTH_SECRET: z
+    .string()
+    .min(32, 'LISTENER_REQUEST_AUTH_SECRET must be at least 32 characters long')
+    .optional()
+    .describe(
+      'Optional dedicated web-to-listener bearer secret (falls back to LISTENER_AUTH_SECRET)'
     ),
 
   WEB_ORIGIN: z
@@ -110,6 +120,49 @@ const envSchema = z.object({
     .pipe(z.number().int().nonnegative())
     .describe(
       'Periodic safety catch-up for all subscribed wallets (0 disables)'
+    ),
+
+  DEAD_WALLET_DETECTION_ENABLED: z
+    .string()
+    .default('true')
+    .transform(val => val === 'true')
+    .pipe(z.boolean())
+    .describe(
+      'Archive a wallet as DEAD when it stops answering for DEAD_THRESHOLD_HOURS while its relays stay connected (LNCurl-provider wallets only, enforced web-side)'
+    ),
+
+  DEAD_THRESHOLD_HOURS: z
+    .string()
+    .default('4')
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .describe(
+      'Hours of no response (relays up) before a wallet is declared dead'
+    ),
+
+  DEAD_PROBE_INTERVAL_MS: z
+    .string()
+    .default('900000')
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .describe('How often the dead-wallet prober sweeps subscribed wallets'),
+
+  DEAD_PROBE_TIMEOUT_MS: z
+    .string()
+    .default('10000')
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .describe(
+      'Per-probe get_info timeout — a clean timeout (relays up) is the death signal'
+    ),
+
+  DEAD_CONFIRMATION_PROBES: z
+    .string()
+    .default('3')
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .describe(
+      'Consecutive failing probes (relays up) required before declaring a wallet dead — guards against a single transient slow reply'
     )
 })
 

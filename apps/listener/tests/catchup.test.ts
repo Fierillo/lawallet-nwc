@@ -51,13 +51,20 @@ const freshMetrics = () => ({
   eventsDuplicate: 0,
   webhooksDelivered: 0,
   webhooksFailed: 0,
+  webhooksPending: 0,
   nwcRequests: 0,
   nwcRequestErrors: 0,
+  nwcPayments: 0,
+  nwcPaymentDuplicates: 0,
+  nwcPaymentsPending: 0,
   reconciles: 0,
   notifiesReceived: 0,
   eventsRecovered: 0,
   catchupRuns: 0,
-  catchupErrors: 0
+  catchupErrors: 0,
+  deadProbesRun: 0,
+  deadProbesTimedOut: 0,
+  walletsDeclaredDead: 0
 })
 
 const settledTx = (

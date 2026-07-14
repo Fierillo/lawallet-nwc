@@ -94,6 +94,21 @@ export const nwcWebhookPayloadSchema = z.discriminatedUnion('type', [
       message: z.string(),
     }),
   }),
+  /**
+   * The listener observed a wallet go unresponsive for a sustained window
+   * WHILE its relays stayed connected — the signature of a disposable LNCurl
+   * wallet whose provider destroyed it. Purely an observation: web decides
+   * whether to archive it (only LNCurl-provider wallets are archived as DEAD).
+   * `relaysConnected` is pinned to `true` so a network outage can never be
+   * misread as death.
+   */
+  nwcWebhookBase.extend({
+    type: z.literal('wallet_dead'),
+    walletId: z.string().min(1),
+    /** Seconds since the wallet last responded (event / proxied call / probe). */
+    unresponsiveSeconds: z.number().int().nonnegative(),
+    relaysConnected: z.literal(true),
+  }),
 ])
 export type NwcWebhookPayload = z.infer<typeof nwcWebhookPayloadSchema>
 
@@ -154,11 +169,58 @@ export const nwcProxyResponseSchema = z.union([
 ])
 export type NwcProxyResponse = z.infer<typeof nwcProxyResponseSchema>
 
+// ── Idempotent card payments over the listener fast path ────────────────────
+
+/** Repeated request IDs join the original NIP-47 payment operation. */
+export const nwcPaymentRequestSchema = z.object({
+  requestId: hex64,
+  walletId: z.string().min(1),
+  invoice: z.string().min(1).max(8192),
+  paymentHash: hex64,
+  /** How long HTTP waits; the underlying payment may continue. */
+  waitMs: z.number().int().min(100).max(8000).default(8000),
+})
+export type NwcPaymentRequest = z.infer<typeof nwcPaymentRequestSchema>
+
+export const nwcPaymentErrorSchema = z.object({
+  code: z.enum([
+    'validation_error',
+    'request_conflict',
+    'request_not_found',
+    'wallet_not_found',
+    'wallet_not_ready',
+    'wallet_error',
+    'relay_error',
+  ]),
+  message: z.string(),
+  walletErrorCode: z.string().optional(),
+})
+
+/** Only not_started is safe to switch to web's direct NWC transport. */
+export const nwcPaymentResponseSchema = z.union([
+  z.object({
+    ok: z.literal(true),
+    status: z.literal('succeeded'),
+    requestId: hex64,
+    preimage: hex64,
+    feesPaidMsats: z.number().int().nonnegative().default(0),
+  }),
+  z.object({
+    ok: z.literal(false),
+    status: z.enum(['pending', 'unknown', 'rejected', 'not_started']),
+    requestId: hex64,
+    error: nwcPaymentErrorSchema.optional(),
+  }),
+])
+export type NwcPaymentResponse = z.infer<typeof nwcPaymentResponseSchema>
+
 // ── GET {listener}/status ────────────────────────────────────────────────────
 
 export const listenerWalletStateSchema = z.enum([
   'connecting',
-  'subscribed',
+  'negotiating',
+  'ready',
+  'disconnected',
   'error',
   'closed',
 ])
@@ -187,8 +249,22 @@ export const listenerRecentEventSchema = z.object({
   type: z.string(),
   paymentHash: z.string().nullable(),
   amountMsats: z.number().int().nullable(),
+  /** Fees paid in msats (payments sent), from the wallet's `fees_paid`. */
+  feesPaidMsats: z.number().int().nonnegative().nullable().optional(),
+  /** BOLT-11 invoice the payment settled, if the wallet reported one. */
+  invoice: z.string().nullable().optional(),
+  /** Payment preimage (proof of payment), if the wallet reported one. */
+  preimage: z.string().nullable().optional(),
+  /** Unix seconds the wallet reported as settled_at (null when unknown). */
+  settledAt: z.number().int().nullable().optional(),
   receivedAt: z.string(),
   webhookStatus: z.enum(['pending', 'delivered', 'failed']),
+  /** How many delivery attempts the webhook has taken so far. */
+  webhookAttempts: z.number().int().nonnegative().optional(),
+  /** Error from the most recent failed delivery attempt, if any. */
+  webhookLastError: z.string().nullable().optional(),
+  /** ISO timestamp of the next scheduled retry (failed deliveries only). */
+  webhookNextAttemptAt: z.string().nullable().optional(),
   /** True when the event came from downtime catch-up, not the live stream. */
   recovered: z.boolean().optional(),
 })
@@ -211,13 +287,27 @@ export const listenerStatusResponseSchema = z.object({
     eventsDuplicate: z.number().int().nonnegative(),
     webhooksDelivered: z.number().int().nonnegative(),
     webhooksFailed: z.number().int().nonnegative(),
+    /** Currently-undelivered webhooks still being retried (0 = all caught up). */
+    webhooksPending: z.number().int().nonnegative().optional(),
     nwcRequests: z.number().int().nonnegative(),
     nwcRequestErrors: z.number().int().nonnegative(),
+    nwcPayments: z.number().int().nonnegative().optional(),
+    nwcPaymentDuplicates: z.number().int().nonnegative().optional(),
+    nwcPaymentsPending: z.number().int().nonnegative().optional(),
     eventsRecovered: z.number().int().nonnegative().optional(),
     catchupRuns: z.number().int().nonnegative().optional(),
     catchupErrors: z.number().int().nonnegative().optional(),
+    deadProbesRun: z.number().int().nonnegative().optional(),
+    deadProbesTimedOut: z.number().int().nonnegative().optional(),
+    walletsDeclaredDead: z.number().int().nonnegative().optional(),
   }),
   recentEvents: z.array(listenerRecentEventSchema).max(100),
+  /**
+   * Sub-parts that failed to compute this cycle (e.g. `'recentEvents'` when the
+   * DB feed query errored). The endpoint still returns 200 with everything
+   * that DID compute — a single failing part never fails the whole status.
+   */
+  degraded: z.array(z.string()).optional(),
 })
 export type ListenerStatusResponse = z.infer<typeof listenerStatusResponseSchema>
 

@@ -1,13 +1,17 @@
 ---
-title: "Month 6: NWC Proxy Lite + Lightning Compliance + Deployment"
-description: "Expansion phase: NWC Proxy Lite settlement layer, full LUD-16/21/22 + NIP-57 closeout, deploy targets, security audit prep."
+title: "Month 6: NWC Payment Listener + Card Activation + Deploy Targets + Backup & Restore"
+description: "Expansion phase: NWC Payment Listener as a live transport service, SIMPLE/ONE_TIME card activation, deploy targets, Backup & Restore. Settlement/compliance deferred to Month 7."
 ---
 
-import { CircleDashed } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 
 **Period:** June 5 - July 5, 2026
-**Status:** <span className="inline-flex items-center gap-1.5 text-zinc-500 dark:text-zinc-400"><CircleDashed className="size-4" /> Planned</span>
-**Depends on:** Month 5 (Card System + Platform Polish + NWC Listener Lite)
+**Status:** <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-4" /> Completed</span>
+**Depends on:** Month 5 (Remote Wallets + Card System Apps + Platform Polish)
+
+<Callout type="info" title="Status update (2026-07)">
+  The infrastructure tier shipped across v1.1.0 → v1.4.0 — the NWC Payment Listener as a live transport service, the **SIMPLE / ONE_TIME** card activation flow (`/wallet/activate/[id]`), deploy targets (Docker Hub / Umbrel / Start9), Backup & Restore, and listener hardening. The **settlement / share / compliance** items were deferred to [Month 7](./month-7): MASTER card account-share (FOREVER QRs + the `CardClaim` / `LightningAddressShare` / `RemoteWalletShare` model), NWC Proxy Lite, full LUD-16 / LUD-21 / LUD-22 / NIP-57 closeout, `@lawallet-nwc/react`, the WordPress plugin, the Resend adapter, and the Nostr scheduler. The spec below is retained as the design of record for that carried-over work.
+</Callout>
 
 ## Summary
 
@@ -17,10 +21,21 @@ Finalize all documentation, configure deployment targets, and prepare the codeba
 
 ## Goals
 
+- Ship the WordPress plugin (`lawallet-wordpress`) — integrate LaWallet (Lightning Address / LNURL-pay / NWC) into WordPress sites
 - Create comprehensive documentation for API, codebase, and all services
 - Configure deployment for Vercel, Netlify, Umbrel, Start9, Docker
 - Prepare for security audit
 - Finalize SDK and Hooks documentation
+
+---
+
+## WordPress Plugin (lawallet-wordpress)
+
+A WordPress plugin that integrates LaWallet (Lightning Address / LNURL-pay / NWC) into WordPress sites — accept Lightning payments / zaps and expose lightning addresses from a WordPress install.
+
+- Repo: [lawallet-wordpress](https://github.com/lawalletio/lawallet-wordpress)
+- Live demo: [wordpress.lawallet.io](https://wordpress.lawallet.io)
+- Complements the existing `integrations/WORDPRESS.md` guidance
 
 ---
 
@@ -145,6 +160,7 @@ Finalize all documentation, configure deployment targets, and prepare the codeba
 
 | Deliverable | Criteria | Priority |
 |-------------|----------|----------|
+| WordPress plugin (`lawallet-wordpress`) | Plugin integrates LaWallet (Lightning Address / LNURL-pay / NWC) into WordPress; live demo at `wordpress.lawallet.io` | P1 |
 | API docs | OpenAPI spec complete, interactive docs deployed | P0 |
 | ARCHITECTURE.md | Diagrams, data flow, all services + lncurl documented | P0 |
 | CONTRIBUTING.md | Setup guide, standards, PR process | P0 |

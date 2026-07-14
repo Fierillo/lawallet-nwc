@@ -1,6 +1,6 @@
 'use client'
 
-import { useApi, useMutation } from '@/lib/client/hooks/use-api'
+import { invalidateApiPath, useApi, useMutation } from '@/lib/client/hooks/use-api'
 
 export type LightningAddressMode = 'IDLE' | 'ALIAS' | 'CUSTOM_NWC' | 'DEFAULT_NWC'
 export type EffectiveNwcMode = 'NONE' | 'RECEIVE' | 'SEND_RECEIVE'
@@ -33,9 +33,20 @@ export interface WalletAddressDetail {
   /**
    * Pre-resolved NWC URI this address currently routes to, matching the
    * server-side `resolveWalletRoute` output. `null` for IDLE / ALIAS /
-   * unconfigured.
+   * unconfigured. Also `null` in the admin read-only view (`isOwner: false`):
+   * the connection secret is never surfaced to a non-owner.
    */
   effectiveConnectionString: string | null
+  /**
+   * Whether the authenticated caller owns this address. `false` when an admin
+   * (ADDRESSES_READ) is viewing another user's address — the detail page then
+   * renders read-only and withholds the wallet secret. Older responses omit
+   * this field; treat missing as owned (the only callers of the pre-admin
+   * endpoint were owners).
+   */
+  isOwner?: boolean
+  /** Hex pubkey of the address owner. Present alongside `isOwner`. */
+  ownerPubkey?: string
 }
 
 export type AddressInvoiceStatus = 'PENDING' | 'PAID' | 'EXPIRED'
@@ -61,6 +72,19 @@ export interface UpdateWalletAddressInput {
   mode: LightningAddressMode
   redirect?: string | null
   remoteWalletId?: string | null
+}
+
+export type AliasProbeCheckKey = 'lud16' | 'lud21' | 'nip57'
+
+export interface AliasProbeCheckResult {
+  ok: boolean
+  message: string
+}
+
+export interface AliasProbeResponse {
+  address: string
+  canSave: boolean
+  checks: Record<AliasProbeCheckKey, AliasProbeCheckResult>
 }
 
 /** GET /api/wallet/addresses — caller's own addresses, primary first. */
@@ -97,34 +121,61 @@ export function useAddressInvoices(username: string | null) {
 export function useAddressMutations() {
   const create = useMutation<CreateWalletAddressInput, WalletAddress>()
   const update = useMutation<UpdateWalletAddressInput, WalletAddress>()
+  const probe = useMutation<{ address: string }, AliasProbeResponse>()
   const setPrimary = useMutation<undefined, { success: boolean; username: string }>()
   const remove = useMutation<undefined, { success: boolean; username: string }>()
 
+  function invalidateAddressState(detailUsername?: string) {
+    invalidateApiPath('/api/wallet/addresses')
+    if (detailUsername) {
+      invalidateApiPath(
+        `/api/wallet/addresses/${encodeURIComponent(detailUsername)}`,
+      )
+    }
+    invalidateApiPath('/api/remote-wallets')
+    invalidateApiPath('/api/users/me')
+  }
+
   return {
-    createAddress: (input: CreateWalletAddressInput) =>
-      create.mutate('post', '/api/wallet/addresses', input),
-    updateAddress: (username: string, input: UpdateWalletAddressInput) =>
-      update.mutate(
+    createAddress: async (input: CreateWalletAddressInput) => {
+      const created = await create.mutate('post', '/api/wallet/addresses', input)
+      invalidateAddressState(created.username)
+      return created
+    },
+    updateAddress: async (username: string, input: UpdateWalletAddressInput) => {
+      const updated = await update.mutate(
         'put',
         `/api/wallet/addresses/${encodeURIComponent(username)}`,
         input,
-      ),
-    setAsPrimary: (username: string) =>
-      setPrimary.mutate(
+      )
+      invalidateAddressState(username)
+      return updated
+    },
+    probeAliasAddress: (address: string) =>
+      probe.mutate('post', '/api/wallet/addresses/alias-probe', { address }),
+    setAsPrimary: async (username: string) => {
+      const result = await setPrimary.mutate(
         'post',
         `/api/wallet/addresses/${encodeURIComponent(username)}/primary`,
         undefined,
-      ),
-    deleteAddress: (username: string) =>
-      remove.mutate(
+      )
+      invalidateAddressState(username)
+      return result
+    },
+    deleteAddress: async (username: string) => {
+      const result = await remove.mutate(
         'del',
         `/api/wallet/addresses/${encodeURIComponent(username)}`,
         undefined,
-      ),
+      )
+      invalidateAddressState(username)
+      return result
+    },
     creating: create.loading,
     updating: update.loading,
+    probingAlias: probe.loading,
     settingPrimary: setPrimary.loading,
     deleting: remove.loading,
-    error: create.error ?? update.error ?? setPrimary.error ?? remove.error,
+    error: create.error ?? update.error ?? probe.error ?? setPrimary.error ?? remove.error,
   }
 }

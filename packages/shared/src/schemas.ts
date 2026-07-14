@@ -3,11 +3,11 @@ import { z } from 'zod'
 // ── Common ──────────────────────────────────────────────────────────────────
 
 export const idParam = z.object({
-  id: z.string().min(1, 'ID is required'),
+  id: z.string().min(1, 'ID is required')
 })
 
 export const userIdParam = z.object({
-  userId: z.string().min(1, 'User ID is required'),
+  userId: z.string().min(1, 'User ID is required')
 })
 
 // ── Cards ───────────────────────────────────────────────────────────────────
@@ -20,12 +20,12 @@ export const createCardSchema = z.object({
    * reserved for the deferred account-share feature but is accepted here so the
    * field can be set ahead of that work landing.
    */
-  kind: z.enum(['SIMPLE', 'MASTER']).optional(),
+  kind: z.enum(['SIMPLE', 'MASTER']).optional()
 })
 
 export const cardListQuerySchema = z.object({
   paired: z.enum(['true', 'false']).optional(),
-  used: z.enum(['true', 'false']).optional(),
+  used: z.enum(['true', 'false']).optional()
 })
 
 /**
@@ -37,8 +37,21 @@ export const cardListQuerySchema = z.object({
  *     the owner's default wallet at run-time.
  */
 export const updateCardSchema = z.object({
-  remoteWalletId: z.string().min(1).nullable(),
+  remoteWalletId: z.string().min(1).nullable()
 })
+
+export const updateWalletCardSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    linkDefaultWallet: z.boolean().optional()
+  })
+  .refine(
+    v =>
+      (v.enabled !== undefined ? 1 : 0) +
+        (v.linkDefaultWallet === true ? 1 : 0) ===
+      1,
+    { message: 'Provide exactly one card update action' }
+  )
 
 export const createCardDesignSchema = z.object({
   description: z
@@ -50,7 +63,7 @@ export const createCardDesignSchema = z.object({
     .string()
     .trim()
     .url('Image URL must be a valid URL')
-    .max(2048, 'Image URL too long'),
+    .max(2048, 'Image URL too long')
 })
 
 /**
@@ -77,27 +90,41 @@ export const updateCardDesignSchema = z
      * The wire stays as a simple boolean so the client doesn't have to know
      * about the timestamp representation.
      */
-    archived: z.boolean().optional(),
+    archived: z.boolean().optional()
   })
   .refine(
     v =>
       v.description !== undefined ||
       v.imageUrl !== undefined ||
       v.archived !== undefined,
-    { message: 'No fields to update' },
+    { message: 'No fields to update' }
   )
 
 export const scanCardQuerySchema = z.object({
   p: z.string().min(1, 'Parameter p is required'),
-  c: z.string().min(1, 'Parameter c is required'),
+  c: z.string().min(1, 'Parameter c is required')
 })
 
 export const payActionQuerySchema = z.object({
-  pr: z.string().min(1, 'Missing required parameter: pr'),
+  pr: z
+    .string()
+    .min(1, 'Missing required parameter: pr')
+    .max(8192, 'Payment request is too large')
 })
 
+export const cardScanCallbackQuerySchema = scanCardQuerySchema.merge(
+  payActionQuerySchema
+)
+
+export const cardScanActionSchema = z.enum(['pay', 'new-otc'])
+export type CardScanAction = z.infer<typeof cardScanActionSchema>
+
+/** LUD-03 limits advertised by /scan and enforced again by /scan/cb. */
+export const CARD_MIN_WITHDRAWABLE_MSATS = 1
+export const CARD_MAX_WITHDRAWABLE_MSATS = 10_000_000
+
 export const otcParam = z.object({
-  otc: z.string().min(1, 'OTC parameter is required'),
+  otc: z.string().min(1, 'OTC parameter is required')
 })
 
 // ── Card activation tokens ──────────────────────────────────────────────────
@@ -110,7 +137,7 @@ export const otcParam = z.object({
  */
 export const createActivationTokenSchema = z.object({
   qrKind: z.enum(['ONE_TIME', 'FOREVER']).default('ONE_TIME'),
-  expiresIn: z.string().min(1).optional(),
+  expiresIn: z.string().min(1).optional()
 })
 
 /**
@@ -119,13 +146,13 @@ export const createActivationTokenSchema = z.object({
  * default wallet at claim time.
  */
 export const claimActivationTokenSchema = z.object({
-  remoteWalletId: z.string().min(1).nullish(),
+  remoteWalletId: z.string().min(1).nullish()
 })
 
 // ── Lightning Addresses ─────────────────────────────────────────────────────
 
 export const lud16UsernameParam = z.object({
-  username: z.string().min(1),
+  username: z.string().min(1)
 })
 
 /**
@@ -138,8 +165,11 @@ export const lud16CallbackQuerySchema = z.object({
   amount: z.string().min(1, 'Missing amount'),
   comment: z
     .string()
-    .max(LUD12_MAX_COMMENT_LENGTH, `Comment exceeds ${LUD12_MAX_COMMENT_LENGTH} characters`)
-    .optional(),
+    .max(
+      LUD12_MAX_COMMENT_LENGTH,
+      `Comment exceeds ${LUD12_MAX_COMMENT_LENGTH} characters`
+    )
+    .optional()
 })
 
 export const updateLightningAddressSchema = z.object({
@@ -147,7 +177,10 @@ export const updateLightningAddressSchema = z.object({
     .string()
     .min(1, 'Username is required')
     .max(16, 'Username must be 16 characters or less')
-    .regex(/^[a-z0-9]+$/, 'Username must contain only lowercase letters and numbers'),
+    .regex(
+      /^[a-z0-9]+$/,
+      'Username must contain only lowercase letters and numbers'
+    )
 })
 
 // ── Wallet Addresses (per-user, multi-address) ──────────────────────────────
@@ -158,14 +191,14 @@ export const walletAddressUsernameParam = z.object({
     .string()
     .min(1)
     .max(16)
-    .regex(/^[a-z0-9]+$/, 'Invalid username'),
+    .regex(/^[a-z0-9]+$/, 'Invalid username')
 })
 
 export const lightningAddressModeSchema = z.enum([
   'IDLE',
   'ALIAS',
   'CUSTOM_NWC',
-  'DEFAULT_NWC',
+  'DEFAULT_NWC'
 ])
 
 /** Body for POST /api/wallet/addresses (create). */
@@ -174,8 +207,11 @@ export const createWalletAddressSchema = z.object({
     .string()
     .min(1, 'Username is required')
     .max(16, 'Username must be 16 characters or less')
-    .regex(/^[a-z0-9]+$/, 'Username must contain only lowercase letters and numbers'),
-  mode: lightningAddressModeSchema.optional(),
+    .regex(
+      /^[a-z0-9]+$/,
+      'Username must contain only lowercase letters and numbers'
+    ),
+  mode: lightningAddressModeSchema.optional()
 })
 
 /**
@@ -194,15 +230,31 @@ export const updateWalletAddressSchema = z.object({
   redirect: z
     .string()
     .max(254)
-    .regex(/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, 'Must be a valid LN address')
+    .regex(
+      /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i,
+      'Must be a valid LN address'
+    )
     .nullish(),
-  remoteWalletId: z.string().min(1).nullish(),
+  remoteWalletId: z.string().min(1).nullish()
+})
+
+/** Body for POST /api/wallet/addresses/alias-probe. */
+export const probeAliasAddressSchema = z.object({
+  address: z
+    .string()
+    .trim()
+    .max(254)
+    .regex(
+      /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i,
+      'Must be a valid LN address'
+    )
+    .transform(value => value.toLowerCase())
 })
 
 // ── Users ───────────────────────────────────────────────────────────────────
 
 export const updateRoleSchema = z.object({
-  role: z.enum(['ADMIN', 'OPERATOR', 'VIEWER', 'USER']),
+  role: z.enum(['ADMIN', 'OPERATOR', 'VIEWER', 'USER'])
 })
 
 /** A single Nostr relay URL: must be a `ws://` or `wss://` URL. */
@@ -215,12 +267,14 @@ const relayUrl = z
     value => {
       try {
         const { protocol, hostname } = new URL(value)
-        return (protocol === 'wss:' || protocol === 'ws:') && hostname.length > 0
+        return (
+          (protocol === 'wss:' || protocol === 'ws:') && hostname.length > 0
+        )
       } catch {
         return false
       }
     },
-    { message: 'Relay must be a ws:// or wss:// URL' },
+    { message: 'Relay must be a ws:// or wss:// URL' }
   )
 
 /**
@@ -243,7 +297,7 @@ export const updateUserRelaysSchema = z.object({
         out.push(url)
       }
       return out
-    }),
+    })
 })
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -257,18 +311,18 @@ export const settingsBodySchema = z.record(
       /^[a-z0-9_-]+$/,
       'Setting name can only contain lowercase letters, numbers, hyphens, and underscores'
     ),
-  z.string({ required_error: 'Value must be a string' }),
+  z.string({ required_error: 'Value must be a string' })
 )
 
 // ── Remote Connections ──────────────────────────────────────────────────────
 
 export const externalDeviceKeyParam = z.object({
-  externalDeviceKey: z.string().min(1, 'External device key is required'),
+  externalDeviceKey: z.string().min(1, 'External device key is required')
 })
 
 export const createRemoteCardSchema = z.object({
   designId: z.string().min(1, 'designId is required'),
-  cardUID: z.string().min(1, 'cardUID is required'),
+  cardUID: z.string().min(1, 'cardUID is required')
 })
 
 // ── Invoices ───────────────────────────────────────────────────────────────
@@ -281,17 +335,20 @@ export const createInvoiceSchema = z.object({
         .string()
         .min(1, 'Username is required')
         .max(16, 'Username must be 16 characters or less')
-        .regex(/^[a-z0-9]+$/, 'Username must contain only lowercase letters and numbers')
-        .optional(),
+        .regex(
+          /^[a-z0-9]+$/,
+          'Username must contain only lowercase letters and numbers'
+        )
+        .optional()
     })
-    .optional(),
+    .optional()
 })
 
 export const claimInvoiceSchema = z.object({
   preimage: z
     .string()
     .min(1, 'Preimage is required')
-    .regex(/^[a-f0-9]+$/i, 'Preimage must be a hex string'),
+    .regex(/^[a-f0-9]+$/i, 'Preimage must be a hex string')
 })
 
 // ── Remote Wallets ──────────────────────────────────────────────────────────
@@ -327,19 +384,20 @@ export const createRemoteWalletSchema = z.object({
   name: remoteWalletName,
   type: remoteWalletType,
   config: z.unknown(),
-  /** When `true`, the new wallet becomes the user's default (un-marks the previous one in the same transaction). */
-  isDefault: z.boolean().optional().default(false),
+  /** Compatibility shortcut: bind the primary address to this wallet. */
+  isDefault: z.boolean().optional().default(false)
 })
 
 /**
  * Body for `POST /api/remote-wallets/lncurl`. The server mints the NWC
  * connection string from the configured LNCurl provider, so the client only
- * supplies an optional display name. The new wallet always becomes the
- * caller's default and inherits the previous wallet's address/card bindings,
- * so there's no `isDefault` flag here.
+ * supplies an optional display name. `isDefault=true` is the compatibility
+ * shortcut for binding the caller's primary Lightning Address to the new
+ * wallet when one exists.
  */
 export const createLncurlWalletSchema = z.object({
   name: remoteWalletName.optional(),
+  isDefault: z.boolean().optional().default(false)
 })
 
 /**
@@ -355,11 +413,14 @@ export const updateRemoteWalletSchema = z
   .object({
     name: remoteWalletName.optional(),
     isDefault: z.boolean().optional(),
-    status: remoteWalletStatus.optional(),
+    status: remoteWalletStatus.optional()
   })
   .refine(
-    v => v.name !== undefined || v.isDefault !== undefined || v.status !== undefined,
-    { message: 'No fields to update' },
+    v =>
+      v.name !== undefined ||
+      v.isDefault !== undefined ||
+      v.status !== undefined,
+    { message: 'No fields to update' }
   )
 
 /** Query params for `GET /api/remote-wallets`. */
@@ -370,13 +431,13 @@ export const remoteWalletListQuerySchema = z.object({
    */
   status: remoteWalletStatus.optional(),
   /** Filter by driver type — useful for the "NWC only" picker for now. */
-  type: remoteWalletType.optional(),
+  type: remoteWalletType.optional()
 })
 
 // ── JWT ─────────────────────────────────────────────────────────────────────
 
 export const jwtRequestSchema = z.object({
-  expiresIn: z.string().optional().default('1h'),
+  expiresIn: z.string().optional().default('1h')
 })
 
 // ── Device Tokens (QR-based JWT login, B.0) ──────────────────────────────────
@@ -393,7 +454,7 @@ const deviceTokenExpiresIn = z
   .trim()
   .regex(
     /^\d+\s*(s|m|h|d|w)?$/i,
-    'Use a duration like 8h or 7d, or a number of seconds',
+    'Use a duration like 8h or 7d, or a number of seconds'
   )
 
 /**
@@ -411,5 +472,204 @@ export const qrJwtGenerateSchema = z.object({
     .array(z.string().min(1))
     .min(1, 'Select at least one permission')
     .max(64, 'Too many permissions'),
-  expiresIn: deviceTokenExpiresIn.default('8h'),
+  expiresIn: deviceTokenExpiresIn.default('8h')
 })
+
+// ── Backup & Restore ─────────────────────────────────────────────────────────
+//
+// Contract shared by the export/analyze/import routes and the admin wizard.
+// The per-table NDJSON row schemas that validate archive contents live in the
+// web app (`apps/web/lib/backup/row-schemas.ts`) since they mirror the Prisma
+// model shapes — they're an engine implementation detail, not an API contract.
+
+/**
+ * Bump on a backward-incompatible change to the archive layout. Import refuses
+ * an archive whose `schemaVersion` is greater than this value.
+ */
+export const BACKUP_SCHEMA_VERSION = 1
+
+/** Every table that can appear in a backup archive. */
+export const backupTableName = z.enum([
+  'users',
+  'cardDesigns',
+  'ntag424s',
+  'remoteWallets',
+  'lightningAddresses',
+  'cards',
+  'cardActivationTokens',
+  'albySubAccounts',
+  'invoices',
+  'activityLogs',
+  'settings',
+  'nostrProfileCache',
+  'nostrProfileImageCache',
+  'pluginRecords'
+])
+export type BackupTableName = z.infer<typeof backupTableName>
+
+/**
+ * User-facing categories toggled in the export wizard. Each maps to one or more
+ * tables (see `apps/web/lib/backup/tables.ts`). `core` bundles the essential
+ * operational state; the rest are opt-in.
+ */
+export const backupCategoryEnum = z.enum([
+  'core', // users, cardDesigns, ntag424s, remoteWallets, lightningAddresses, cards, cardActivationTokens, albySubAccounts
+  'settings',
+  'plugins',
+  'activityLogs',
+  'invoices',
+  'nostrCache' // nostrProfileCache, nostrProfileImageCache
+])
+export type BackupCategory = z.infer<typeof backupCategoryEnum>
+
+/** Bounds on how much of the large, append-only tables an export gathers. */
+export const backupExportOptionsSchema = z
+  .object({
+    activityLogLimit: z
+      .number()
+      .int()
+      .positive()
+      .max(1_000_000)
+      .default(100_000),
+    activityLogSince: z.string().datetime().optional()
+  })
+  .default({})
+
+export const backupExportRequestSchema = z.object({
+  categories: z
+    .array(backupCategoryEnum)
+    .min(1, 'Select at least one category'),
+  /** When present, the archive is wrapped in an AES-256-GCM envelope. */
+  password: z.string().min(1).optional(),
+  options: backupExportOptionsSchema
+})
+export type BackupExportRequest = z.infer<typeof backupExportRequestSchema>
+
+/** Per-table entry in `manifest.tables`. */
+export const backupTableMetaSchema = z.object({
+  count: z.number().int().nonnegative(),
+  sha256: z.string(),
+  /** True when an export cap (e.g. `activityLogLimit`) truncated the table. */
+  truncated: z.boolean().optional()
+})
+
+export const backupManifestSchema = z.object({
+  schemaVersion: z.number().int().positive(),
+  appVersion: z.string(),
+  /** Latest applied Prisma migration id — informational, mismatch is a warning. */
+  prismaMigration: z.string().nullable(),
+  exportedAt: z.string(),
+  encrypted: z.boolean().default(false),
+  categories: z.array(backupCategoryEnum),
+  tables: z.record(backupTableName, backupTableMetaSchema)
+})
+export type BackupManifest = z.infer<typeof backupManifestSchema>
+
+/**
+ * How a single incoming row clashes with the live DB:
+ * - `pk`                — same primary key, different field values
+ * - `secondary-unique`  — a secondary UNIQUE (pubkey/username/cid/paymentHash/…) owned by a different row
+ * - `partial-unique`    — both backup and DB assert a user's primary address / default wallet, on different rows
+ * - `invalid-row`       — the row failed its schema and cannot be imported
+ * - `fk-target-missing` — a required FK target is neither in the backup nor the DB
+ */
+export const backupConflictKind = z.enum([
+  'pk',
+  'secondary-unique',
+  'partial-unique',
+  'invalid-row',
+  'fk-target-missing'
+])
+export type BackupConflictKind = z.infer<typeof backupConflictKind>
+
+export const backupResolutionStrategy = z.enum(['skip', 'overwrite', 'rename'])
+export type BackupResolutionStrategy = z.infer<typeof backupResolutionStrategy>
+
+export const backupConflictSchema = z.object({
+  /** Stable id `${table}:${rowKey}` — the key the wizard maps resolutions by. */
+  id: z.string(),
+  table: backupTableName,
+  kind: backupConflictKind,
+  /** Primary key (or composite key string) of the incoming row. */
+  rowKey: z.string(),
+  /** The colliding field, when applicable (e.g. `username`, `pubkey`). */
+  field: z.string().optional(),
+  incomingValue: z.unknown().optional(),
+  existingValue: z.unknown().optional(),
+  existingId: z.string().optional(),
+  existingOwnerId: z.string().optional(),
+  /** Plain-language summary shown in the wizard. */
+  message: z.string(),
+  suggestedStrategy: backupResolutionStrategy,
+  allowedStrategies: z.array(backupResolutionStrategy).min(1)
+})
+export type BackupConflict = z.infer<typeof backupConflictSchema>
+
+export const backupTableCountsSchema = z.object({
+  total: z.number().int(),
+  new: z.number().int(),
+  identical: z.number().int(),
+  conflicting: z.number().int(),
+  invalid: z.number().int()
+})
+
+export const backupTableAnalysisSchema = z.object({
+  counts: backupTableCountsSchema,
+  conflicts: z.array(backupConflictSchema)
+})
+
+export const backupAnalyzeResponseSchema = z.object({
+  manifest: backupManifestSchema,
+  tables: z.record(backupTableName, backupTableAnalysisSchema),
+  warnings: z.array(z.string()),
+  analyzedAt: z.string()
+})
+export type BackupAnalyzeResponse = z.infer<typeof backupAnalyzeResponseSchema>
+
+/** Restore mode chosen at the start of the restore wizard. */
+export const backupImportMode = z.enum(['merge', 'replace'])
+export type BackupImportMode = z.infer<typeof backupImportMode>
+
+export const backupImportRequestSchema = z.object({
+  mode: backupImportMode.default('merge'),
+  /** Applied to any conflict lacking a per-conflict override (merge mode). */
+  defaultStrategy: z.enum(['skip', 'overwrite']).default('skip'),
+  perConflict: z
+    .array(
+      z.object({
+        id: z.string(),
+        strategy: backupResolutionStrategy
+      })
+    )
+    .default([]),
+  /** On a primary-address / default-wallet clash, whether the backup wins. */
+  preferBackupPrimary: z.boolean().default(false),
+  /** All-or-nothing (one transaction) vs best-effort per table. */
+  atomic: z.boolean().default(true)
+})
+export type BackupImportRequest = z.infer<typeof backupImportRequestSchema>
+
+export const backupImportTableResultSchema = z.object({
+  imported: z.number().int(),
+  skipped: z.number().int(),
+  overwritten: z.number().int(),
+  renamed: z.number().int(),
+  deleted: z.number().int(),
+  failed: z.number().int(),
+  notes: z.array(z.object({ id: z.string(), reason: z.string() }))
+})
+
+export const backupImportResultSchema = z.object({
+  mode: backupImportMode,
+  tables: z.record(backupTableName, backupImportTableResultSchema),
+  hadErrors: z.boolean(),
+  errors: z.array(
+    z.object({
+      table: backupTableName.optional(),
+      id: z.string().optional(),
+      message: z.string()
+    })
+  ),
+  importedAt: z.string()
+})
+export type BackupImportResult = z.infer<typeof backupImportResultSchema>
