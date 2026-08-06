@@ -2,21 +2,41 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# Supply-chain hardening (pnpm 11)
+minimumReleaseAge: 4320
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustPolicy: no-downgrade
+trustLockfile: false
+blockExoticSubdeps: true
+strictDepBuilds: true
+
+# Packages whose publish identity changed over time (pre-trustedPublisher era).
+# Keep this list minimal; drop entries when a newer trusted release lands.
+trustPolicyExclude:
+  - chokidar@4.0.3
+  - eslint-import-resolver-typescript@3.10.1
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - semver@6.3.1
+
+# Lifecycle scripts: only packages that must build native binaries / fetch engines.
 allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true
-  bufferutil: true
-  es5-ext: true
-  esbuild: true
-  msw: true
   prisma: true
-  secp256k1: true
+  esbuild: true
   sharp: true
   unrs-resolver: true
+  bufferutil: true
   utf-8-validate: true
+  turbo: true
+  secp256k1: true
+  msw: true
   vue-demi: true
+  es5-ext: false
 
-# Dependency version pins. pnpm 10 no longer reads the `pnpm.overrides` field
+# Dependency version pins. pnpm no longer reads the `pnpm.overrides` field
 # from package.json — overrides live here now. Most are security/transitive
 # pins; keep in sync with the audit allowlist.
 overrides:
