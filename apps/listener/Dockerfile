@@ -3,7 +3,8 @@
 # ── Build base: Node.js 22 (Debian Trixie Slim) + pnpm via corepack ────
 FROM node:22-trixie-slim AS base
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable
+RUN corepack enable \
+    && corepack prepare pnpm@11.20.0 --activate
 
 # ── deps: full install (dev deps needed for the tsup build) ────────────
 FROM base AS deps

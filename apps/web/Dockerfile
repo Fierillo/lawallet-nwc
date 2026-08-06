@@ -5,7 +5,8 @@
 # field — no floating `npm i -g pnpm@latest` version drift between builds.
 FROM node:22-trixie-slim AS base
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable
+RUN corepack enable \
+    && corepack prepare pnpm@11.20.0 --activate
 
 # ── deps: install workspace dependencies for the web app ───────────────
 FROM base AS deps
@@ -73,7 +74,9 @@ COPY --from=builder /app/apps/web/prisma ./apps/web/prisma
 COPY --from=builder /app/apps/web/lib/generated ./apps/web/lib/generated
 
 # Prisma CLI for `migrate deploy` at startup (the runtime image carries no
-# pnpm). Clean the npm cache in the same layer so it doesn't bloat the image.
+# pnpm). TODO: replace this global install only after the standalone runtime's
+# pnpm node_modules layout and migration command are validated end to end.
+# Clean the npm cache in the same layer so it doesn't bloat the image.
 ENV NODE_PATH=/usr/local/lib/node_modules
 RUN npm install -g "prisma@${PRISMA_VERSION}" \
     && npm cache clean --force \

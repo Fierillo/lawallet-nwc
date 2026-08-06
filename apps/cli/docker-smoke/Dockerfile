@@ -7,7 +7,10 @@ RUN apk add --no-cache \
     nodejs \
     npm
 
-RUN npm install --global pnpm@10.11.0
+# npm remains here because this image exercises the public install.sh fallback.
+# Alpine does not package Corepack, so npm only bootstraps the package manager shim.
+RUN npm install --global corepack@0.34.6 \
+    && corepack enable
 
 WORKDIR /workspace
 

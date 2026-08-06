@@ -50,13 +50,12 @@ before working on anything non-trivial.
 | Tool | Version | Notes |
 |------|---------|-------|
 | Node.js | `v22.14.0` | Pinned in [`.nvmrc`](./.nvmrc); `nvm use` to match |
-| pnpm | `10.11.0` | Pinned via `packageManager` field in [`package.json`](./package.json) |
+| pnpm | `11.20.0` | Pinned via `packageManager` field in [`package.json`](./package.json) |
 | PostgreSQL | 15+ | Use the bundled `docker-compose.yml` if you don't have one running |
 | Git | any recent | Hooks rely on a normal `pre-commit`-friendly setup |
 
-If you have [Corepack](https://nodejs.org/api/corepack.html) enabled, pnpm
-will be activated automatically. Otherwise install it with
-`npm install -g pnpm@10.11.0`.
+Enable [Corepack](https://nodejs.org/api/corepack.html) once with
+`corepack enable`; it activates the pnpm version pinned by this repository.
 
 ---
 
@@ -325,8 +324,8 @@ machines can share one cache via Vercel Remote Cache. CI picks it up from the
 secrets; locally, opt in with:
 
 ```bash
-npx turbo login    # authenticate against Vercel
-npx turbo link     # link this repo to the team's remote cache
+pnpm exec turbo login    # authenticate against Vercel
+pnpm exec turbo link     # link this repo to the team's remote cache
 ```
 
 Forks and contributors without these secrets are unaffected — Turbo silently

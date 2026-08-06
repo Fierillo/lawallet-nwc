@@ -92,7 +92,7 @@ Three independent containerized services with no shared infrastructure:
 | Styling | [Tailwind CSS 3.4](https://tailwindcss.com/) + [shadcn/ui](https://ui.shadcn.com/) + [Radix UI](https://www.radix-ui.com/) |
 | Lightning / NWC | [Alby SDK 7](https://github.com/getAlby/js-sdk), [nostr-tools](https://github.com/nbd-wtf/nostr-tools), [@nostrify/nostrify](https://gitlab.com/soapbox-pub/nostrify) |
 | Testing | [Vitest 3.2](https://vitest.dev/) + [MSW](https://mswjs.io/) + [happy-dom](https://github.com/capricorn86/happy-dom) |
-| Tooling | [pnpm 10](https://pnpm.io/) workspaces + [Turborepo 2](https://turbo.build/) |
+| Tooling | [pnpm 11](https://pnpm.io/) workspaces + [Turborepo 2](https://turbo.build/) |
 | Runtime | [Node.js ≥22.14](./.nvmrc) |
 
 ---
@@ -116,7 +116,7 @@ Three independent containerized services with no shared infrastructure:
 
 ### Quick Start (development)
 
-Prerequisites: [Node v22.14](./.nvmrc) (`nvm use`), pnpm 10 (via Corepack), and Docker.
+Prerequisites: [Node v22.14](./.nvmrc) (`nvm use`), pnpm 11 (via Corepack), and Docker.
 
 ```bash
 git clone https://github.com/lawalletio/lawallet-nwc.git
