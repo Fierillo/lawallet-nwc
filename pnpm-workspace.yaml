@@ -2,8 +2,29 @@ packages:
   - 'apps/*'
   - 'packages/*'
 
+# Supply-chain hardening (pnpm 11)
+minimumReleaseAge: 4320
+minimumReleaseAgeStrict: true
+minimumReleaseAgeIgnoreMissingTime: false
+trustPolicy: no-downgrade
+trustLockfile: false
+blockExoticSubdeps: true
+strictDepBuilds: true
+
+# Packages whose publish identity changed over time (pre-trustedPublisher era).
+# Keep this list minimal; drop entries when a newer trusted release lands.
+trustPolicyExclude:
+  - chokidar@4.0.3
+  - eslint-import-resolver-typescript@3.10.1
+  - fumadocs-core@16.8.0
+  - fumadocs-ui@16.8.0
+  - prisma@7.10.0
+  - react-redux@9.2.0
+  - reselect@5.1.1
+  - semver@6.3.1
+
 # Dependency build-script policy. pnpm blocks third-party install/postinstall
-# scripts by default; these lists record the deliberate decision to keep every
+# scripts by default; this list records the deliberate decision to keep every
 # one of them blocked. Verified by clean install + full build: nothing here
 # needs its script to run.
 #
@@ -57,6 +78,7 @@ allowBuilds:
   prisma: false
   secp256k1: false
   sharp: false
+  turbo: false
   unrs-resolver: false
   utf-8-validate: false
   vue-demi: false
