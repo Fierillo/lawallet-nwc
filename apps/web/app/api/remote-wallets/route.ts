@@ -1,25 +1,32 @@
 import { NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/prisma'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountId } from '@/lib/auth/account'
 import { withErrorHandling } from '@/types/server/error-handler'
 import {
   ConflictError,
   NotFoundError,
-  ValidationError,
+  ValidationError
 } from '@/types/server/errors'
 import {
   createRemoteWalletSchema,
-  remoteWalletListQuerySchema,
+  remoteWalletListQuerySchema
 } from '@/lib/validation/schemas'
 import { validateBody, validateQuery } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { getDriver } from '@/lib/wallet/drivers'
 import { eventBus } from '@/lib/events/event-bus'
-import type { RemoteWallet, RemoteWalletStatus } from '@/lib/generated/prisma'
+import type {
+  Prisma,
+  RemoteWallet,
+  RemoteWalletStatus
+} from '@/lib/generated/prisma'
 import {
   bindPrimaryAddressToWallet,
-  syncPrimaryRemoteWalletFlag,
+  syncPrimaryRemoteWalletFlag
 } from '@/lib/wallet/primary-wallet'
+import { encryptRemoteWalletConfig } from '@/lib/wallet/remote-wallet-vault'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -46,7 +53,10 @@ interface RemoteWalletDto {
 }
 
 function toDto(w: RemoteWallet): RemoteWalletDto {
-  const cfg = w.config as { provider?: unknown; lncurlServerUrl?: unknown } | null
+  const cfg = w.config as {
+    provider?: unknown
+    lncurlServerUrl?: unknown
+  } | null
   const isLncurl = cfg?.provider === 'lncurl'
   return {
     id: w.id,
@@ -59,20 +69,19 @@ function toDto(w: RemoteWallet): RemoteWalletDto {
     diedAt: w.diedAt ? w.diedAt.toISOString() : null,
     provider: isLncurl ? 'lncurl' : null,
     lncurlServerUrl:
-      isLncurl && typeof cfg?.lncurlServerUrl === 'string' ? cfg.lncurlServerUrl : null,
+      isLncurl && typeof cfg?.lncurlServerUrl === 'string'
+        ? cfg.lncurlServerUrl
+        : null
   }
 }
 
 async function resolveUserId(pubkey: string): Promise<string> {
-  const user = await prisma.user.findUnique({
-    where: { pubkey },
-    select: { id: true },
-  })
+  const userId = await resolveAccountId(pubkey)
   // The unified-auth flow upserts a User row before we get here, so a miss
   // would mean someone deleted the row mid-request. Surface as a 404 rather
   // than crashing with a Prisma `userId` violation downstream.
-  if (!user) throw new NotFoundError('User not found')
-  return user.id
+  if (!userId) throw new NotFoundError('User not found')
+  return userId
 }
 
 /**
@@ -92,8 +101,12 @@ export const GET = withErrorHandling(async (request: Request) => {
 
   const query = validateQuery(request.url, remoteWalletListQuerySchema)
 
-  const where: { userId: string; status?: RemoteWalletStatus; type?: RemoteWallet['type'] } = {
-    userId,
+  const where: {
+    userId: string
+    status?: RemoteWalletStatus
+    type?: RemoteWallet['type']
+  } = {
+    userId
   }
   if (query.status) {
     where.status = query.status
@@ -108,7 +121,7 @@ export const GET = withErrorHandling(async (request: Request) => {
 
   const rows = await prisma.remoteWallet.findMany({
     where,
-    orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }],
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }]
   })
 
   const filtered = query.status
@@ -144,35 +157,46 @@ export const POST = withErrorHandling(async (request: Request) => {
   const parsedConfig = driver.configSchema.safeParse(body.config)
   if (!parsedConfig.success) {
     throw new ValidationError('Invalid wallet config', {
-      issues: parsedConfig.error.issues,
+      issues: parsedConfig.error.issues
     })
   }
 
+  const walletId = randomUUID()
+  const storedConfig = encryptRemoteWalletConfig(
+    walletId,
+    body.type,
+    parsedConfig.data
+  )
+
   try {
-    const { created, boundPrimaryAddress } = await prisma.$transaction(async tx => {
-      const created = await tx.remoteWallet.create({
-        data: {
-          userId,
-          name: body.name,
-          type: body.type,
-          // Persist the *parsed* config (defaults applied) so reads are
-          // stable. Cast to Prisma input type — Zod schemas always return
-          // JSON-serialisable shapes for our drivers.
-          config: parsedConfig.data as object,
-          isDefault: false,
-        },
-      })
+    const { created, boundPrimaryAddress } = await prisma.$transaction(
+      async tx => {
+        const created = await tx.remoteWallet.create({
+          data: {
+            id: walletId,
+            userId,
+            name: body.name,
+            type: body.type,
+            // Persist the *parsed* config (defaults applied) so reads are
+            // stable. Cast to Prisma input type — Zod schemas always return
+            // JSON-serialisable shapes for our drivers.
+            config: storedConfig as Prisma.InputJsonValue,
+            nwcConfigEncryptedAt: body.type === 'NWC' ? new Date() : undefined,
+            isDefault: false
+          }
+        })
 
-      const boundPrimaryAddress = body.isDefault
-        ? await bindPrimaryAddressToWallet(userId, created.id, tx)
-        : null
+        const boundPrimaryAddress = body.isDefault
+          ? await bindPrimaryAddressToWallet(userId, created.id, tx)
+          : null
 
-      if (!boundPrimaryAddress) {
-        await syncPrimaryRemoteWalletFlag(userId, tx)
+        if (!boundPrimaryAddress) {
+          await syncPrimaryRemoteWalletFlag(userId, tx)
+        }
+
+        return { created, boundPrimaryAddress }
       }
-
-      return { created, boundPrimaryAddress }
-    })
+    )
 
     // The listener dashboard tracks NWC connections live — nudge it to
     // refetch (the listener itself reconciles via the Postgres trigger).
@@ -184,7 +208,7 @@ export const POST = withErrorHandling(async (request: Request) => {
 
     return NextResponse.json(
       toDto({ ...created, isDefault: Boolean(boundPrimaryAddress) }),
-      { status: 201 },
+      { status: 201 }
     )
   } catch (err) {
     // Prisma maps the `(userId, name)` unique index to P2002. Surface as a

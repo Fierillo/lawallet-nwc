@@ -14,23 +14,27 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
+  TooltipTrigger
 } from '@/components/ui/tooltip'
 import { TableSkeleton } from '@/components/admin/skeletons/table-skeleton'
 import { CreateRemoteWalletDialog } from '@/components/admin/create-remote-wallet-dialog'
 import { RemoteWalletRowActions } from '@/components/admin/remote-wallet-row-actions'
 import { ArchivedWalletsSection } from '@/components/admin/archived-wallets-section'
 import {
+  CursorPagination,
+  useLocalPagination
+} from '@/components/wallet/shared/cursor-pagination'
+import {
   useRemoteWallets,
   useRemoteWalletBalance,
   useRemoteWalletMutations,
-  type RemoteWalletData,
+  type RemoteWalletData
 } from '@/lib/client/hooks/use-remote-wallets'
 import { useSettings } from '@/lib/client/hooks/use-settings'
 
@@ -50,7 +54,7 @@ export default function RemoteWalletsPage() {
   const { data: wallets, loading, error, refetch } = useRemoteWallets()
   // The live list hides DEAD wallets; fetch the archived "graveyard" separately.
   const { data: archived, refetch: refetchArchived } = useRemoteWallets({
-    status: 'DEAD',
+    status: 'DEAD'
   })
 
   const refetchAll = () => {
@@ -88,7 +92,10 @@ export default function RemoteWalletsPage() {
           )}
         </div>
 
-        <ArchivedWalletsSection wallets={archived ?? []} onChanged={refetchAll} />
+        <ArchivedWalletsSection
+          wallets={archived ?? []}
+          onChanged={refetchAll}
+        />
       </div>
     </div>
   )
@@ -106,7 +113,7 @@ function EmptyState({ onCreated }: { onCreated: () => void }) {
       onCreated()
     } catch (err) {
       toast.error(
-        err instanceof Error ? err.message : 'Could not create LNCurl wallet',
+        err instanceof Error ? err.message : 'Could not create LNCurl wallet'
       )
     }
   }
@@ -126,7 +133,11 @@ function EmptyState({ onCreated }: { onCreated: () => void }) {
       </div>
       {lncurlEnabled && (
         <Button className="gap-2" onClick={handleCreate} disabled={loading}>
-          {loading ? <Spinner className="size-4" /> : <Plus className="size-4" />}
+          {loading ? (
+            <Spinner className="size-4" />
+          ) : (
+            <Plus className="size-4" />
+          )}
           Create LNCurl wallet
         </Button>
       )}
@@ -141,16 +152,19 @@ const STATUS_VARIANT: Record<
   ACTIVE: 'default',
   DISABLED: 'secondary',
   REVOKED: 'outline',
-  DEAD: 'destructive',
+  DEAD: 'destructive'
 }
+
+const WALLETS_PAGE_SIZE = 10
 
 function WalletsTable({
   wallets,
-  onChanged,
+  onChanged
 }: {
   wallets: RemoteWalletData[]
   onChanged: () => void
 }) {
+  const pagination = useLocalPagination(wallets, WALLETS_PAGE_SIZE)
   return (
     <div className="rounded-md border">
       <Table>
@@ -169,7 +183,7 @@ function WalletsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {wallets.map(w => (
+          {pagination.items.map(w => (
             <TableRow
               key={w.id}
               id={`wallet-${w.id}`}
@@ -217,6 +231,14 @@ function WalletsTable({
           ))}
         </TableBody>
       </Table>
+      <CursorPagination
+        label="wallets"
+        page={pagination.page}
+        hasNext={pagination.hasNext}
+        loading={false}
+        onPrevious={pagination.previous}
+        onNext={pagination.next}
+      />
     </div>
   )
 }
@@ -228,10 +250,13 @@ function WalletsTable({
  */
 function WalletBalanceCell({ wallet }: { wallet: RemoteWalletData }) {
   const skip = wallet.status === 'REVOKED'
-  const { data, loading, error } = useRemoteWalletBalance(skip ? null : wallet.id)
+  const { data, loading, error } = useRemoteWalletBalance(
+    skip ? null : wallet.id
+  )
 
   if (skip) return <span className="text-muted-foreground">—</span>
-  if (loading) return <Spinner className="ml-auto size-3.5 text-muted-foreground" />
+  if (loading)
+    return <Spinner className="ml-auto size-3.5 text-muted-foreground" />
   if (error || !data) {
     return <span className="text-xs text-muted-foreground">Unavailable</span>
   }
@@ -248,6 +273,6 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'short',
-    day: 'numeric',
+    day: 'numeric'
   })
 }

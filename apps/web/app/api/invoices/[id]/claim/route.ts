@@ -7,21 +7,26 @@ import {
   AuthorizationError,
   ConflictError,
   NotFoundError,
-  ValidationError,
+  ValidationError
 } from '@/types/server/errors'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { requireUserAddressRegistration } from '@/lib/auth/paid-registration-guard'
 import { validateBody } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { claimInvoiceSchema } from '@/lib/validation/schemas'
 import { eventBus } from '@/lib/events/event-bus'
 import { dispatchHookAndForget } from '@/plugins/index'
-import { ActivityEvent, invoiceLogMetadata, logActivity } from '@/lib/activity-log'
-import { resolveDefaultAddressMode } from '@/lib/wallet/default-address-mode'
+import {
+  ActivityEvent,
+  invoiceLogMetadata,
+  logActivity
+} from '@/lib/activity-log'
+import { resolveDefaultAddressRouting } from '@/lib/wallet/default-address-mode'
 import {
   findInitialPrimaryWalletCandidate,
   getPrimaryRemoteWalletForUser,
-  syncPrimaryRemoteWalletFlag,
+  syncPrimaryRemoteWalletFlag
 } from '@/lib/wallet/primary-wallet'
 import type { InvoiceMetadata } from '@/lib/invoice-utils'
 
@@ -44,8 +49,8 @@ export const POST = withErrorHandling(
     const { id } = await params
     const body = await validateBody(request, claimInvoiceSchema)
 
-    // Resolve the user
-    const user = await prisma.user.findUnique({ where: { pubkey } })
+    // Resolve the user (any linked pubkey maps to the owning account)
+    const user = await resolveAccountByPubkey(pubkey)
     if (!user) {
       throw new ValidationError('User not found')
     }
@@ -71,9 +76,13 @@ export const POST = withErrorHandling(
       // invoices list stops showing it as "pending payment".
       if (invoice.status === 'PENDING') {
         try {
-          await prisma.invoice.update({
-            where: { id },
-            data: { status: 'EXPIRED' },
+          // Conditional on PENDING: `invoice` is a stale read, so a concurrent
+          // claim may have already committed PAID and created the address
+          // between it and this write. An unconditional update would clobber
+          // that to EXPIRED, leaving a paid invoice the user can't see.
+          await prisma.invoice.updateMany({
+            where: { id, status: 'PENDING' },
+            data: { status: 'EXPIRED' }
           })
         } catch {
           // Best-effort sweep — never block the expiry response on it.
@@ -84,7 +93,7 @@ export const POST = withErrorHandling(
           level: 'WARN',
           message: `Invoice expired before claim (${invoice.amountSats} sats)`,
           userId: user.id,
-          metadata: invoiceLogMetadata({ ...invoice, status: 'EXPIRED' }),
+          metadata: invoiceLogMetadata({ ...invoice, status: 'EXPIRED' })
         })
       }
       throw new ValidationError('Invoice has expired')
@@ -103,18 +112,10 @@ export const POST = withErrorHandling(
     // an operator toggles paid mode off after the invoice was issued, the
     // user already paid and is entitled to their address.
     if (!verifyPreimage(body.preimage, invoice.paymentHash)) {
-      throw new ValidationError('Invalid preimage — does not match payment hash')
+      throw new ValidationError(
+        'Invalid preimage — does not match payment hash'
+      )
     }
-
-    // Mark invoice as paid
-    await prisma.invoice.update({
-      where: { id },
-      data: {
-        status: 'PAID',
-        preimage: body.preimage,
-        paidAt: new Date(),
-      },
-    })
 
     // Execute purpose-specific action
     let result: Record<string, unknown> = { success: true }
@@ -129,58 +130,110 @@ export const POST = withErrorHandling(
       // Re-check availability — the username may have been taken
       // between invoice mint and claim.
       const existing = await prisma.lightningAddress.findUnique({
-        where: { username },
+        where: { username }
       })
       if (existing) {
         throw new ConflictError('Username was taken while payment was pending')
       }
 
-      if (invoice.purpose === 'REGISTRATION') {
-        await prisma.$transaction(async tx => {
-          const currentPrimaryWallet = await getPrimaryRemoteWalletForUser(user.id, tx)
-          const candidate =
-            currentPrimaryWallet ??
-            (await findInitialPrimaryWalletCandidate(user.id, tx))
+      // Read-only routing defaults for a secondary add — computed outside the
+      // transaction since they don't take a tx client.
+      const secondaryRouting =
+        invoice.purpose === 'WALLET_ADDRESS'
+          ? await resolveDefaultAddressRouting(user.id)
+          : null
 
-          // Primary swap: delete the existing primary first so the
-          // partial-unique index on (userId) WHERE isPrimary=true
-          // doesn't conflict, then insert the new primary row.
-          const existingPrimary = await tx.lightningAddress.findFirst({
-            where: { userId: user.id, isPrimary: true },
+      // The PAID flip and the address creation commit or roll back TOGETHER:
+      // a failed insert (e.g. the username was taken concurrently) must never
+      // strand a paid invoice with no address — the user paid and is entitled
+      // to retry. The conditional update also closes the double-claim race:
+      // only one concurrent claim flips PENDING → PAID and wins.
+      try {
+        await prisma.$transaction(async tx => {
+          const claimed = await tx.invoice.updateMany({
+            where: { id, status: 'PENDING' },
+            data: {
+              status: 'PAID',
+              preimage: body.preimage,
+              paidAt: new Date()
+            }
           })
-          if (existingPrimary) {
-            await tx.lightningAddress.delete({
-              where: { username: existingPrimary.username },
+          if (claimed.count === 0) {
+            throw new ConflictError('Invoice has already been claimed')
+          }
+
+          if (invoice.purpose === 'REGISTRATION') {
+            const currentPrimaryWallet = await getPrimaryRemoteWalletForUser(
+              user.id,
+              tx
+            )
+            const candidate =
+              currentPrimaryWallet ??
+              (await findInitialPrimaryWalletCandidate(user.id, tx))
+
+            // Primary swap: delete the existing primary first so the
+            // partial-unique index on (userId) WHERE isPrimary=true
+            // doesn't conflict, then insert the new primary row.
+            const existingPrimary = await tx.lightningAddress.findFirst({
+              where: { userId: user.id, isPrimary: true }
+            })
+            if (existingPrimary) {
+              await tx.lightningAddress.delete({
+                where: { username: existingPrimary.username }
+              })
+            }
+            await tx.lightningAddress.create({
+              data: {
+                username,
+                userId: user.id,
+                isPrimary: true,
+                mode: candidate ? 'CUSTOM_NWC' : 'IDLE',
+                remoteWalletId: candidate?.id ?? null
+              }
+            })
+            await syncPrimaryRemoteWalletFlag(user.id, tx)
+          } else {
+            // Secondary add: never touches the existing primary.
+            await tx.lightningAddress.create({
+              data: {
+                username,
+                userId: user.id,
+                isPrimary: false,
+                ...secondaryRouting
+              }
             })
           }
-          await tx.lightningAddress.create({
-            data: {
-              username,
-              userId: user.id,
-              isPrimary: true,
-              mode: candidate ? 'CUSTOM_NWC' : 'IDLE',
-              remoteWalletId: candidate?.id ?? null,
-            },
-          })
-          await syncPrimaryRemoteWalletFlag(user.id, tx)
         })
-      } else {
-        // Secondary add: never touches the existing primary.
-        await prisma.lightningAddress.create({
-          data: {
-            username,
-            userId: user.id,
-            isPrimary: false,
-            mode: await resolveDefaultAddressMode(user.id),
-          },
-        })
+      } catch (error) {
+        // Concurrent claim created the same username after our pre-check —
+        // the unique index is the real guard. The invoice flip rolled back,
+        // so report the conflict (not a paid-but-addressless 500).
+        if ((error as { code?: string }).code === 'P2002') {
+          throw new ConflictError(
+            'Username was taken while payment was pending'
+          )
+        }
+        throw error
       }
 
       const { domain } = await getSettings(['domain'])
       result = {
         success: true,
         lightningAddress: `${username}@${domain}`,
-        username,
+        username
+      }
+    } else {
+      // Non-address purposes: conditional flip only — same double-claim guard.
+      const claimed = await prisma.invoice.updateMany({
+        where: { id, status: 'PENDING' },
+        data: {
+          status: 'PAID',
+          preimage: body.preimage,
+          paidAt: new Date()
+        }
+      })
+      if (claimed.count === 0) {
+        throw new ConflictError('Invoice has already been claimed')
       }
     }
 
@@ -205,8 +258,8 @@ export const POST = withErrorHandling(
         ...invoice,
         status: 'PAID',
         preimage: body.preimage,
-        paidAt: new Date(),
-      }),
+        paidAt: new Date()
+      })
     })
 
     // Plugin lifecycle hook — fire-and-forget; a plugin failure never
@@ -216,7 +269,7 @@ export const POST = withErrorHandling(
       paymentHash: invoice.paymentHash,
       amountSats: invoice.amountSats,
       purpose: invoice.purpose,
-      userId: user.id,
+      userId: user.id
     })
 
     if (createsAddress && typeof result.username === 'string') {
@@ -228,8 +281,8 @@ export const POST = withErrorHandling(
         metadata: {
           username: result.username,
           via: 'invoice_claim',
-          invoiceId: invoice.id,
-        },
+          invoiceId: invoice.id
+        }
       })
     }
 

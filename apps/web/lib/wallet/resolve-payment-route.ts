@@ -1,8 +1,9 @@
 import type {
   LightningAddressMode,
   RemoteWalletStatus,
-  RemoteWalletType,
+  RemoteWalletType
 } from '@/lib/generated/prisma'
+import { decryptRemoteWalletConfig } from '@/lib/wallet/remote-wallet-vault'
 
 // ── RemoteWallet routing ─────────────────────────────────────────────────────
 //
@@ -26,13 +27,20 @@ export interface RemoteWalletRef {
  *
  *   - `idle`          address is disabled (`mode=IDLE`).
  *   - `alias`         forward LUD-16 to another LN address (`mode=ALIAS`).
+ *   - `proxyAlias`    receive locally, then settle the alias asynchronously.
  *   - `wallet`        resolve through the driver registry.
  *   - `unconfigured`  no usable wallet/redirect — a 404 at the HTTP layer.
  */
 export type WalletRoute =
   | { kind: 'idle' }
   | { kind: 'alias'; redirect: string }
-  | { kind: 'wallet'; walletId: string | null; type: RemoteWalletType; config: unknown }
+  | { kind: 'proxyAlias'; redirect: string }
+  | {
+      kind: 'wallet'
+      walletId: string | null
+      type: RemoteWalletType
+      config: unknown
+    }
   | { kind: 'unconfigured' }
 
 export interface ResolveWalletRouteInput {
@@ -40,13 +48,18 @@ export interface ResolveWalletRouteInput {
   redirect: string | null
   /** RemoteWallet bound directly to the address (CUSTOM_NWC). */
   remoteWallet: RemoteWalletRef | null
-  /** The wallet linked through the user's primary Lightning Address. */
-  defaultRemoteWallet: RemoteWalletRef | null
 }
 
 function walletRoute(wallet: RemoteWalletRef): WalletRoute {
   return wallet.status === 'ACTIVE'
-    ? { kind: 'wallet', walletId: wallet.id ?? null, type: wallet.type, config: wallet.config }
+    ? {
+        kind: 'wallet',
+        walletId: wallet.id ?? null,
+        type: wallet.type,
+        config: wallet.id
+          ? decryptRemoteWalletConfig(wallet.id, wallet.type, wallet.config)
+          : wallet.config
+      }
     : { kind: 'unconfigured' }
 }
 
@@ -59,13 +72,13 @@ function walletRoute(wallet: RemoteWalletRef): WalletRoute {
  *   - `CUSTOM_NWC`  → the address's bound `remoteWallet` when ACTIVE; a
  *                     non-ACTIVE (or absent) binding is `unconfigured` — an
  *                     explicit binding must never silently reroute.
- *   - `DEFAULT_NWC` → the primary-address `remoteWallet` when ACTIVE, else
- *                     unconfigured.
  *
  * The GET (metadata) and GET /cb (callback) LUD-16 routes both call this so
  * they stay in lockstep.
  */
-export function resolveWalletRoute(input: ResolveWalletRouteInput): WalletRoute {
+export function resolveWalletRoute(
+  input: ResolveWalletRouteInput
+): WalletRoute {
   switch (input.mode) {
     case 'IDLE':
       return { kind: 'idle' }
@@ -73,18 +86,25 @@ export function resolveWalletRoute(input: ResolveWalletRouteInput): WalletRoute 
       return input.redirect && input.redirect.trim().length > 0
         ? { kind: 'alias', redirect: input.redirect.trim() }
         : { kind: 'unconfigured' }
+    case 'PROXY_ALIAS':
+      return input.redirect && input.redirect.trim().length > 0
+        ? { kind: 'proxyAlias', redirect: input.redirect.trim() }
+        : { kind: 'unconfigured' }
     case 'CUSTOM_NWC':
-      return input.remoteWallet ? walletRoute(input.remoteWallet) : { kind: 'unconfigured' }
-    case 'DEFAULT_NWC':
-      return input.defaultRemoteWallet
-        ? walletRoute(input.defaultRemoteWallet)
+      return input.remoteWallet
+        ? walletRoute(input.remoteWallet)
         : { kind: 'unconfigured' }
   }
 }
 
 /** Driver-addressable routing decision for a Card spend. */
 export type CardWalletRoute =
-  | { kind: 'wallet'; walletId: string | null; type: RemoteWalletType; config: unknown }
+  | {
+      kind: 'wallet'
+      walletId: string | null
+      type: RemoteWalletType
+      config: unknown
+    }
   | { kind: 'unconfigured' }
 
 export interface ResolveCardWalletInput {
@@ -105,10 +125,13 @@ export interface ResolveCardWalletInput {
  *   2. Otherwise (no explicit binding) the owner's primary-address RemoteWallet
  *      when ACTIVE.
  *
- * Symmetric with `resolveWalletRoute`'s CUSTOM/DEFAULT handling so card and
- * address routing share the same safety rules.
+ * Unlike an address — which must name its wallet explicitly — a card may fall
+ * back to the owner's primary-address wallet, because a card is bound to the
+ * holder rather than to one address.
  */
-export function resolveCardWallet(input: ResolveCardWalletInput): CardWalletRoute {
+export function resolveCardWallet(
+  input: ResolveCardWalletInput
+): CardWalletRoute {
   if (input.remoteWallet) {
     return walletRoute(input.remoteWallet) as CardWalletRoute
   }
@@ -117,7 +140,13 @@ export function resolveCardWallet(input: ResolveCardWalletInput): CardWalletRout
       kind: 'wallet',
       walletId: input.defaultRemoteWallet.id ?? null,
       type: input.defaultRemoteWallet.type,
-      config: input.defaultRemoteWallet.config,
+      config: input.defaultRemoteWallet.id
+        ? decryptRemoteWalletConfig(
+            input.defaultRemoteWallet.id,
+            input.defaultRemoteWallet.type,
+            input.defaultRemoteWallet.config
+          )
+        : input.defaultRemoteWallet.config
     }
   }
   return { kind: 'unconfigured' }
@@ -129,12 +158,15 @@ export function resolveCardWallet(input: ResolveCardWalletInput): CardWalletRout
  * 404 in that case rather than making a dubious outbound request.
  */
 export function parseLightningAddress(
-  raw: string,
+  raw: string
 ): { user: string; host: string } | null {
   const at = raw.indexOf('@')
   if (at <= 0 || at === raw.length - 1) return null
   const user = raw.slice(0, at).trim().toLowerCase()
-  const host = raw.slice(at + 1).trim().toLowerCase()
+  const host = raw
+    .slice(at + 1)
+    .trim()
+    .toLowerCase()
   // Basic guardrails: host must look like a hostname, user must only contain
   // the characters LUD-16 permits (§ "LNURL-pay address encoding").
   if (!/^[a-z0-9._%+-]+$/.test(user)) return null

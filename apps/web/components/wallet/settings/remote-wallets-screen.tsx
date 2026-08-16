@@ -2,12 +2,8 @@
 
 import React, { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  ChevronLeft,
-  RefreshCw,
-  Star,
-  Wallet
-} from 'lucide-react'
+import Link from 'next/link'
+import { ChevronLeft, RefreshCw, Star, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { CreateRemoteWalletDialog } from '@/components/admin/create-remote-wallet-dialog'
+import { CreateProxyWalletDialog } from '@/components/wallet/create-proxy-wallet-dialog'
 import { NavTabbar } from '@/components/wallet/shared/nav-tabbar'
 import {
   useRemoteWalletMutations,
@@ -56,7 +53,9 @@ export function RemoteWalletsScreen() {
       toast.success(success)
       await refetch()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not update wallet')
+      toast.error(
+        err instanceof Error ? err.message : 'Could not update wallet'
+      )
     } finally {
       setPending(null)
     }
@@ -106,7 +105,11 @@ export function RemoteWalletsScreen() {
           <EmptyState onCreated={refetch} />
         ) : (
           <>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              <CreateProxyWalletDialog
+                wallets={sortedWallets}
+                onChanged={refetch}
+              />
               <CreateRemoteWalletDialog onCreated={refetch} />
             </div>
             <section
@@ -119,7 +122,9 @@ export function RemoteWalletsScreen() {
                   wallet={wallet}
                   pending={pending}
                   onSetPrimary={() => handleSetPrimary(wallet)}
-                  onToggleStatus={checked => handleToggleStatus(wallet, checked)}
+                  onToggleStatus={checked =>
+                    handleToggleStatus(wallet, checked)
+                  }
                 />
               ))}
             </section>
@@ -160,7 +165,10 @@ function WalletRow({
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-background text-muted-foreground">
           <Wallet className="size-5" />
         </span>
-        <div className="min-w-0 flex-1">
+        <Link
+          href={`/wallet/settings/remote-wallets/${wallet.id}`}
+          className="min-w-0 flex-1 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           <h2 className="truncate text-base font-semibold text-foreground">
             {wallet.name}
           </h2>
@@ -172,7 +180,7 @@ function WalletRow({
               <Badge variant="secondary">LNCurl</Badge>
             </div>
           )}
-        </div>
+        </Link>
         <div className="flex shrink-0 items-center gap-2">
           {canSetPrimary && (
             <Button
@@ -215,14 +223,17 @@ function WalletRow({
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex min-w-0 items-start justify-between gap-3">
-            <div className="min-w-0">
+            <Link
+              href={`/wallet/settings/remote-wallets/${wallet.id}`}
+              className="min-w-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <h2 className="truncate text-base font-semibold text-foreground">
                 {wallet.name}
               </h2>
               <p className="text-xs text-muted-foreground">
                 {wallet.type} · Updated {formatDate(wallet.updatedAt)}
               </p>
-            </div>
+            </Link>
             <Switch
               checked={active}
               disabled={statusToggleDisabled}
@@ -244,7 +255,10 @@ function WalletSkeleton() {
   return (
     <section className="flex flex-col gap-3" aria-label="Loading wallets">
       {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className="flex flex-col gap-4 rounded-2xl bg-card p-4">
+        <div
+          key={index}
+          className="flex flex-col gap-4 rounded-2xl bg-card p-4"
+        >
           <div className="flex gap-3">
             <Skeleton className="size-11 rounded-xl" />
             <div className="flex flex-1 flex-col gap-2">

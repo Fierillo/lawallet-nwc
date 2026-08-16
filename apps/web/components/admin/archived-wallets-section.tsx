@@ -11,7 +11,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table'
 import {
   AlertDialog,
@@ -21,14 +21,18 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { Spinner } from '@/components/ui/spinner'
 import {
   useRemoteWalletMutations,
-  type RemoteWalletData,
+  type RemoteWalletData
 } from '@/lib/client/hooks/use-remote-wallets'
 import { ApiClientError } from '@/lib/client/api-client'
+import {
+  CursorPagination,
+  useLocalPagination
+} from '@/components/wallet/shared/cursor-pagination'
 
 /**
  * The "graveyard" for disposable LNCurl wallets that ran out of sats and were
@@ -39,13 +43,16 @@ import { ApiClientError } from '@/lib/client/api-client'
  * Fetched separately from the live list (the API hides DEAD by default), so
  * the section only renders when there's at least one archived wallet.
  */
+const ARCHIVED_PAGE_SIZE = 10
+
 export function ArchivedWalletsSection({
   wallets,
-  onChanged,
+  onChanged
 }: {
   wallets: RemoteWalletData[]
   onChanged: () => void
 }) {
+  const pagination = useLocalPagination(wallets, ARCHIVED_PAGE_SIZE)
   if (!wallets.length) return null
 
   return (
@@ -74,7 +81,7 @@ export function ArchivedWalletsSection({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {wallets.map(w => (
+            {pagination.items.map(w => (
               <TableRow key={w.id}>
                 <TableCell className="font-medium">
                   <span className="flex items-center gap-1.5">
@@ -98,6 +105,14 @@ export function ArchivedWalletsSection({
             ))}
           </TableBody>
         </Table>
+        <CursorPagination
+          label="archived wallets"
+          page={pagination.page}
+          hasNext={pagination.hasNext}
+          loading={false}
+          onPrevious={pagination.previous}
+          onNext={pagination.next}
+        />
       </div>
     </section>
   )
@@ -105,7 +120,7 @@ export function ArchivedWalletsSection({
 
 function RemovePermanently({
   wallet,
-  onChanged,
+  onChanged
 }: {
   wallet: RemoteWalletData
   onChanged: () => void
@@ -140,12 +155,18 @@ function RemovePermanently({
         disabled={loading}
         onClick={() => setOpen(true)}
       >
-        {loading ? <Spinner className="size-4" /> : <Trash2 className="size-4" />}
+        {loading ? (
+          <Spinner className="size-4" />
+        ) : (
+          <Trash2 className="size-4" />
+        )}
       </Button>
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove “{wallet.name}” permanently?</AlertDialogTitle>
+            <AlertDialogTitle>
+              Remove “{wallet.name}” permanently?
+            </AlertDialogTitle>
             <AlertDialogDescription>
               This deletes the archived wallet and its history for good. This
               can’t be undone.
@@ -179,7 +200,7 @@ function formatDateTime(iso: string): string {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
-    minute: '2-digit',
+    minute: '2-digit'
   })
 }
 

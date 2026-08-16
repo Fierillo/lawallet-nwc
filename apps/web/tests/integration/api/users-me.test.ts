@@ -62,7 +62,7 @@ describe('GET /api/users/me', () => {
         {
           username: 'alice',
           isPrimary: true,
-          mode: 'DEFAULT_NWC',
+          mode: 'CUSTOM_NWC',
           redirect: null,
           nwcConnectionId: null,
           nwcConnection: null
@@ -127,7 +127,7 @@ describe('GET /api/users/me', () => {
         {
           username: 'alice',
           isPrimary: true,
-          mode: 'DEFAULT_NWC',
+          mode: 'CUSTOM_NWC',
           redirect: null,
           remoteWalletId: null,
           remoteWallet: null
@@ -185,7 +185,12 @@ describe('GET /api/users/me', () => {
     const res = await GET(req)
     const body: any = await assertResponse(res, 200)
 
-    const query = vi.mocked(prismaMock.user.findUnique).mock.calls[0]?.[0]
+    // Account resolution (lib/auth/account) issues its own user.findUnique
+    // fallback first — assert on the call that carries the include.
+    const query = vi
+      .mocked(prismaMock.user.findUnique)
+      .mock.calls.map(c => c[0])
+      .find((arg: any) => arg?.include)
     expect(query).toEqual(
       expect.objectContaining({
         include: expect.objectContaining({
@@ -206,9 +211,9 @@ describe('GET /api/users/me', () => {
 
   // ── primary-address driven fields ───────────────────────────────────────
   // The response grew `effectiveNwcString` + `primaryAddressMode` +
-  // `primaryUsername` + `primaryRedirect` so the dashboard can decide
-  // between NwcCard and ForwardingCard without a second round-trip, and
-  // NwcCard can scope its balance widget to the address's actual route.
+  // `primaryUsername` + `primaryRedirect` so the dashboard can pick the right
+  // card without a second round-trip, and NwcCard can scope its balance widget
+  // to the address's actual route.
 
   const primaryConnUri = 'nostr+walletconnect://primary-conn'
   const addressConnUri = 'nostr+walletconnect://address-conn'
@@ -224,7 +229,7 @@ describe('GET /api/users/me', () => {
     }
   }
 
-  it('legacy DEFAULT_NWC primary address has no derived primary wallet', async () => {
+  it('legacy CUSTOM_NWC primary address has no derived primary wallet', async () => {
     mockAuth()
     const user = createUserFixture({
       pubkey: mockPubkey,
@@ -232,7 +237,7 @@ describe('GET /api/users/me', () => {
         {
           username: 'alice',
           isPrimary: true,
-          mode: 'DEFAULT_NWC',
+          mode: 'CUSTOM_NWC',
           redirect: null,
           remoteWalletId: null,
           remoteWallet: null
@@ -247,13 +252,13 @@ describe('GET /api/users/me', () => {
     const res = await GET(createNextRequest('/api/users/me'))
     const body: any = await assertResponse(res, 200)
 
-    expect(body.primaryAddressMode).toBe('DEFAULT_NWC')
+    expect(body.primaryAddressMode).toBe('CUSTOM_NWC')
     expect(body.primaryUsername).toBe('alice')
     expect(body.primaryRedirect).toBeNull()
     expect(body.effectiveNwcString).toBeNull()
   })
 
-  it('DEFAULT_NWC primary with no primary-address wallet: effectiveNwcString is null', async () => {
+  it('CUSTOM_NWC primary with no primary-address wallet: effectiveNwcString is null', async () => {
     mockAuth()
     const user = createUserFixture({
       pubkey: mockPubkey,
@@ -261,7 +266,7 @@ describe('GET /api/users/me', () => {
         {
           username: 'alice',
           isPrimary: true,
-          mode: 'DEFAULT_NWC',
+          mode: 'CUSTOM_NWC',
           redirect: null,
           remoteWalletId: null,
           remoteWallet: null

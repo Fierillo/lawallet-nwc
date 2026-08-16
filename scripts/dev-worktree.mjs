@@ -51,9 +51,13 @@ function renderEnv(env) {
     `POSTGRES_VOLUME="${env.POSTGRES_VOLUME}"`,
     `DATABASE_URL="${env.DATABASE_URL}"`,
     'NODE_ENV="development"',
+    // Local-only opt-in for the /api/dev/* routes (reset/login/impersonate).
+    'ENABLE_DEV_ROUTES="true"',
     `PORT="${env.PORT}"`,
     `WEB_PORT="${env.WEB_PORT}"`,
     `JWT_SECRET="${env.JWT_SECRET}"`,
+    `KEY_VAULT_SECRET="${env.KEY_VAULT_SECRET}"`,
+    `NWC_VAULT_SECRET="${env.NWC_VAULT_SECRET}"`,
     // NWC listener bridge (optional service; web falls back without it).
     `LISTENER_PORT="${env.LISTENER_PORT}"`,
     `LISTENER_AUTH_SECRET="${env.LISTENER_AUTH_SECRET}"`,
@@ -87,6 +91,16 @@ async function findPort(start) {
   throw new Error(`No free port found starting at ${start}`)
 }
 
+// Guards against a literal "undefined"/short value leaking from an env file
+// written by an older or broken revision of this script.
+function validSecret(value) {
+  return typeof value === 'string' &&
+    value.length >= 32 &&
+    value !== 'undefined'
+    ? value
+    : null
+}
+
 async function loadOrCreateEnv() {
   const existing = parseEnvFile(rootEnvPath)
   const state = existsSync(statePath)
@@ -115,7 +129,9 @@ async function loadOrCreateEnv() {
 
   const env = {
     DEV_COMPOSE_PROJECT:
-      existing.DEV_COMPOSE_PROJECT || state.DEV_COMPOSE_PROJECT || composeProject,
+      existing.DEV_COMPOSE_PROJECT ||
+      state.DEV_COMPOSE_PROJECT ||
+      composeProject,
     POSTGRES_DB: postgresDb,
     POSTGRES_USER: postgresUser,
     POSTGRES_PASSWORD: postgresPassword,
@@ -131,6 +147,14 @@ async function loadOrCreateEnv() {
     JWT_SECRET:
       existing.JWT_SECRET ||
       state.JWT_SECRET ||
+      randomBytes(48).toString('base64url'),
+    KEY_VAULT_SECRET:
+      validSecret(existing.KEY_VAULT_SECRET) ||
+      validSecret(state.KEY_VAULT_SECRET) ||
+      randomBytes(48).toString('base64url'),
+    NWC_VAULT_SECRET:
+      validSecret(existing.NWC_VAULT_SECRET) ||
+      validSecret(state.NWC_VAULT_SECRET) ||
       randomBytes(48).toString('base64url'),
     LISTENER_PORT: listenerPort,
     LISTENER_AUTH_SECRET:
@@ -255,7 +279,11 @@ async function isFreshDatabase(env) {
       '-tAc',
       "SELECT to_regclass('public._prisma_migrations') IS NULL"
     ],
-    { cwd: root, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'ignore'] }
+    {
+      cwd: root,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'ignore']
+    }
   )
 
   let output = ''
@@ -278,15 +306,25 @@ async function bootstrap(env, { reset }) {
   console.log(`Starting isolated Postgres for ${env.DEV_COMPOSE_PROJECT}...`)
   await run(
     'docker',
-    ['compose', '--project-name', env.DEV_COMPOSE_PROJECT, 'up', '-d', 'postgres'],
+    [
+      'compose',
+      '--project-name',
+      env.DEV_COMPOSE_PROJECT,
+      'up',
+      '-d',
+      'postgres'
+    ],
     { env }
   )
   await waitForPostgres(env)
 
   console.log('Generating Prisma client...')
-  await runPnpm(['--filter', '@lawallet-nwc/web', 'exec', 'prisma', 'generate'], {
-    env
-  })
+  await runPnpm(
+    ['--filter', '@lawallet-nwc/web', 'exec', 'prisma', 'generate'],
+    {
+      env
+    }
+  )
 
   const fresh = await isFreshDatabase(env)
 

@@ -1,6 +1,6 @@
 {
   "name": "@lawallet-nwc/web",
-  "version": "1.4.0",
+  "version": "2.6.0",
   "private": true,
   "scripts": {
     "build": "next build",
@@ -63,6 +63,9 @@
     "@radix-ui/react-toggle-group": "latest",
     "@radix-ui/react-tooltip": "latest",
     "@scalar/api-reference-react": "^0.9.45",
+    "@sentry/nextjs": "^10.69.0",
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.2",
     "@types/jsonwebtoken": "^9.0.10",
     "@xyflow/react": "^12.10.2",
     "@zxing/library": "^0.21.3",
@@ -82,7 +85,7 @@
     "jsonwebtoken": "^9.0.3",
     "light-bolt11-decoder": "^3.2.0",
     "lucide-react": "^0.563.0",
-    "next": "^16.2.6",
+    "next": "^16.2.11",
     "next-themes": "latest",
     "nostr-tools": "latest",
     "pino": "^10.3.0",

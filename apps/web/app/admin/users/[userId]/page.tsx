@@ -3,7 +3,16 @@
 import { use, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ArrowLeft, Camera, Copy, Forward, MoreHorizontal, Pencil, Radio, Star } from 'lucide-react'
+import {
+  ArrowLeft,
+  Camera,
+  Copy,
+  Forward,
+  MoreHorizontal,
+  Pencil,
+  Radio,
+  Star
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminTopbar } from '@/components/admin/admin-topbar'
 import { StatCard } from '@/components/admin/stat-card'
@@ -14,14 +23,14 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
+  SelectValue
 } from '@/components/ui/select'
 import {
   Table,
@@ -29,7 +38,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table'
 import { Spinner } from '@/components/ui/spinner'
 import { useUser, useUserMutations } from '@/lib/client/hooks/use-users'
@@ -37,12 +46,18 @@ import { useSettings } from '@/lib/client/hooks/use-settings'
 import { useNostrProfile } from '@/lib/client/nostr-profile'
 import { EditProfileDialog } from '@/components/admin/edit-profile-dialog'
 import { RelayEditorDialog } from '@/components/admin/relay-editor-dialog'
+import { ImpersonateUserButton } from '@/components/admin/impersonate-user-button'
 import { useAuth } from '@/components/admin/auth-context'
-import { truncateNpub, formatRelativeTime, npubInitials, toNpub } from '@/lib/client/format'
+import {
+  truncateNpub,
+  formatRelativeTime,
+  npubInitials,
+  toNpub
+} from '@/lib/client/format'
 import { Role, Permission } from '@/lib/auth/permissions'
 import {
   type WalletAddress,
-  useAddressMutations,
+  useAddressMutations
 } from '@/lib/client/hooks/use-wallet-addresses'
 import { cn } from '@/lib/utils'
 
@@ -52,14 +67,14 @@ const ROLE_VARIANT: Record<Role, 'default' | 'secondary' | 'outline'> = {
   ADMIN: 'default',
   OPERATOR: 'secondary',
   VIEWER: 'secondary',
-  USER: 'outline',
+  USER: 'outline'
 }
 
 const MODE_LABEL: Record<WalletAddress['mode'], string> = {
   IDLE: 'Idle',
   ALIAS: 'Alias',
-  CUSTOM_NWC: 'Custom NWC',
-  DEFAULT_NWC: 'Default NWC',
+  PROXY_ALIAS: 'Deferred proxy',
+  CUSTOM_NWC: 'Custom NWC'
 }
 
 /**
@@ -68,7 +83,7 @@ const MODE_LABEL: Record<WalletAddress['mode'], string> = {
  * transaction summary from the Invoice table.
  */
 export default function UserDetailPage({
-  params,
+  params
 }: {
   params: Promise<{ userId: string }>
 }) {
@@ -77,7 +92,7 @@ export default function UserDetailPage({
   const { data: user, loading, refetch } = useUser(userId)
   const { data: settings } = useSettings()
   const { profile, updateProfile } = useNostrProfile(user?.pubkey ?? null, {
-    force: true,
+    force: true
   })
   const { pubkey: callerPubkey, role: callerRole, isAuthorized } = useAuth()
   const { updateUserRole, loading: roleUpdating } = useUserMutations()
@@ -86,7 +101,9 @@ export default function UserDetailPage({
   const [editingRelays, setEditingRelays] = useState(false)
   // Optimistic primary override so the star flips before the server
   // confirms, matching /admin/addresses. Only meaningful when isSelf.
-  const [optimisticPrimary, setOptimisticPrimary] = useState<string | null>(null)
+  const [optimisticPrimary, setOptimisticPrimary] = useState<string | null>(
+    null
+  )
 
   const canManageRoles = isAuthorized(Permission.USERS_MANAGE_ROLES)
   const isSelf = user?.pubkey === callerPubkey
@@ -113,9 +130,7 @@ export default function UserDetailPage({
       toast.success(`Role updated to ${next}`)
       await refetch()
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : 'Failed to update role',
-      )
+      toast.error(err instanceof Error ? err.message : 'Failed to update role')
       // Roll the Radix Select back to the server's truth — its internal
       // state already flipped to the rejected option and would otherwise
       // stay divergent until the user navigated away.
@@ -210,7 +225,7 @@ export default function UserDetailPage({
                     ? {
                         backgroundImage: `url("${profile.banner}")`,
                         backgroundSize: 'cover',
-                        backgroundPosition: 'center',
+                        backgroundPosition: 'center'
                       }
                     : undefined
                 }
@@ -247,7 +262,9 @@ export default function UserDetailPage({
                       {profile?.picture && (
                         <AvatarImage src={profile.picture} alt={displayName} />
                       )}
-                      <AvatarFallback className="text-lg">{fallback}</AvatarFallback>
+                      <AvatarFallback className="text-lg">
+                        {fallback}
+                      </AvatarFallback>
                     </Avatar>
                     <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/0 opacity-0 transition-all duration-200 group-hover:bg-black/50 group-hover:opacity-100 group-focus-visible:bg-black/50 group-focus-visible:opacity-100">
                       <Camera className="size-5 text-white" />
@@ -258,7 +275,9 @@ export default function UserDetailPage({
                     {profile?.picture && (
                       <AvatarImage src={profile.picture} alt={displayName} />
                     )}
-                    <AvatarFallback className="text-lg">{fallback}</AvatarFallback>
+                    <AvatarFallback className="text-lg">
+                      {fallback}
+                    </AvatarFallback>
                   </Avatar>
                 )}
 
@@ -277,6 +296,9 @@ export default function UserDetailPage({
                       <Pencil className="size-3.5" />
                       Edit profile
                     </Button>
+                  )}
+                  {isAdmin && !isSelf && (
+                    <ImpersonateUserButton pubkey={user.pubkey} showLabel />
                   )}
                   {isSelf ? (
                     <button
@@ -406,9 +428,13 @@ export default function UserDetailPage({
                     <TableRow>
                       <TableHead>Address</TableHead>
                       <TableHead>Mode</TableHead>
-                      <TableHead className="hidden sm:table-cell">Created</TableHead>
+                      <TableHead className="hidden sm:table-cell">
+                        Created
+                      </TableHead>
                       {canManageAddresses && (
-                        <TableHead className="w-12 text-right">Actions</TableHead>
+                        <TableHead className="w-12 text-right">
+                          Actions
+                        </TableHead>
                       )}
                     </TableRow>
                   </TableHeader>
@@ -457,7 +483,9 @@ export default function UserDetailPage({
                                   variant="ghost"
                                   size="icon"
                                   className="size-7 text-muted-foreground hover:text-foreground"
-                                  onClick={() => handleCopyAddress(addr.username)}
+                                  onClick={() =>
+                                    handleCopyAddress(addr.username)
+                                  }
                                   aria-label={`Copy ${addr.username}@${domain}`}
                                 >
                                   <Copy className="size-3.5" />
@@ -477,7 +505,9 @@ export default function UserDetailPage({
                               </div>
                             </TableCell>
                             <TableCell>
-                              {addr.mode === 'ALIAS' && addr.redirect ? (
+                              {(addr.mode === 'ALIAS' ||
+                                addr.mode === 'PROXY_ALIAS') &&
+                              addr.redirect ? (
                                 <Badge
                                   variant="outline"
                                   title={addr.redirect}
@@ -488,7 +518,9 @@ export default function UserDetailPage({
                                     aria-hidden
                                   />
                                   <span className="truncate">
-                                    {addr.redirect}
+                                    {addr.mode === 'PROXY_ALIAS'
+                                      ? `Proxy → ${addr.redirect}`
+                                      : addr.redirect}
                                   </span>
                                 </Badge>
                               ) : (
@@ -499,7 +531,7 @@ export default function UserDetailPage({
                                   className={cn(
                                     'text-xs',
                                     addr.mode === 'IDLE' &&
-                                      'italic text-muted-foreground',
+                                      'italic text-muted-foreground'
                                   )}
                                 >
                                   {MODE_LABEL[addr.mode]}
@@ -521,7 +553,7 @@ export default function UserDetailPage({
                                     <DropdownMenuItem
                                       onClick={() =>
                                         router.push(
-                                          `/admin/addresses/${encodeURIComponent(addr.username)}`,
+                                          `/admin/addresses/${encodeURIComponent(addr.username)}`
                                         )
                                       }
                                     >
@@ -536,7 +568,9 @@ export default function UserDetailPage({
                                     {isSelf && (
                                       <DropdownMenuItem
                                         disabled={isPrimary || settingPrimary}
-                                        onClick={() => handleSetPrimary(addr.username)}
+                                        onClick={() =>
+                                          handleSetPrimary(addr.username)
+                                        }
                                       >
                                         Set as primary
                                       </DropdownMenuItem>

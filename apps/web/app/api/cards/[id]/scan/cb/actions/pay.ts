@@ -102,7 +102,11 @@ export default async function pay(
 
   let resolved: ReturnType<typeof driverForWallet>
   try {
-    resolved = driverForWallet({ type: route.type, config: route.config })
+    resolved = driverForWallet({
+      id: route.walletId ?? undefined,
+      type: route.type,
+      config: route.config
+    })
   } catch (error) {
     logger.error(
       { err: error, cardId: card.id },
@@ -128,8 +132,9 @@ export default async function pay(
     route.type === 'NWC' && listener.enabled
       ? await prepareListenerPaymentFastPath(listener, route.walletId)
       : false
-  const selectedTransport: CardPaymentTransport =
-    listenerReady ? 'LISTENER' : 'DIRECT'
+  const selectedTransport: CardPaymentTransport = listenerReady
+    ? 'LISTENER'
+    : 'DIRECT'
 
   // The one-time listener capability probe can consume part of a very short
   // invoice's remaining life. Recheck the already-decoded timestamp before
@@ -316,7 +321,7 @@ async function resumeAttempt(
 
   const wallet = await prisma.remoteWallet.findUnique({
     where: { id: attempt.walletId },
-    select: { type: true, config: true }
+    select: { id: true, type: true, config: true }
   })
   if (!wallet || wallet.type !== 'NWC') {
     return ludError('Payment outcome is still being resolved', true)

@@ -1,10 +1,12 @@
 import { randomUUID } from 'crypto'
+import type { Prisma } from './generated/prisma'
 import { AlbyHub } from './albyhub'
 import { prisma } from './prisma'
 import { getSettings } from './settings'
 import { ActivityEvent, logActivity } from './activity-log'
 import { logger } from './logger'
 import { createLncurlRemoteWallet } from './wallet/lncurl-wallet'
+import { encryptRemoteWalletConfig } from './wallet/remote-wallet-vault'
 
 /**
  * Creates a brand-new `User` record for an authenticated pubkey, optionally
@@ -22,21 +24,31 @@ import { createLncurlRemoteWallet } from './wallet/lncurl-wallet'
  *
  * Also fires (best-effort, non-blocking) a `USER_SIGNUP` activity log entry.
  */
-export async function createNewUser(pubkey: string) {
+export async function createNewUser(
+  pubkey: string,
+  opts?: {
+    /**
+     * Pre-allocated user id. The passkey registration flow reserves the id at
+     * options time (it travels as the WebAuthn user handle) and materializes
+     * the row here on verify.
+     */
+    userId?: string
+  }
+) {
   const {
     alby_api_url,
     alby_bearer_token,
     alby_auto_generate,
     lncurl_auto_create,
-    lncurl_server_url,
+    lncurl_server_url
   } = await getSettings([
     'alby_api_url',
     'alby_bearer_token',
     'alby_auto_generate',
     'lncurl_auto_create',
-    'lncurl_server_url',
+    'lncurl_server_url'
   ])
-  const userId = randomUUID()
+  const userId = opts?.userId ?? randomUUID()
 
   const albyHub = new AlbyHub(alby_api_url, alby_bearer_token)
 
@@ -44,12 +56,25 @@ export async function createNewUser(pubkey: string) {
     alby_auto_generate === 'true'
       ? await albyHub.createSubAccount(`LaWallet-${userId}`)
       : null
+  const remoteWalletId = subAccount ? randomUUID() : null
+  const remoteWalletConfig =
+    subAccount && remoteWalletId
+      ? encryptRemoteWalletConfig(remoteWalletId, 'NWC', {
+          connectionString: subAccount.pairingUri,
+          mode: 'SEND_RECEIVE'
+        })
+      : null
 
   const user = await prisma.user.create({
     data: {
       id: userId,
       pubkey,
       createdAt: new Date(),
+      // The signup pubkey is the account's primary Nostr identity;
+      // User.pubkey stays a denormalized mirror of it (see NostrIdentity).
+      nostrIdentities: {
+        create: { pubkey, isPrimary: true }
+      },
       albyEnabled: !!subAccount,
       albySubAccount: subAccount
         ? {
@@ -66,17 +91,16 @@ export async function createNewUser(pubkey: string) {
       remoteWallets: subAccount
         ? {
             create: {
+              id: remoteWalletId!,
               name: 'NWC Wallet',
               type: 'NWC',
-              config: {
-                connectionString: subAccount.pairingUri,
-                mode: 'SEND_RECEIVE',
-              },
+              config: remoteWalletConfig! as Prisma.InputJsonValue,
+              nwcConfigEncryptedAt: new Date(),
               status: 'ACTIVE',
-              isDefault: false,
-            },
+              isDefault: false
+            }
           }
-        : undefined,
+        : undefined
     },
     include: {
       // Pull only the primary address (at most one). Include its bound
@@ -85,11 +109,11 @@ export async function createNewUser(pubkey: string) {
       lightningAddresses: {
         where: { isPrimary: true },
         take: 1,
-        include: { remoteWallet: true },
+        include: { remoteWallet: true }
       },
       albySubAccount: true,
       // Compatibility/display primary RemoteWallet, if already synchronized.
-      remoteWallets: { where: { isDefault: true }, take: 1 },
+      remoteWallets: { where: { isDefault: true }, take: 1 }
     }
   })
 
@@ -101,7 +125,7 @@ export async function createNewUser(pubkey: string) {
     try {
       const lncurlWallet = await createLncurlRemoteWallet({
         userId: user.id,
-        serverUrl: lncurl_server_url || undefined,
+        serverUrl: lncurl_server_url || undefined
       })
       user.remoteWallets = lncurlWallet.isDefault ? [lncurlWallet] : []
     } catch (err) {
@@ -109,7 +133,7 @@ export async function createNewUser(pubkey: string) {
       // (the user just starts wallet-less and can connect one later).
       logger.error(
         { userId: user.id, err: String(err) },
-        'LNCurl auto-create failed during signup',
+        'LNCurl auto-create failed during signup'
       )
     }
   }
@@ -119,7 +143,7 @@ export async function createNewUser(pubkey: string) {
     event: ActivityEvent.USER_SIGNUP,
     message: `New user signed up (${pubkey.slice(0, 8)}…)`,
     userId: user.id,
-    metadata: { pubkey, albyEnabled: user.albyEnabled },
+    metadata: { pubkey, albyEnabled: user.albyEnabled }
   })
 
   return user

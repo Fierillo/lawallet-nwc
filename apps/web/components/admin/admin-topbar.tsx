@@ -2,12 +2,11 @@
 
 import React from 'react'
 import { Menu } from 'lucide-react'
-import { useIsMobile } from '@/components/ui/use-mobile'
 import {
   Topbar,
   TabBadge,
   type TopbarAlert,
-  type TopbarTab,
+  type TopbarTab
 } from '@/components/ui/topbar'
 import { TopbarMobile } from '@/components/ui/topbar-mobile'
 import { useSidebar } from '@/components/ui/sidebar'
@@ -36,9 +35,9 @@ export function AdminTopbar({
   type = 'page',
   onBack,
   alert,
-  tabs,
+  tabs
 }: AdminTopbarProps) {
-  const isMobile = useIsMobile()
+  const { isMobile } = useSidebar()
 
   if (isMobile) {
     if (type === 'subpage') {
@@ -52,7 +51,14 @@ export function AdminTopbar({
       )
     }
 
-    return <MobilePageTopbar title={title} subtitle={subtitle} actions={actions} tabs={tabs} />
+    return (
+      <MobilePageTopbar
+        title={title}
+        subtitle={subtitle}
+        actions={actions}
+        tabs={tabs}
+      />
+    )
   }
 
   // Desktop: drop a "chromeless" bar — one with no title, subtitle, tabs, or
@@ -60,7 +66,8 @@ export function AdminTopbar({
   // provides navigation, so an otherwise-empty bar is just a border + wasted
   // height. Titled / tabbed / alerting pages keep their topbar. Mobile is
   // unaffected: its bar carries the logo + hamburger nav.
-  const isChromeless = !title && !subtitle && (!tabs || tabs.length === 0) && !alert
+  const isChromeless =
+    !title && !subtitle && (!tabs || tabs.length === 0) && !alert
   if (isChromeless) return null
 
   return (
@@ -79,7 +86,7 @@ function MobilePageTopbar({
   title,
   subtitle,
   actions,
-  tabs,
+  tabs
 }: {
   title?: string
   subtitle?: string
@@ -94,6 +101,7 @@ function MobilePageTopbar({
       <div className="flex items-center justify-between px-4 sm:px-6 h-[56px]">
         <BrandLogotype width={100} height={24} className="h-6 w-auto" />
         <button
+          aria-label="Open navigation"
           onClick={() => setOpenMobile(true)}
           className="flex size-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
         >
@@ -124,7 +132,7 @@ function MobilePageTopbar({
       {/* Tabs */}
       {tabs && tabs.length > 0 && (
         <div className="flex items-center gap-1 px-4 sm:px-6 py-1 border-b border-border overflow-x-auto">
-          {tabs.map((tab) => (
+          {tabs.map(tab => (
             <button
               key={tab.label}
               onClick={tab.onClick}

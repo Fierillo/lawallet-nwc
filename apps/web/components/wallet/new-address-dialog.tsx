@@ -1,9 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useEffect, useRef, useCallback } from 'react'
 import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
 import { Check, Copy, RefreshCw, Wallet } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import {
@@ -12,50 +11,13 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Spinner } from '@/components/ui/spinner'
-import { useSettings } from '@/lib/client/hooks/use-settings'
-import { useAddressMutations } from '@/lib/client/hooks/use-wallet-addresses'
-import { useAuth } from '@/components/admin/auth-context'
-import { pollVerifyUrl, checkVerifyOnce } from '@/lib/client/lnurl'
-import { ApiClientError } from '@/lib/client/api-client'
-
-const USERNAME_RE = /^[a-z0-9]+$/
-
-// Key under which the in-flight invoice is stashed so a page refresh (or an
-// accidental tab reload after a network drop) can restore the QR and resume
-// polling instead of stranding a user who already paid. sessionStorage, not
-// localStorage: scoped to the tab, cleared when it closes.
-const PENDING_INVOICE_KEY = 'lawallet:pending-invoice'
-
-/**
- * Minimal shape of the `window.webln` object (WebLN / LNURL-auth browser
- * extensions). We only use `enable` + `sendPayment`; everything else is
- * intentionally omitted.
- */
-interface WebLnProvider {
-  enable(): Promise<void>
-  sendPayment(bolt11: string): Promise<{ preimage: string }>
-}
-type WebLnWindow = Window & { webln?: WebLnProvider }
-
-type Step = 'username' | 'payment' | 'success'
-
-interface InvoiceData {
-  id: string
-  bolt11: string
-  paymentHash: string
-  amountSats: number
-  verify?: string
-  expiresAt: string
-  // Carried only in the sessionStorage copy so a refresh can restore the
-  // claimed username in the payment header. Absent from the API response.
-  username?: string
-}
+import { useNewAddressFlow } from '@/components/wallet/claim/use-new-address-flow'
 
 interface NewAddressDialogProps {
   open: boolean
@@ -86,18 +48,14 @@ export function SuccessHeroCard({ address }: { address: string }) {
     : [address, '']
 
   return (
-    <div
-      className="relative w-full overflow-hidden rounded-lg border border-border bg-card animate-in fade-in-0 zoom-in-95 duration-500 ease-out"
-    >
+    <div className="relative w-full overflow-hidden rounded-lg border border-border bg-card animate-in fade-in-0 zoom-in-95 duration-500 ease-out">
       {/* Maintain a consistent aspect so the composition renders
           predictably regardless of the dialog's content width. */}
       <div className="relative aspect-[16/9] w-full">
         {/* Blurred radial glow — centered at the top. Pulses softly to
             give the card a live "on-air" feel, and fades in slightly
             delayed so the sequence reads as card → glow → bolt → pill. */}
-        <div
-          className="pointer-events-none absolute left-1/2 top-0 h-[60%] w-[70%] -translate-x-1/2 -translate-y-1/4 opacity-40 animate-in fade-in-0 duration-700 delay-150 fill-mode-backwards motion-safe:[animation-iteration-count:1]"
-        >
+        <div className="pointer-events-none absolute left-1/2 top-0 h-[60%] w-[70%] -translate-x-1/2 -translate-y-1/4 opacity-40 animate-in fade-in-0 duration-700 delay-150 fill-mode-backwards motion-safe:[animation-iteration-count:1]">
           <div className="size-full motion-safe:animate-[pulse_3s_ease-in-out_infinite]">
             <Image
               src="/register/success-ellipse.svg"
@@ -112,9 +70,7 @@ export function SuccessHeroCard({ address }: { address: string }) {
 
         {/* Lightning silhouette decoration — centered behind the pill.
             Drops in with a slight scale-up on arrival. */}
-        <div
-          className="pointer-events-none absolute inset-0 flex items-center justify-center animate-in fade-in-0 zoom-in-90 duration-700 delay-200 fill-mode-backwards"
-        >
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center animate-in fade-in-0 zoom-in-90 duration-700 delay-200 fill-mode-backwards">
           <div className="relative size-full">
             <Image
               src="/register/success-frame.svg"
@@ -130,11 +86,11 @@ export function SuccessHeroCard({ address }: { address: string }) {
         {/* Address pill — fully centered. Slides up from below with a
             subtle scale + fade so it lands last, like a confirmation. */}
         <div className="absolute inset-0 flex items-center justify-center">
-          <div
-            className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-4 py-2 text-lg font-medium leading-7 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.4)] animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-95 duration-500 delay-300 fill-mode-backwards ease-out"
-          >
+          <div className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-4 py-2 text-lg font-medium leading-7 shadow-[0_25px_50px_-12px_rgba(0,0,0,0.4)] animate-in fade-in-0 slide-in-from-bottom-3 zoom-in-95 duration-500 delay-300 fill-mode-backwards ease-out">
             <span className="text-muted-foreground">{name}</span>
-            {domainPart && <span className="text-foreground">{domainPart}</span>}
+            {domainPart && (
+              <span className="text-foreground">{domainPart}</span>
+            )}
           </div>
         </div>
       </div>
@@ -143,12 +99,10 @@ export function SuccessHeroCard({ address }: { address: string }) {
 }
 
 /**
- * Username chooser for a new lightning address. If paid registration is on
- * and the caller doesn't bypass, the POST to /api/wallet/addresses returns
- * 402 — we then mint a LUD-16 invoice via POST /api/invoices with purpose
- * `wallet-address` and render the QR payment step in place. Once the LUD-21
- * `verify` URL reports settled, we claim with the preimage and the server
- * creates the address (non-primary) on the claim route.
+ * Username chooser for a new lightning address. The whole flow (availability
+ * check, paid-registration invoice/QR, success) lives in `useNewAddressFlow`
+ * so the same logic backs the full-screen wallet claim screen; this component
+ * is just the modal presentation of it.
  */
 export function NewAddressDialog({
   open,
@@ -157,47 +111,35 @@ export function NewAddressDialog({
   initialUsername = '',
   onSuccessAction,
   successAutoAdvanceMs,
-  onSuccessAutoAdvance,
+  onSuccessAutoAdvance
 }: NewAddressDialogProps) {
   const router = useRouter()
-  const { data: settings } = useSettings()
-  const { apiClient } = useAuth()
-  const { createAddress, creating } = useAddressMutations()
+  const {
+    step,
+    username,
+    setUsername,
+    available,
+    checking,
+    formatError,
+    submitting,
+    submitDisabled,
+    domain,
+    handleSubmit,
+    invoice,
+    paymentStatus,
+    copied,
+    hasWebLn,
+    payingWithWallet,
+    manualChecking,
+    handleWebLnPay,
+    handleCopy,
+    handleManualCheck,
+    mintInvoiceAndShowQr,
+    backFromPayment,
+    claimedAddress
+  } = useNewAddressFlow({ active: open, initialUsername, onCreated })
 
-  const [step, setStep] = useState<Step>('username')
-  const [username, setUsername] = useState(initialUsername)
-  const [available, setAvailable] = useState<boolean | null>(null)
-  const [checking, setChecking] = useState(false)
-  // Local submitting flag covers BOTH legs of the create path — the
-  // `createAddress` mutation and the follow-up invoice mint on 402 —
-  // so the Create button stays in its spinner state until the UI
-  // actually advances to the payment (or success) step.
-  const [submitting, setSubmitting] = useState(false)
-
-  // Payment step state
-  const [invoice, setInvoice] = useState<InvoiceData | null>(null)
-  const [paymentStatus, setPaymentStatus] = useState<'waiting' | 'detected' | 'expired'>('waiting')
-  const [copied, setCopied] = useState(false)
-  const [hasWebLn, setHasWebLn] = useState(false)
-  const [payingWithWallet, setPayingWithWallet] = useState(false)
-  const [manualChecking, setManualChecking] = useState(false)
-  const abortRef = useRef<AbortController | null>(null)
   const configureButtonRef = useRef<HTMLButtonElement | null>(null)
-  // Guards against two settlement signals (poller + manual check / WebLN)
-  // racing to claim the same invoice and double-firing the claim request.
-  const claimingRef = useRef(false)
-
-  // Detect a WebLN provider (Alby / other Lightning browser extension).
-  // Some extensions inject `window.webln` asynchronously, so we re-check
-  // when the dialog opens and each time we enter the payment step rather
-  // than relying on a once-at-mount sniff.
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    setHasWebLn(!!(window as WebLnWindow).webln)
-  }, [open, step])
-
-  // Success step state
-  const [claimedAddress, setClaimedAddress] = useState<string | null>(null)
 
   // Optional auto-advance: when the caller treats the success step as a brief
   // confirmation (the new-user first-address flow), hold the hero card for
@@ -209,7 +151,10 @@ export function NewAddressDialog({
   }, [onSuccessAutoAdvance])
   useEffect(() => {
     if (step !== 'success' || !successAutoAdvanceMs) return
-    const timer = setTimeout(() => autoAdvanceRef.current?.(), successAutoAdvanceMs)
+    const timer = setTimeout(
+      () => autoAdvanceRef.current?.(),
+      successAutoAdvanceMs
+    )
     return () => clearTimeout(timer)
   }, [step, successAutoAdvanceMs])
 
@@ -218,331 +163,12 @@ export function NewAddressDialog({
     configureButtonRef.current?.focus()
   }, [claimedAddress, step, successAutoAdvanceMs])
 
-  const domain = settings?.domain || 'your-domain'
-  const formatError =
-    username.length === 0
-      ? null
-      : username.length > 16
-        ? 'Max 16 characters.'
-        : !USERNAME_RE.test(username)
-          ? 'Lowercase letters and numbers only.'
-          : null
-
-  // Debounced availability check. The endpoint is public and cheap; we keep
-  // it simple rather than introducing a generic debounce hook.
-  useEffect(() => {
-    if (!open) return
-    if (step !== 'username') return
-    if (formatError || !username) {
-      setAvailable(null)
-      return
-    }
-    let cancelled = false
-    setChecking(true)
-    const handle = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/lightning-addresses/check?username=${encodeURIComponent(username)}`,
-        )
-        const body = (await res.json()) as { available?: boolean }
-        if (!cancelled) setAvailable(Boolean(body.available))
-      } catch {
-        if (!cancelled) setAvailable(null)
-      } finally {
-        if (!cancelled) setChecking(false)
-      }
-    }, 300)
-    return () => {
-      cancelled = true
-      clearTimeout(handle)
-    }
-  }, [username, formatError, open, step])
-
-  // Reset on close.
-  useEffect(() => {
-    if (!open) {
-      abortRef.current?.abort()
-      claimingRef.current = false
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem(PENDING_INVOICE_KEY)
-      }
-      setStep('username')
-      setUsername(initialUsername)
-      setAvailable(null)
-      setChecking(false)
-      setInvoice(null)
-      setPaymentStatus('waiting')
-      setCopied(false)
-      setClaimedAddress(null)
-      setSubmitting(false)
-      setPayingWithWallet(false)
-      setManualChecking(false)
-    }
-  }, [initialUsername, open])
-
-  // Cleanup polling on unmount.
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-    }
-  }, [])
-
-  // Single entry point for turning a settlement preimage into a claimed
-  // address. Shared by the background poller, the manual "check now" button,
-  // and the WebLN payment path so they can't race or diverge. The claimingRef
-  // guard makes concurrent calls a no-op rather than a double claim.
-  const claimWithPreimage = useCallback(
-    async (invoiceId: string, preimage: string) => {
-      if (claimingRef.current) return
-      claimingRef.current = true
-      setPaymentStatus('detected')
-      const finishSuccess = (address: string) => {
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem(PENDING_INVOICE_KEY)
-        }
-        abortRef.current?.abort()
-        setClaimedAddress(address)
-        setStep('success')
-        onCreated()
-      }
-      try {
-        const claimResult = await apiClient.post<{
-          success: boolean
-          lightningAddress?: string
-        }>(`/api/invoices/${invoiceId}/claim`, { preimage })
-        if (claimResult.success) {
-          finishSuccess(claimResult.lightningAddress ?? `${username}@${domain}`)
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Failed to claim address'
-        // The invoice was already claimed (e.g. a prior claim succeeded but its
-        // response was lost to a dropped connection). The address exists and is
-        // ours — treat as success rather than surfacing a scary error.
-        if (msg.toLowerCase().includes('already been claimed')) {
-          finishSuccess(`${username}@${domain}`)
-          return
-        }
-        toast.error(msg)
-        if (msg.toLowerCase().includes('taken')) {
-          setStep('username')
-        } else {
-          // Transient (likely network) claim failure — drop back to waiting so
-          // the poller or a manual re-check can retry with the same preimage.
-          setPaymentStatus('waiting')
-        }
-      } finally {
-        claimingRef.current = false
-      }
-    },
-    [apiClient, domain, onCreated, username],
-  )
-
-  const startLud21Polling = useCallback(
-    (invoiceData: InvoiceData) => {
-      if (!invoiceData.verify) return
-      const controller = new AbortController()
-      abortRef.current = controller
-
-      // Poll for the FULL lifetime of the invoice rather than a fixed window.
-      // A short hard timeout was the root cause of "I paid but nothing
-      // happened": settlement that landed after the old 5-minute cutoff was
-      // silently dropped even though the bolt11 was still valid.
-      const msUntilExpiry =
-        new Date(invoiceData.expiresAt).getTime() - Date.now()
-
-      pollVerifyUrl(invoiceData.verify, {
-        signal: controller.signal,
-        timeout: Math.max(msUntilExpiry, 0),
-      })
-        .then(result => {
-          if (result.settled && result.preimage) {
-            void claimWithPreimage(invoiceData.id, result.preimage)
-          }
-        })
-        .catch(err => {
-          // Anything other than an explicit abort means the invoice ran out
-          // its clock without settling — surface the expired state.
-          if (err?.message !== 'Polling aborted') {
-            setPaymentStatus('expired')
-          }
-        })
-    },
-    [claimWithPreimage],
-  )
-
-  async function mintInvoiceAndShowQr() {
-    try {
-      const result = await apiClient.post<InvoiceData | { free: true }>(
-        '/api/invoices',
-        { purpose: 'wallet-address', metadata: { username } },
-      )
-      if ('free' in result && result.free) {
-        // Operator hasn't finished configuring paid mode — surface this
-        // explicitly rather than silently looping on the free endpoint
-        // which would also be unavailable.
-        toast.error('Paid registration is configured but incomplete. Contact the operator.')
-        return
-      }
-      const invoiceData = result as InvoiceData
-      // Persist before showing the QR so a refresh mid-payment can recover.
-      // Tag the username so the restored payment header stays accurate.
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem(
-          PENDING_INVOICE_KEY,
-          JSON.stringify({ ...invoiceData, username }),
-        )
-      }
-      claimingRef.current = false
-      setInvoice(invoiceData)
-      setPaymentStatus('waiting')
-      setStep('payment')
-      startLud21Polling(invoiceData)
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to generate invoice')
-    }
-  }
-
-  // Restore a pending invoice after a page refresh / reconnect. Runs once per
-  // mount: if a non-expired invoice is stashed, drop straight back onto the
-  // payment step and resume polling so a user who already paid isn't stranded.
-  const restoreAttemptedRef = useRef(false)
-  useEffect(() => {
-    if (restoreAttemptedRef.current || !open) return
-    restoreAttemptedRef.current = true
-    if (typeof window === 'undefined') return
-    const raw = sessionStorage.getItem(PENDING_INVOICE_KEY)
-    if (!raw) return
-    try {
-      const saved = JSON.parse(raw) as InvoiceData
-      if (new Date(saved.expiresAt).getTime() <= Date.now()) {
-        sessionStorage.removeItem(PENDING_INVOICE_KEY)
-        return
-      }
-      if (saved.username) setUsername(saved.username)
-      setInvoice(saved)
-      setPaymentStatus('waiting')
-      setStep('payment')
-      startLud21Polling(saved)
-    } catch {
-      sessionStorage.removeItem(PENDING_INVOICE_KEY)
-    }
-  }, [open, startLud21Polling])
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (formatError || !username || available === false) return
-    setSubmitting(true)
-    try {
-      // Happy path: direct create (paid mode off, or admin/operator bypass).
-      await createAddress({ username })
-      setClaimedAddress(`${username}@${domain}`)
-      setStep('success')
-      onCreated()
-    } catch (err) {
-      // Payment required → branch into invoice + QR flow instead of toast.
-      if (err instanceof ApiClientError && err.status === 402) {
-        await mintInvoiceAndShowQr()
-        return
-      }
-      const msg = err instanceof Error ? err.message : 'Failed to create address'
-      toast.error(msg)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  function handleCopy() {
-    if (!invoice?.bolt11) return
-    const text = invoice.bolt11
-    const onCopied = () => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(onCopied, onCopied)
-    } else {
-      onCopied()
-    }
-  }
-
-  /**
-   * Pay the current invoice via a WebLN provider (Alby / similar). The
-   * LUD-21 poller is what actually settles the claim — we don't race it
-   * here; WebLN just pushes the payment so the user doesn't have to scan.
-   */
-  async function handleWebLnPay() {
-    if (!invoice?.bolt11) return
-    const w = window as WebLnWindow
-    if (!w.webln) return
-    setPayingWithWallet(true)
-    try {
-      await w.webln.enable()
-      const res = await w.webln.sendPayment(invoice.bolt11)
-      // The extension returns the payment preimage — claim straight away
-      // instead of waiting for the next poll tick. Falls back to the poller
-      // if the extension didn't hand one back.
-      if (res?.preimage) {
-        await claimWithPreimage(invoice.id, res.preimage)
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Wallet payment failed'
-      // Most common case: user clicked "reject" in the extension.
-      if (!/reject|cancel|denied/i.test(msg)) toast.error(msg)
-    } finally {
-      setPayingWithWallet(false)
-    }
-  }
-
-  /**
-   * Manual settlement check — for "I paid but the screen didn't move", a lost
-   * connection, or impatience. Does a one-shot LUD-21 verify and claims if the
-   * payment has landed. Distinct from the background poller so the user always
-   * has an explicit way to force a re-check.
-   */
-  async function handleManualCheck() {
-    if (!invoice?.verify) {
-      toast.error('This invoice can’t be re-checked — generate a new one.')
-      return
-    }
-    setManualChecking(true)
-    try {
-      const result = await checkVerifyOnce(invoice.verify)
-      if (result.settled && result.preimage) {
-        await claimWithPreimage(invoice.id, result.preimage)
-      } else {
-        toast('No payment detected yet. If you just paid, give it a few seconds.')
-      }
-    } catch {
-      toast.error(
-        'Couldn’t reach the payment verifier — check your connection and try again.',
-      )
-    } finally {
-      setManualChecking(false)
-    }
-  }
-
-  const submitDisabled =
-    submitting ||
-    creating ||
-    checking ||
-    !!formatError ||
-    username.length === 0 ||
-    available === false
-
   // On the payment step, ESC / X / overlay-click should *go back* to the
   // username picker instead of dismissing the whole dialog — the user is
   // cancelling the payment attempt, not the whole "new address" flow.
   function handleOpenChange(next: boolean) {
     if (!next && step === 'payment') {
-      abortRef.current?.abort()
-      claimingRef.current = false
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem(PENDING_INVOICE_KEY)
-      }
-      setStep('username')
-      setInvoice(null)
-      setPaymentStatus('waiting')
-      setManualChecking(false)
+      backFromPayment()
       return
     }
     onOpenChange(next)
@@ -588,17 +214,25 @@ export function NewAddressDialog({
                   maxLength={16}
                   className="flex-1 border-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                 />
-                <span className="px-3 text-sm text-muted-foreground">@{domain}</span>
+                <span className="px-3 text-sm text-muted-foreground">
+                  @{domain}
+                </span>
               </div>
               <p className="min-h-4 text-xs">
                 {formatError ? (
                   <span className="text-destructive">{formatError}</span>
                 ) : checking ? (
-                  <span className="text-muted-foreground">Checking availability…</span>
+                  <span className="text-muted-foreground">
+                    Checking availability…
+                  </span>
                 ) : available === false ? (
-                  <span className="text-destructive">That username is taken.</span>
+                  <span className="text-destructive">
+                    That username is taken.
+                  </span>
                 ) : available === true ? (
-                  <span className="text-green-600 dark:text-green-500">Available</span>
+                  <span className="text-green-600 dark:text-green-500">
+                    Available
+                  </span>
                 ) : (
                   <span className="text-muted-foreground">
                     Lowercase letters and numbers, max 16 characters.
@@ -674,7 +308,9 @@ export function NewAddressDialog({
                       variant="theme"
                       className="w-full"
                       onClick={handleWebLnPay}
-                      disabled={payingWithWallet || paymentStatus === 'detected'}
+                      disabled={
+                        payingWithWallet || paymentStatus === 'detected'
+                      }
                     >
                       {payingWithWallet ? (
                         <Spinner size={16} className="mr-2" />

@@ -1,7 +1,10 @@
 'use client'
 
 import { useSyncExternalStore } from 'react'
-import { isImpersonating, stopImpersonation } from '@/lib/client/dev-impersonation'
+import {
+  isImpersonating,
+  stopImpersonation
+} from '@/lib/client/dev-impersonation'
 
 // No live subscription needed — the flag only changes across a full reload.
 const noopSubscribe = () => () => {}
@@ -18,13 +21,13 @@ export function DevImpersonationControl() {
   const active = useSyncExternalStore(
     noopSubscribe,
     () => isImpersonating(),
-    () => false,
+    () => false
   )
 
   if (!active) return null
 
-  function stop() {
-    stopImpersonation()
+  async function stop() {
+    await stopImpersonation()
     window.location.href = '/admin/users'
   }
 

@@ -2,8 +2,19 @@ import { NextRequest, NextResponse } from 'next/server'
 import { validateNip98 } from '@/lib/nip98'
 import { validateJwtFromRequest, JwtValidationResult } from '@/lib/jwt'
 import { getConfig } from '@/lib/config'
-import { AuthenticationError, AuthorizationError } from '@/types/server/errors'
-import { Role, Permission, hasRole, hasPermission, isValidRole, isValidPermission } from '@/lib/auth/permissions'
+import {
+  ApiError,
+  AuthenticationError,
+  AuthorizationError
+} from '@/types/server/errors'
+import {
+  Role,
+  Permission,
+  hasRole,
+  hasPermission,
+  isValidRole,
+  isValidPermission
+} from '@/lib/auth/permissions'
 import { resolveRole } from '@/lib/auth/resolve-role'
 import { resolveApiUrl } from '@/lib/public-url'
 
@@ -61,7 +72,9 @@ export async function authenticate(request: Request): Promise<AuthResult> {
     return authenticateJwt(request)
   }
 
-  throw new AuthenticationError('Authorization header must use "Nostr" or "Bearer" scheme')
+  throw new AuthenticationError(
+    'Authorization header must use "Nostr" or "Bearer" scheme'
+  )
 }
 
 async function authenticateNip98(request: Request): Promise<AuthResult> {
@@ -71,7 +84,7 @@ async function authenticateNip98(request: Request): Promise<AuthResult> {
     return { pubkey, role, method: 'nip98' }
   } catch (error) {
     throw new AuthenticationError('Invalid NIP-98 authentication', {
-      details: error instanceof Error ? error.message : 'Invalid Nostr auth',
+      details: error instanceof Error ? error.message : 'Invalid Nostr auth'
     })
   }
 }
@@ -86,7 +99,7 @@ async function authenticateJwt(request: Request): Promise<AuthResult> {
   try {
     const result = await validateJwtFromRequest(request, config.jwt.secret, {
       issuer: 'lawallet-nwc',
-      audience: 'lawallet-users',
+      audience: 'lawallet-users'
     })
 
     const pubkey = result.payload.pubkey
@@ -94,7 +107,10 @@ async function authenticateJwt(request: Request): Promise<AuthResult> {
       throw new AuthenticationError('JWT missing pubkey claim')
     }
 
-    const role = isValidRole(result.payload.role) ? result.payload.role : Role.USER
+    const claimRole = isValidRole(result.payload.role)
+      ? result.payload.role
+      : Role.USER
+    const isDeviceToken = result.payload.kind === 'device'
 
     // Device tokens (B.0) carry an explicit `scopes` claim that narrows what the
     // token can do regardless of role. Only trust a well-formed array of known
@@ -104,7 +120,7 @@ async function authenticateJwt(request: Request): Promise<AuthResult> {
     const scopes = Array.isArray(rawScopes)
       ? rawScopes.filter(
           (s: unknown): s is Permission =>
-            typeof s === 'string' && isValidPermission(s),
+            typeof s === 'string' && isValidPermission(s)
         )
       : undefined
 
@@ -112,20 +128,43 @@ async function authenticateJwt(request: Request): Promise<AuthResult> {
     // token whose `apiUrl` claim is missing or doesn't match this platform's URL
     // so a token issued for one instance can't be replayed against another. Only
     // device tokens carry `apiUrl`; session JWTs (no `kind`) are unaffected.
-    if (result.payload.kind === 'device') {
+    if (isDeviceToken) {
       const url = await resolveApiUrl(request)
       if (normalizeApiUrl(result.payload.apiUrl) !== normalizeApiUrl(url)) {
         throw new AuthenticationError('Token is not valid for this instance', {
-          details: 'Device token apiUrl does not match this platform',
+          details: 'Device token apiUrl does not match this platform'
         })
       }
     }
 
+    // Session JWTs are unrevocable, so the baked-in role claim is only a
+    // hint: re-resolve it from the DB on every request, exactly like the
+    // NIP-98 path. A demoted or deleted account then loses its privileges
+    // immediately instead of keeping them until token expiry. Device tokens
+    // keep their minted role — their `scopes` claim is the authoritative
+    // restriction.
+    const role = isDeviceToken
+      ? claimRole
+      : await resolveRole(pubkey).catch(cause => {
+          // The token is already cryptographically valid here, so a failed
+          // lookup is an infrastructure problem, not a credential problem.
+          // Reporting it as 401 would tell the user their session expired —
+          // a re-login can't fix a DB outage, and it buckets the incident
+          // under auth failures instead of availability.
+          throw new ApiError('Could not resolve account role', {
+            statusCode: 503,
+            code: 'SERVICE_UNAVAILABLE',
+            cause
+          })
+        })
+
     return { pubkey, role, method: 'jwt', scopes }
   } catch (error) {
-    if (error instanceof AuthenticationError) throw error
+    // Any deliberate ApiError (including the 503 above) passes through
+    // untouched; only unexpected throws become "invalid token".
+    if (error instanceof ApiError) throw error
     throw new AuthenticationError('Invalid or expired JWT', {
-      details: error instanceof Error ? error.message : 'Invalid token',
+      details: error instanceof Error ? error.message : 'Invalid token'
     })
   }
 }
@@ -150,6 +189,25 @@ export async function authenticateWithRole(
 }
 
 /**
+ * Scope-aware permission check on an already-authenticated result. A device
+ * token's `scopes` claim is authoritative — it's the explicit set the admin
+ * delegated, already validated as a subset of their RBAC at mint time. For
+ * every other caller, falls back to the role→permission map.
+ *
+ * Routes that call {@link authenticate} directly MUST use this instead of a
+ * bare `hasPermission(auth.role, …)`, or a narrowly-scoped device token
+ * silently inherits its owner's full role (privilege escalation).
+ */
+export function authHasPermission(
+  auth: AuthResult,
+  permission: Permission
+): boolean {
+  return auth.scopes
+    ? auth.scopes.includes(permission)
+    : hasPermission(auth.role, permission)
+}
+
+/**
  * Authenticates and verifies the actor holds the given permission.
  *
  * @throws {AuthenticationError} When the request lacks valid credentials.
@@ -161,14 +219,7 @@ export async function authenticateWithPermission(
 ): Promise<AuthResult> {
   const auth = await authenticate(request)
 
-  // A device token's `scopes` claim is authoritative — it's the explicit set
-  // the admin delegated, already validated as a subset of their RBAC at mint
-  // time. For every other caller, fall back to the role→permission map.
-  const allowed = auth.scopes
-    ? auth.scopes.includes(permission)
-    : hasPermission(auth.role, permission)
-
-  if (!allowed) {
+  if (!authHasPermission(auth, permission)) {
     throw new AuthorizationError('Not authorized to perform this action')
   }
 
@@ -185,8 +236,16 @@ export async function authenticateWithPermission(
  *   then `requiredRole`, then plain authentication.
  */
 export function withAuth<T extends any[]>(
-  handler: (request: Request, auth: AuthResult, ...args: T) => Promise<NextResponse>,
-  options?: { requiredRole?: Role; requiredPermission?: Permission; requireNip98?: boolean }
+  handler: (
+    request: Request,
+    auth: AuthResult,
+    ...args: T
+  ) => Promise<NextResponse>,
+  options?: {
+    requiredRole?: Role
+    requiredPermission?: Permission
+    requireNip98?: boolean
+  }
 ) {
   return async (request: Request, ...args: T): Promise<NextResponse> => {
     let auth: AuthResult
@@ -194,7 +253,10 @@ export function withAuth<T extends any[]>(
     if (options?.requireNip98) {
       auth = await authenticateNip98(request)
     } else if (options?.requiredPermission) {
-      auth = await authenticateWithPermission(request, options.requiredPermission)
+      auth = await authenticateWithPermission(
+        request,
+        options.requiredPermission
+      )
     } else if (options?.requiredRole) {
       auth = await authenticateWithRole(request, options.requiredRole)
     } else {

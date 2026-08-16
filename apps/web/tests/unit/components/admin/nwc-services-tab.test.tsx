@@ -3,24 +3,27 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 vi.mock('@/lib/client/hooks/use-settings', () => ({
-  useSettings: vi.fn(),
+  useSettings: vi.fn()
 }))
 
 const saveSettingMock = vi.hoisted(() => vi.fn())
-vi.mock('@/components/admin/settings/auto-save-controls', async importOriginal => {
-  const actual =
-    await importOriginal<
-      typeof import('@/components/admin/settings/auto-save-controls')
-    >()
-  return {
-    ...actual,
-    useSettingSaver: () => saveSettingMock,
+vi.mock(
+  '@/components/admin/settings/auto-save-controls',
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import('@/components/admin/settings/auto-save-controls')
+      >()
+    return {
+      ...actual,
+      useSettingSaver: () => saveSettingMock
+    }
   }
-})
+)
 
 const apiPostMock = vi.hoisted(() => vi.fn())
 vi.mock('@/components/admin/auth-context', () => ({
-  useAuth: () => ({ apiClient: { post: apiPostMock } }),
+  useAuth: () => ({ apiClient: { post: apiPostMock } })
 }))
 
 import { NwcServicesTab } from '@/components/admin/settings/nwc-services-tab'
@@ -29,16 +32,17 @@ import { useSettings } from '@/lib/client/hooks/use-settings'
 const baseSettings = {
   listener_enabled: 'false',
   listener_url: '',
-  listener_auth_secret: '',
+  // The API never returns the secret value — only this presence flag.
+  listener_secret_configured: 'false',
   listener_url_source: 'none',
   listener_secret_source: 'none',
-  listener_url_effective: '',
+  listener_url_effective: ''
 }
 
 function mockSettings(overrides: Record<string, string> = {}) {
   vi.mocked(useSettings).mockReturnValue({
     data: { ...baseSettings, ...overrides },
-    loading: false,
+    loading: false
   } as never)
 }
 
@@ -65,7 +69,7 @@ describe('NwcServicesTab', () => {
       listener_enabled: 'true',
       listener_url_source: 'env',
       listener_secret_source: 'env',
-      listener_url_effective: 'http://listener:4100',
+      listener_url_effective: 'http://listener:4100'
     })
     render(<NwcServicesTab />)
 
@@ -94,17 +98,42 @@ describe('NwcServicesTab', () => {
     expect(patch.listener_enabled).toBe('false')
   })
 
+  it('keeps the stored secret when saving the URL (no resend, no wipe)', async () => {
+    mockSettings({ listener_secret_configured: 'true' })
+    render(<NwcServicesTab />)
+
+    const urlInput = screen.getByPlaceholderText('http://listener:4100')
+    await userEvent.type(urlInput, 'http://listener:4200')
+    await userEvent.tab() // blur flushes the pending debounced save
+
+    await waitFor(() => expect(saveSettingMock).toHaveBeenCalled())
+    const patch = saveSettingMock.mock.calls[0][0] as Record<string, string>
+    expect(patch.listener_url).toBe('http://listener:4200')
+    // The secret field was never touched — the key must be absent entirely
+    // so the stored value survives the save.
+    expect('listener_auth_secret' in patch).toBe(false)
+  })
+
+  it('shows the stored-secret placeholder when a secret is configured', () => {
+    mockSettings({ listener_secret_configured: 'true' })
+    render(<NwcServicesTab />)
+
+    expect(
+      screen.getByPlaceholderText('(stored — enter a new value to rotate)')
+    ).toBeTruthy()
+  })
+
   it('renders probe success details', async () => {
     mockSettings({
       listener_url_effective: 'http://listener:4100',
       listener_url_source: 'env',
-      listener_secret_source: 'env',
+      listener_secret_source: 'env'
     })
     apiPostMock.mockResolvedValue({
       ok: true,
       uptimeSeconds: 3600,
       connections: 4,
-      relays: 2,
+      relays: 2
     })
     render(<NwcServicesTab />)
 
@@ -112,9 +141,11 @@ describe('NwcServicesTab', () => {
       screen.getByRole('button', { name: /test connection/i })
     )
 
-    await waitFor(() => expect(screen.getByText(/listener reachable/i)).toBeTruthy())
+    await waitFor(() =>
+      expect(screen.getByText(/listener reachable/i)).toBeTruthy()
+    )
     expect(apiPostMock).toHaveBeenCalledWith('/api/settings/listener-probe', {
-      url: 'http://listener:4100',
+      url: 'http://listener:4100'
     })
     expect(screen.getByText(/4 nwc connections/i)).toBeTruthy()
   })
@@ -142,12 +173,12 @@ describe('NwcServicesTab', () => {
     mockSettings({
       listener_url_effective: 'http://listener:4100',
       listener_url_source: 'env',
-      listener_secret_source: 'env',
+      listener_secret_source: 'env'
     })
     apiPostMock.mockResolvedValue({
       ok: false,
       code: 'unauthorized',
-      error: 'Listener rejected the shared secret',
+      error: 'Listener rejected the shared secret'
     })
     render(<NwcServicesTab />)
 

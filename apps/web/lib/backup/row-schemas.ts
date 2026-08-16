@@ -1,6 +1,9 @@
 import { z } from 'zod'
 import { Prisma } from '@/lib/generated/prisma'
-import type { BackupTableName } from '@/lib/validation/schemas'
+import {
+  type BackupTableName,
+  storedImageUrlSchema
+} from '@/lib/validation/schemas'
 import { TABLE_DESCRIPTORS } from '@/lib/backup/tables'
 
 /**
@@ -16,8 +19,8 @@ const userRole = z.enum(['ADMIN', 'OPERATOR', 'VIEWER', 'USER'])
 const lightningAddressMode = z.enum([
   'IDLE',
   'ALIAS',
+  'PROXY_ALIAS',
   'CUSTOM_NWC',
-  'DEFAULT_NWC'
 ])
 const remoteWalletType = z.enum(['NWC', 'LND', 'CLN', 'BTCPAY'])
 const remoteWalletStatus = z.enum(['ACTIVE', 'DISABLED', 'REVOKED', 'DEAD'])
@@ -63,7 +66,9 @@ const userRow = z.object({
 
 const cardDesignRow = z.object({
   id: z.string().min(1),
-  imageUrl: z.string(),
+  // Deliberately the *stored* variant, not the API-input one: seeded rows use
+  // root-relative paths. See storedImageUrlSchema for why.
+  imageUrl: storedImageUrlSchema,
   description: z.string(),
   createdAt: date,
   archivedAt: nullableDate,
@@ -92,6 +97,8 @@ const remoteWalletRow = z.object({
   isDefault: z.boolean(),
   createdAt: date,
   updatedAt: date,
+  // Optional keeps archives from before the vault migration importable.
+  nwcConfigEncryptedAt: nullableDate.optional().default(null),
   diedAt: nullableDate
 })
 

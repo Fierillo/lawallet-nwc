@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { NotFoundError, ServiceUnavailableError } from '@/types/server/errors'
 import { idParam } from '@/lib/validation/schemas'
@@ -27,10 +28,7 @@ export const revalidate = 0
 export const GET = withErrorHandling(
   async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
     const auth = await authenticate(request)
-    const user = await prisma.user.findUnique({
-      where: { pubkey: auth.pubkey },
-      select: { id: true },
-    })
+    const user = await resolveAccountByPubkey(auth.pubkey)
     if (!user) throw new NotFoundError('User not found')
 
     const { id } = validateParams(await params, idParam)
@@ -41,7 +39,11 @@ export const GET = withErrorHandling(
     }
 
     try {
-      const { driver, config } = driverForWallet({ type: wallet.type, config: wallet.config })
+      const { driver, config } = driverForWallet({
+        id: wallet.id,
+        type: wallet.type,
+        config: wallet.config
+      })
       const { balanceSats } = await driver.getBalance(config)
       return NextResponse.json({ balanceSats })
     } catch (err) {
@@ -49,9 +51,11 @@ export const GET = withErrorHandling(
       // down, revoked NWC grant, corrupt config). Surface as 503 so the UI
       // can show "unavailable" without treating it as a hard error.
       if (err instanceof DriverError) {
-        throw new ServiceUnavailableError('Wallet balance is currently unavailable')
+        throw new ServiceUnavailableError(
+          'Wallet balance is currently unavailable'
+        )
       }
       throw err
     }
-  },
+  }
 )

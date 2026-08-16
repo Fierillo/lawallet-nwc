@@ -22,14 +22,33 @@ export interface UseApiResult<T> {
  * Maps an API path to its corresponding SSE event type for auto-refresh.
  */
 function getEventTypeForPath(path: string): SSEEventType | null {
+  if (path === '/api/remote-wallets/forwarding-map')
+    return 'remote-wallet-forwarding:updated'
+  if (
+    /^\/api\/remote-wallets\/[^/]+\/(receive-action|forwarding-receipts|forwarding-activity)/.test(
+      path
+    )
+  )
+    return 'remote-wallet-forwarding:updated'
+  if (/^\/api\/remote-wallets\/[^/]+\/payments\//.test(path))
+    return 'invoices:updated'
+  if (
+    /^\/api\/remote-wallets\/[^/]+\/(notifications|notification-deliveries)/.test(
+      path
+    )
+  )
+    return 'remote-wallet-notifications:updated'
   // Listener dashboard refreshes when the webhook route emits
   // `listener:updated` (new NWC connection events / errors).
   if (path.startsWith('/api/admin/listener')) return 'listener:updated'
   if (path.startsWith('/api/lightning-addresses')) return 'addresses:updated'
+  if (/^\/api\/wallet\/addresses\/[^/]+\/proxy-balance/.test(path))
+    return 'invoices:updated'
   // Per-address invoices feed has to match before the generic
   // `/api/wallet/addresses` rule below — otherwise invoice refreshes would
   // be tied to the `addresses:updated` event instead of `invoices:updated`.
-  if (/^\/api\/wallet\/addresses\/[^/]+\/invoices/.test(path)) return 'invoices:updated'
+  if (/^\/api\/wallet\/addresses\/[^/]+\/invoices/.test(path))
+    return 'invoices:updated'
   if (path.startsWith('/api/wallet/addresses')) return 'addresses:updated'
   // The caller's own cards feed mirrors the admin `/api/cards` → `cards:updated`
   // so a newly paired/unpaired card refreshes the Connection Map + Cards view.
@@ -104,7 +123,7 @@ function getInvalidationVersion(path: string) {
 function getAuthCacheKey(
   status: string,
   pubkey: string | null,
-  role: string | null,
+  role: string | null
 ) {
   if (status !== 'authenticated') return status
   return `authenticated:${pubkey ?? 'unknown'}:${role ?? 'unknown'}`
@@ -114,7 +133,10 @@ function getInflightKey(path: string, authKey: string) {
   return `${authKey}\n${path}`
 }
 
-function getUsableCacheEntry<T>(path: string, authKey: string): ApiCacheEntry<T> | null {
+function getUsableCacheEntry<T>(
+  path: string,
+  authKey: string
+): ApiCacheEntry<T> | null {
   const entry = apiCache.get(path) as ApiCacheEntry<T> | undefined
   if (!entry) return null
   if (entry.authKey !== authKey) return null
@@ -152,14 +174,35 @@ export function clearApiCache() {
  * stale cached data for one frame before the SSE-driven refetch swaps it.
  */
 export function invalidateApiPath(path: string) {
-  apiCache.delete(path)
+  // Paginated and filtered readers cache under the path *with* its query
+  // string, so an exact-key delete would silently miss every one of them.
+  for (const key of [...apiCache.keys()]) {
+    if (matchesInvalidatedPath(key, path)) apiCache.delete(key)
+  }
+  for (const key of [...apiInvalidationVersions.keys()]) {
+    if (matchesInvalidatedPath(key, path)) {
+      apiInvalidationVersions.set(key, getInvalidationVersion(key) + 1)
+    }
+  }
   clearInflightForPath(path)
   apiInvalidationVersions.set(path, getInvalidationVersion(path) + 1)
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
-      new CustomEvent(API_CACHE_INVALIDATED_EVENT, { detail: { path } }),
+      new CustomEvent(API_CACHE_INVALIDATED_EVENT, { detail: { path } })
     )
   }
+}
+
+/**
+ * True when `candidate` is the invalidated path itself or the same path
+ * carrying a query string. The `?` boundary keeps `/api/cards` from
+ * invalidating `/api/card-designs`.
+ */
+export function matchesInvalidatedPath(
+  candidate: string,
+  invalidated: string
+): boolean {
+  return candidate === invalidated || candidate.startsWith(`${invalidated}?`)
 }
 
 /**
@@ -178,18 +221,19 @@ export function useApi<T>(path: string | null): UseApiResult<T> {
   // Initialise from the cache synchronously. Without this, even a cache
   // hit would render one frame of `data=null / loading=true` before the
   // effect runs and the cached value is applied — defeating the point.
-  const [data, setData] = useState<T | null>(() =>
-    initialCacheEntry?.data ?? null,
+  const [data, setData] = useState<T | null>(
+    () => initialCacheEntry?.data ?? null
   )
   // Only block with a skeleton when we have nothing to show. A cache hit
   // renders immediately; the fetch still runs in the background and
   // updates silently if the payload changed.
-  const [loading, setLoading] = useState(
-    path ? !initialCacheEntry : false,
-  )
+  const [loading, setLoading] = useState(path ? !initialCacheEntry : false)
   const [error, setError] = useState<Error | null>(null)
   const dataRef = useRef(data)
-  const dataPathRef = useRef<string | null>(data !== null ? path : null)
+  const dataContextRef = useRef<{
+    path: string | null
+    authKey: string
+  }>({ path, authKey })
   const fetchIdRef = useRef(0)
   const authKeyRef = useRef(authKey)
   const sseVersionRef = useRef(0)
@@ -199,88 +243,100 @@ export function useApi<T>(path: string | null): UseApiResult<T> {
   const eventType = path ? getEventTypeForPath(path) : null
   const sseVersion = useSSEVersion(eventType)
 
-  const fetchData = useCallback(async (options?: { force?: boolean }) => {
-    // Wait until auth has settled — firing during the `loading` window would
-    // race with the JWT becoming available and trigger a spurious no-auth
-    // request. `unauthenticated` is fine: the api-client sends no
-    // Authorization header, so endpoints that expose a public subset (notably
-    // `/api/settings` with the community branding) can still hydrate the UI
-    // shown before sign-in (e.g. the login page logo). Protected endpoints
-    // simply return 401 — same behavior as before.
-    if (!path || status === 'loading') {
-      setLoading(false)
-      return
-    }
-
-    const fetchId = ++fetchIdRef.current
-    const cacheEntry = getUsableCacheEntry<T>(path, authKey)
-    const hasCurrentData = dataPathRef.current === path && dataRef.current !== null
-
-    // Only show the loading skeleton when there's truly nothing to show for
-    // this path. Manual invalidations delete the cache so the next request
-    // refetches, but mounted consumers can keep rendering their current data.
-    if (cacheEntry) {
-      const cachedData = cacheEntry.data
-      dataRef.current = cachedData
-      dataPathRef.current = path
-      setData(cachedData)
-      setLoading(false)
-    } else if (!hasCurrentData) {
-      if (dataPathRef.current !== path && dataRef.current !== null) {
-        dataRef.current = null
-        dataPathRef.current = path
-        setData(null)
+  const fetchData = useCallback(
+    async (options?: { force?: boolean }) => {
+      // Wait until auth has settled — firing during the `loading` window would
+      // race with the JWT becoming available and trigger a spurious no-auth
+      // request. `unauthenticated` is fine: the api-client sends no
+      // Authorization header, so endpoints that expose a public subset (notably
+      // `/api/settings` with the community branding) can still hydrate the UI
+      // shown before sign-in (e.g. the login page logo). Protected endpoints
+      // simply return 401 — same behavior as before.
+      if (!path || status === 'loading') {
+        setLoading(false)
+        return
       }
-      setLoading(true)
-    } else {
-      setLoading(false)
-    }
-    setError(null)
 
-    const cacheIsFresh =
-      cacheEntry !== null && Date.now() - cacheEntry.fetchedAt < API_CACHE_FRESH_MS
-    if (cacheIsFresh && !options?.force) {
-      return
-    }
+      const fetchId = ++fetchIdRef.current
+      const cacheEntry = getUsableCacheEntry<T>(path, authKey)
+      const hasCurrentData =
+        dataContextRef.current.path === path &&
+        dataContextRef.current.authKey === authKey &&
+        dataRef.current !== null
 
-    try {
-      const requestEpoch = apiCacheEpoch
-      const requestVersion = getInvalidationVersion(path)
-      const requestAuthKey = authKey
-      const result = await fetchWithDedupe(getInflightKey(path, authKey), () =>
-        apiClient.get<T>(path),
-      )
-      const responseIsCurrent =
-        requestEpoch === apiCacheEpoch &&
-        requestVersion === getInvalidationVersion(path) &&
-        requestAuthKey === authKeyRef.current
-
-      if (!responseIsCurrent) return
-      // Keep the shared cache in the same invalidation generation as this
-      // request. A newer fetch for this hook can still supersede the state
-      // update below via `fetchIdRef`.
-      apiCache.set(path, {
-        data: result,
-        fetchedAt: Date.now(),
-        authKey: requestAuthKey,
-        invalidationVersion: requestVersion,
-      })
-      // Only update if this is still the latest fetch
-      if (fetchId === fetchIdRef.current) {
-        dataRef.current = result
-        dataPathRef.current = path
-        setData(result)
-      }
-    } catch (err) {
-      if (fetchId === fetchIdRef.current) {
-        setError(err instanceof Error ? err : new Error('Unknown error'))
-      }
-    } finally {
-      if (fetchId === fetchIdRef.current) {
+      // Only show the loading skeleton when there's truly nothing to show for
+      // this path. Manual invalidations delete the cache so the next request
+      // refetches, but mounted consumers can keep rendering their current data.
+      if (cacheEntry) {
+        const cachedData = cacheEntry.data
+        dataRef.current = cachedData
+        dataContextRef.current = { path, authKey }
+        setData(cachedData)
+        setLoading(false)
+      } else if (!hasCurrentData) {
+        if (
+          (dataContextRef.current.path !== path ||
+            dataContextRef.current.authKey !== authKey) &&
+          dataRef.current !== null
+        ) {
+          dataRef.current = null
+          setData(null)
+        }
+        dataContextRef.current = { path, authKey }
+        setLoading(true)
+      } else {
         setLoading(false)
       }
-    }
-  }, [path, apiClient, status, authKey])
+      setError(null)
+
+      const cacheIsFresh =
+        cacheEntry !== null &&
+        Date.now() - cacheEntry.fetchedAt < API_CACHE_FRESH_MS
+      if (cacheIsFresh && !options?.force) {
+        return
+      }
+
+      try {
+        const requestEpoch = apiCacheEpoch
+        const requestVersion = getInvalidationVersion(path)
+        const requestAuthKey = authKey
+        const result = await fetchWithDedupe(
+          getInflightKey(path, authKey),
+          () => apiClient.get<T>(path)
+        )
+        const responseIsCurrent =
+          requestEpoch === apiCacheEpoch &&
+          requestVersion === getInvalidationVersion(path) &&
+          requestAuthKey === authKeyRef.current
+
+        if (!responseIsCurrent) return
+        // Keep the shared cache in the same invalidation generation as this
+        // request. A newer fetch for this hook can still supersede the state
+        // update below via `fetchIdRef`.
+        apiCache.set(path, {
+          data: result,
+          fetchedAt: Date.now(),
+          authKey: requestAuthKey,
+          invalidationVersion: requestVersion
+        })
+        // Only update if this is still the latest fetch
+        if (fetchId === fetchIdRef.current) {
+          dataRef.current = result
+          dataContextRef.current = { path, authKey: requestAuthKey }
+          setData(result)
+        }
+      } catch (err) {
+        if (fetchId === fetchIdRef.current) {
+          setError(err instanceof Error ? err : new Error('Unknown error'))
+        }
+      } finally {
+        if (fetchId === fetchIdRef.current) {
+          setLoading(false)
+        }
+      }
+    },
+    [path, apiClient, status, authKey]
+  )
 
   useEffect(() => {
     const force = sseVersion !== sseVersionRef.current
@@ -291,29 +347,57 @@ export function useApi<T>(path: string | null): UseApiResult<T> {
   useEffect(() => {
     if (!path || typeof window === 'undefined') return
 
+    const currentPath = path
     function handleInvalidation(event: Event) {
-      const invalidatedPath = (event as CustomEvent<{ path?: string }>).detail?.path
-      if (invalidatedPath === path) {
+      const invalidatedPath = (event as CustomEvent<{ path?: string }>).detail
+        ?.path
+      if (
+        invalidatedPath &&
+        matchesInvalidatedPath(currentPath, invalidatedPath)
+      ) {
         void fetchData({ force: true })
       }
     }
 
     window.addEventListener(API_CACHE_INVALIDATED_EVENT, handleInvalidation)
-    return () => window.removeEventListener(API_CACHE_INVALIDATED_EVENT, handleInvalidation)
+    return () =>
+      window.removeEventListener(
+        API_CACHE_INVALIDATED_EVENT,
+        handleInvalidation
+      )
   }, [fetchData, path])
 
   const refetch = useCallback(() => fetchData({ force: true }), [fetchData])
 
-  return { data, loading, error, refetch }
+  const dataIsCurrent =
+    dataContextRef.current.path === path &&
+    dataContextRef.current.authKey === authKey
+  const visibleData = dataIsCurrent ? data : (initialCacheEntry?.data ?? null)
+  const visibleLoading =
+    path !== null && !dataIsCurrent && initialCacheEntry === null
+      ? true
+      : loading
+
+  return {
+    data: visibleData,
+    loading: visibleLoading,
+    error: dataIsCurrent ? error : null,
+    refetch
+  }
 }
 
 /**
  * Hook for performing mutations (POST, PUT, PATCH, DELETE) with loading/error state.
+ *
+ * Pass `invalidates` to drop cached reads the mutation invalidates. Every path
+ * given also covers its query-string variants, so a paginated list refreshes
+ * without the caller enumerating cursors.
  */
-export function useMutation<TInput, TOutput = void>() {
+export function useMutation<TInput, TOutput = void>(invalidates?: string[]) {
   const { apiClient } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  const invalidateKey = invalidates?.join('\n') ?? ''
 
   const mutate = useCallback(
     async (
@@ -326,6 +410,9 @@ export function useMutation<TInput, TOutput = void>() {
 
       try {
         const result = await apiClient[method]<TOutput>(path, body)
+        for (const target of invalidateKey ? invalidateKey.split('\n') : []) {
+          invalidateApiPath(target)
+        }
         return result
       } catch (err) {
         const error = err instanceof Error ? err : new Error('Unknown error')
@@ -335,8 +422,24 @@ export function useMutation<TInput, TOutput = void>() {
         setLoading(false)
       }
     },
-    [apiClient]
+    [apiClient, invalidateKey]
   )
 
   return { mutate, loading, error }
+}
+
+/**
+ * Append defined query params to a path. Undefined values are dropped so the
+ * cache key stays stable between "no filter" and "filter cleared".
+ */
+export function withQuery(
+  path: string,
+  params: Record<string, string | number | undefined>
+): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  }
+  const serialized = query.toString()
+  return serialized ? `${path}?${serialized}` : path
 }

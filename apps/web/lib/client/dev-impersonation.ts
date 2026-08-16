@@ -8,6 +8,8 @@
  * Everything here is a no-op outside `development` — the API is double-gated.
  */
 
+import { clearSessionCaches } from '@/lib/client/cache/session-cache'
+
 // Must match the keys AuthProvider reads on rehydrate (auth-context.tsx).
 const JWT_KEY = 'lawallet-jwt'
 const METHOD_KEY = 'lawallet-login-method'
@@ -29,10 +31,18 @@ export function isImpersonating(): boolean {
  * (e.g. `window.location.href = '/wallet'`) so the AuthProvider rehydrates.
  */
 export async function startImpersonation(pubkey: string): Promise<void> {
+  const currentToken = localStorage.getItem(JWT_KEY)
+  if (!currentToken) {
+    throw new Error('An admin session is required to impersonate')
+  }
+
   const res = await fetch('/api/dev/impersonate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pubkey }),
+    headers: {
+      Authorization: `Bearer ${currentToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ pubkey })
   })
   if (!res.ok) throw new Error(`impersonate failed (${res.status})`)
   const { token } = (await res.json()) as { token: string }
@@ -44,10 +54,12 @@ export async function startImpersonation(pubkey: string): Promise<void> {
       JSON.stringify({
         jwt: localStorage.getItem(JWT_KEY),
         method: localStorage.getItem(METHOD_KEY),
-        secret: localStorage.getItem(SECRET_KEY),
-      }),
+        secret: localStorage.getItem(SECRET_KEY)
+      })
     )
   }
+
+  await clearSessionCaches()
 
   // Pure-JWT session for the impersonated identity — no signer to rebuild.
   localStorage.setItem(JWT_KEY, token)
@@ -56,16 +68,22 @@ export async function startImpersonation(pubkey: string): Promise<void> {
 }
 
 /** Restore the stashed pre-impersonation session. Caller should reload. */
-export function stopImpersonation(): void {
+export async function stopImpersonation(): Promise<void> {
   const raw = localStorage.getItem(RETURN_KEY)
   if (!raw) return
 
-  let prev: { jwt?: string | null; method?: string | null; secret?: string | null } = {}
+  let prev: {
+    jwt?: string | null
+    method?: string | null
+    secret?: string | null
+  } = {}
   try {
     prev = JSON.parse(raw)
   } catch {
     /* fall through with empty prev → just clears the impersonation session */
   }
+
+  await clearSessionCaches()
 
   const restore = (key: string, value: string | null | undefined) => {
     if (value) localStorage.setItem(key, value)

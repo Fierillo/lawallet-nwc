@@ -5,6 +5,8 @@ import {
   remoteWalletChangedSchema
 } from '@lawallet-nwc/shared'
 import type { ListenerEnv } from './env'
+import { decryptProxyNwcUri } from './proxy-vault'
+import { decryptRemoteWalletNwcUri } from './remote-wallet-vault'
 
 /** An ACTIVE NWC RemoteWallet row the pool should hold a connection for. */
 export interface DesiredWallet {
@@ -13,6 +15,9 @@ export interface DesiredWallet {
   userId: string | null
   connectionString: string
 }
+
+const hexKey = /^[0-9a-f]{64}$/i
+const bech32NostrKey = /^(?:npub|nsec)1[023456789acdefghjklmnpqrstuvwxyz]{58}$/i
 
 export function createPgPool(env: ListenerEnv, log: Logger): pg.Pool {
   const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 5 })
@@ -63,11 +68,36 @@ export async function waitForSchema(pool: pg.Pool, log: Logger): Promise<void> {
 }
 
 export function isValidConnectionString(value: unknown): value is string {
-  return (
-    typeof value === 'string' &&
-    (value.startsWith('nostr+walletconnect://') ||
-      value.startsWith('nostrwalletconnect://'))
-  )
+  if (typeof value !== 'string') return false
+  try {
+    if (!/^(?:nostr\+walletconnect|nostrwalletconnect):\/\//i.test(value)) {
+      return false
+    }
+    const normalized = value.replace(
+      /^(?:nostr\+walletconnect|nostrwalletconnect):\/\//i,
+      'https://'
+    )
+    const url = new URL(normalized)
+    const walletPubkey = url.hostname
+    const secret = url.searchParams.get('secret') ?? ''
+    const relays = url.searchParams.getAll('relay')
+    if (
+      !(hexKey.test(walletPubkey) || bech32NostrKey.test(walletPubkey)) ||
+      !(hexKey.test(secret) || bech32NostrKey.test(secret)) ||
+      relays.length === 0
+    ) {
+      return false
+    }
+    return relays.every(relay => {
+      const relayUrl = new URL(relay)
+      return (
+        (relayUrl.protocol === 'wss:' || relayUrl.protocol === 'ws:') &&
+        relayUrl.hostname.length > 0
+      )
+    })
+  } catch {
+    return false
+  }
 }
 
 interface WalletRow {
@@ -77,8 +107,22 @@ interface WalletRow {
   connectionString: string | null
 }
 
-function toDesired(row: WalletRow, log: Logger): DesiredWallet | null {
-  if (!isValidConnectionString(row.connectionString)) {
+function toDesired(
+  row: WalletRow,
+  log: Logger,
+  env?: ListenerEnv
+): DesiredWallet | null {
+  let connectionString: string | null = null
+  try {
+    connectionString =
+      typeof row.connectionString === 'string'
+        ? decryptRemoteWalletNwcUri(row.connectionString, row.id, env)
+        : null
+  } catch (err) {
+    log.error({ err, walletId: row.id }, 'wallet.decrypt_failed')
+    return null
+  }
+  if (!isValidConnectionString(connectionString)) {
     // One bad row must never take down the pool — skip it loudly.
     log.warn({ walletId: row.id }, 'wallet.invalid_connection_string')
     return null
@@ -87,22 +131,29 @@ function toDesired(row: WalletRow, log: Logger): DesiredWallet | null {
     id: row.id,
     name: row.name,
     userId: row.userId,
-    connectionString: row.connectionString
+    connectionString
   }
 }
 
 export async function loadActiveNwcWallets(
   pool: pg.Pool,
-  log: Logger
+  log: Logger,
+  env?: ListenerEnv
 ): Promise<DesiredWallet[]> {
   const { rows } = await pool.query<WalletRow>(
     `SELECT id, name, "userId", config->>'connectionString' AS "connectionString"
        FROM "RemoteWallet"
       WHERE type = 'NWC' AND status = 'ACTIVE'`
   )
-  return rows
-    .map(row => toDesired(row, log))
+  const wallets = rows
+    .map(row => toDesired(row, log, env))
     .filter((w): w is DesiredWallet => w !== null)
+
+  if (env?.NWC_VAULT_SECRET) {
+    const proxy = await loadProxyWallet(pool, log, env)
+    if (proxy) wallets.push(proxy)
+  }
+  return wallets
 }
 
 /**
@@ -113,7 +164,8 @@ export async function loadActiveNwcWallets(
 export async function loadActiveWalletById(
   pool: pg.Pool,
   id: string,
-  log: Logger
+  log: Logger,
+  env?: ListenerEnv
 ): Promise<DesiredWallet | null> {
   const { rows } = await pool.query<WalletRow>(
     `SELECT id, name, "userId", config->>'connectionString' AS "connectionString"
@@ -121,8 +173,73 @@ export async function loadActiveWalletById(
       WHERE id = $1 AND type = 'NWC' AND status = 'ACTIVE'`,
     [id]
   )
-  if (rows.length === 0) return null
-  return toDesired(rows[0], log)
+  if (rows.length === 0) {
+    return env?.NWC_VAULT_SECRET ? loadProxyWallet(pool, log, env, id) : null
+  }
+  return toDesired(rows[0], log, env)
+}
+
+interface ProxyWalletRow {
+  id: string
+  walletId: string
+  nwcCiphertext: Buffer | null
+}
+
+async function loadProxyWallet(
+  pool: pg.Pool,
+  log: Logger,
+  env: ListenerEnv,
+  walletId?: string
+): Promise<DesiredWallet | null> {
+  let rows: ProxyWalletRow[]
+  try {
+    ;({ rows } = await pool.query<ProxyWalletRow>(
+      `SELECT "id", "walletId", "nwcCiphertext"
+       FROM "ProxyServiceConfig"
+      WHERE "nwcCiphertext" IS NOT NULL
+        AND (
+          "enabled" = true
+          OR EXISTS (
+            SELECT 1
+              FROM "ProxyPayment"
+             WHERE "status" NOT IN (
+               'COMPLETED'::"ProxyPaymentStatus",
+               'EXPIRED'::"ProxyPaymentStatus"
+             )
+          )
+        )
+        ${walletId ? 'AND "walletId" = $1' : ''}
+        LIMIT 1`,
+      walletId ? [walletId] : []
+    ))
+  } catch (err) {
+    // During a rolling deployment the listener can observe the old schema
+    // briefly before web's Prisma migration creates this optional table.
+    // Existing RemoteWallet monitoring must remain available in that window.
+    if ((err as { code?: string }).code === '42P01') {
+      log.info('proxy_wallet.schema_not_ready')
+      return null
+    }
+    throw err
+  }
+  const row = rows[0]
+  if (!row?.nwcCiphertext) return null
+  try {
+    const connectionString = decryptProxyNwcUri(row.nwcCiphertext, row.id, env)
+    if (!isValidConnectionString(connectionString)) {
+      log.warn({ walletId: row.walletId }, 'proxy_wallet.invalid_connection')
+      return null
+    }
+    return {
+      id: row.walletId,
+      name: 'LaWallet LUD-16 Proxy',
+      userId: null,
+      connectionString
+    }
+  } catch (err) {
+    log.error({ err, walletId: row.walletId }, 'proxy_wallet.decrypt_failed')
+    return null
+  }
 }
 
 export interface WalletChangeListener {

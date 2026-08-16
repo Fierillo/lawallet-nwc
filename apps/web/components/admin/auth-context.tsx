@@ -1,11 +1,18 @@
 'use client'
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef
+} from 'react'
 import type { NostrSigner } from '@nostrify/nostrify'
 import {
   Role,
   Permission,
-  hasPermission as checkPermission,
+  hasPermission as checkPermission
 } from '@/lib/auth/permissions'
 import { exchangeNip98ForJwt, validateJwt } from '@/lib/client/auth-api'
 import { createApiClient, type ApiClient } from '@/lib/client/api-client'
@@ -13,11 +20,12 @@ import {
   createBrowserSigner,
   createBunkerSigner,
   createNsecSigner,
-  hasBrowserExtension,
+  hasBrowserExtension
 } from '@/lib/client/nostr-signer'
-import { clearApiCache } from '@/lib/client/hooks/use-api'
-import { clearAllBalances } from '@/lib/client/cache/balance-cache'
-import { clearAll as clearAllActivity } from '@/lib/client/cache/activity-cache'
+import {
+  clearSessionCaches,
+  waitForSessionCacheCleanup
+} from '@/lib/client/cache/session-cache'
 import { SignerUnlockDialog } from '@/components/admin/signer-unlock-dialog'
 import { trackEvent } from '@/lib/analytics/gtag'
 import { AnalyticsEvent } from '@/lib/analytics/events'
@@ -34,8 +42,13 @@ const LOGIN_METHOD_KEY = 'lawallet-login-method'
  * the same origin. We accept that here so users stay signed in across
  * reloads — the user opted into this explicitly. A future iteration should
  * replace this with WebAuthn-encrypted storage or a passphrase wrap.
+ *
+ * `'passkey'` sessions store the PRF-DERIVED key here too — a passkey is
+ * just a deterministic way to produce an nsec, so its session persists and
+ * restores exactly like the nsec method.
  */
 const SIGNER_SECRET_KEY = 'lawallet-signer-secret'
+const IMPERSONATOR_RETURN_KEY = 'lawallet-impersonator-return'
 
 // How many ms before JWT expiry to trigger refresh
 const REFRESH_BUFFER_MS = 5 * 60 * 1000
@@ -47,7 +60,7 @@ const EMPTY_AUTH_STATE: AuthState = {
   role: null,
   permissions: null,
   signer: null,
-  loginMethod: null,
+  loginMethod: null
 }
 
 declare global {
@@ -56,7 +69,7 @@ declare global {
   }
 }
 
-export type LoginMethod = 'nsec' | 'bunker' | 'extension'
+export type LoginMethod = 'nsec' | 'bunker' | 'extension' | 'passkey'
 export type AuthStatus = 'loading' | 'unauthenticated' | 'authenticated'
 
 export interface AuthState {
@@ -75,6 +88,7 @@ export interface AuthState {
  * - `nsec`: the bech32 nsec (or 64-char hex) the user supplied
  * - `bunker`: the `bunker://…` URL with relay + secret
  * - `extension`: omit; recreated from `window.nostr`
+ * - `passkey`: the PRF-derived 64-char hex key
  */
 export interface SignerCredentials {
   secret: string
@@ -84,7 +98,7 @@ export interface AuthContextValue extends AuthState {
   login: (
     signer: NostrSigner,
     method: LoginMethod,
-    credentials?: SignerCredentials,
+    credentials?: SignerCredentials
   ) => Promise<void>
   logout: () => void
   isAuthorized: (permission: Permission) => boolean
@@ -96,6 +110,13 @@ export interface AuthContextValue extends AuthState {
    * user dismisses the dialog.
    */
   requestSigner: () => Promise<NostrSigner>
+  /**
+   * Re-mints the session token immediately so identity changes (new primary
+   * pubkey, account merge) reflect without re-login. Resolves false when the
+   * session has no way to re-mint (signer-less session) — pass a freshly
+   * unlocked signer (from requestSigner()) to cover that case.
+   */
+  refreshSession: (signerOverride?: NostrSigner) => Promise<boolean>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -119,7 +140,7 @@ function installHistoryRestoreGuard() {
 
     window.setTimeout(() => {
       const loadingIndicator = document.querySelector(
-        '[role="progressbar"][aria-label="Loading"]',
+        '[role="progressbar"][aria-label="Loading"]'
       )
       const hasStoredJwt = Boolean(window.localStorage.getItem(JWT_STORAGE_KEY))
 
@@ -155,15 +176,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(JWT_STORAGE_KEY)
     localStorage.removeItem(LOGIN_METHOD_KEY)
     localStorage.removeItem(SIGNER_SECRET_KEY)
-    // Wipe the module-level cache from `useApi` so the next user doesn't
-    // see the previous user's data on the first frame after login.
-    clearApiCache()
-    // Drop the per-NWC balance + activity caches too. We don't track the
-    // active NWC inside this provider, so we wipe everything — keys are
-    // hashed and account-scoped, but a future user on the same device
-    // shouldn't see *any* prior wallet's snapshot anyway.
-    clearAllBalances()
-    void clearAllActivity()
+    localStorage.removeItem(IMPERSONATOR_RETURN_KEY)
+    // Synchronous stores are gone before this returns. IndexedDB and browser
+    // CacheStorage continue behind a barrier that the next login awaits.
+    void clearSessionCaches()
     setState({
       status: 'unauthenticated',
       jwt: null,
@@ -171,9 +187,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       role: null,
       permissions: null,
       signer: null,
-      loginMethod: null,
+      loginMethod: null
     })
   }, [])
+
+  // Latest session snapshot for the refresh timer — the timeout closure only
+  // captures the signer it was scheduled with, so signer-less passkey
+  // sessions read the current JWT/method from here when the timer fires.
+  const sessionRef = useRef<{
+    jwt: string | null
+    loginMethod: LoginMethod | null
+  }>({
+    jwt: null,
+    loginMethod: null
+  })
+  // Latest in-memory signer, for callbacks that outlive their closure
+  // (refreshSession after an account mutation).
+  const signerRef = useRef<NostrSigner | null>(null)
 
   // Schedule token refresh before expiry
   const scheduleRefresh = useCallback(
@@ -189,26 +219,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (delay <= 0) return // Already expired or about to
 
       refreshTimerRef.current = setTimeout(async () => {
-        if (!signer) {
-          // No signer available - can't refresh, force re-login
-          logout()
-          return
-        }
-
-        try {
-          const { token } = await exchangeNip98ForJwt(signer)
+        const commitRefreshedToken = async (
+          token: string,
+          nextSigner: NostrSigner | null
+        ) => {
           const validation = await validateJwt(token)
           localStorage.setItem(JWT_STORAGE_KEY, token)
-
-          setState((prev) => ({
+          setState(prev => ({
             ...prev,
             jwt: token,
             pubkey: validation.pubkey,
             role: validation.role,
             permissions: validation.permissions,
+            ...(nextSigner ? { signer: nextSigner } : {})
           }))
+          scheduleRefresh(validation.expiresAt, nextSigner)
+        }
 
-          scheduleRefresh(validation.expiresAt, signer)
+        try {
+          if (signer) {
+            const { token } = await exchangeNip98ForJwt(signer)
+            await commitRefreshedToken(token, signer)
+            return
+          }
+
+          // No signer available - can't refresh, force re-login
+          logout()
         } catch {
           logout()
         }
@@ -224,8 +260,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async (
       signer: NostrSigner,
       method: LoginMethod,
-      credentials?: SignerCredentials,
+      credentials?: SignerCredentials
     ) => {
+      await waitForSessionCacheCleanup()
       const { token } = await exchangeNip98ForJwt(signer)
       const validation = await validateJwt(token)
 
@@ -246,15 +283,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role: validation.role,
         permissions: validation.permissions,
         signer,
-        loginMethod: method,
+        loginMethod: method
       })
 
-      trackEvent(AnalyticsEvent.LOGIN_SUCCEEDED, { method, role: validation.role })
+      trackEvent(AnalyticsEvent.LOGIN_SUCCEEDED, {
+        method,
+        role: validation.role
+      })
 
       scheduleRefresh(validation.expiresAt, signer)
     },
     [scheduleRefresh]
   )
+
+  // Re-mints the session token NOW and re-reads identity/role from it.
+  // Used after account mutations that change what the session presents —
+  // setting a new primary pubkey or merging accounts — so `pubkey`/`role`
+  // update without a logout. Signer sessions (nsec/extension/bunker/passkey —
+  // a passkey session restores a normal nsec signer) re-run the NIP-98
+  // exchange. Signer-less sessions can't re-mint — the stale token stays (it
+  // still authenticates; identity updates on next login) and we return false.
+  const refreshSession = useCallback(
+    async (signerOverride?: NostrSigner): Promise<boolean> => {
+      // An explicit signer (e.g. one the caller just obtained via
+      // requestSigner()) wins over the ref — the ref is synced from state in
+      // an effect, so it can lag a just-unlocked signer by a render.
+      const signer = signerOverride ?? signerRef.current
+
+      let token: string | null = null
+      if (signer) {
+        token = (await exchangeNip98ForJwt(signer)).token
+      }
+      if (!token) return false
+
+      const validation = await validateJwt(token)
+      localStorage.setItem(JWT_STORAGE_KEY, token)
+      setState(prev => ({
+        ...prev,
+        jwt: token,
+        pubkey: validation.pubkey,
+        role: validation.role,
+        permissions: validation.permissions
+      }))
+      scheduleRefresh(validation.expiresAt, signer)
+      return true
+    },
+    [scheduleRefresh]
+  )
+
+  // Keep the refresh timer's session snapshot current.
+  useEffect(() => {
+    sessionRef.current = { jwt: state.jwt, loginMethod: state.loginMethod }
+  }, [state.jwt, state.loginMethod])
+  useEffect(() => {
+    signerRef.current = state.signer
+  }, [state.signer])
+
+  // localStorage is shared across tabs. If one tab logs out, immediately tear
+  // down the session in every other open tab as well so none can repopulate
+  // user caches with requests from the identity that just signed out.
+  useEffect(() => {
+    function handleCrossTabLogout(event: StorageEvent) {
+      if (
+        event.storageArea === window.localStorage &&
+        event.key === JWT_STORAGE_KEY &&
+        event.newValue === null
+      ) {
+        logout()
+      }
+    }
+
+    window.addEventListener('storage', handleCrossTabLogout)
+    return () => window.removeEventListener('storage', handleCrossTabLogout)
+  }, [logout])
 
   // Check for existing JWT on mount
   useEffect(() => {
@@ -263,7 +364,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false
 
     async function restoreStoredSigner(
-      storedMethod: LoginMethod | null,
+      storedMethod: LoginMethod | null
     ): Promise<NostrSigner | null> {
       let signer: NostrSigner | null = null
       const storedSecret = localStorage.getItem(SIGNER_SECRET_KEY)
@@ -289,6 +390,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // Bunker relay unreachable or signer rejected the resume.
           // Keep the secret so a manual retry can pick it up later.
         }
+      } else if (storedMethod === 'passkey' && storedSecret) {
+        // A passkey session is an nsec session whose key came from the PRF
+        // extension — restore it exactly like the nsec method.
+        try {
+          signer = createNsecSigner(storedSecret)
+        } catch {
+          localStorage.removeItem(SIGNER_SECRET_KEY)
+        }
       }
 
       return signer
@@ -296,11 +405,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function checkExistingAuth() {
       const storedToken = localStorage.getItem(JWT_STORAGE_KEY)
-      const storedMethod = localStorage.getItem(LOGIN_METHOD_KEY) as LoginMethod | null
+      const storedMethod = localStorage.getItem(
+        LOGIN_METHOD_KEY
+      ) as LoginMethod | null
 
       if (!storedToken) {
         if (cancelled) return
-        setState((prev) => ({ ...prev, status: 'unauthenticated' }))
+        setState(prev => ({ ...prev, status: 'unauthenticated' }))
         return
       }
 
@@ -315,7 +426,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           role: validation.role,
           permissions: validation.permissions,
           signer: null,
-          loginMethod: storedMethod,
+          loginMethod: storedMethod
         })
 
         scheduleRefresh(validation.expiresAt, null)
@@ -341,8 +452,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem(JWT_STORAGE_KEY)
         localStorage.removeItem(LOGIN_METHOD_KEY)
         localStorage.removeItem(SIGNER_SECRET_KEY)
+        localStorage.removeItem(IMPERSONATOR_RETURN_KEY)
+        void clearSessionCaches()
         if (cancelled) return
-        setState((prev) => ({ ...prev, status: 'unauthenticated' }))
+        setState(prev => ({ ...prev, status: 'unauthenticated' }))
       }
     }
 
@@ -388,17 +501,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const requestSigner = useCallback((): Promise<NostrSigner> => {
     if (state.signer) return Promise.resolve(state.signer)
-    return new Promise<NostrSigner>((resolve, reject) => {
-      unlockPromiseRef.current = { resolve, reject }
-      setUnlockOpen(true)
-    })
-  }, [state.signer])
+
+    const openUnlockDialog = () =>
+      new Promise<NostrSigner>((resolve, reject) => {
+        unlockPromiseRef.current = { resolve, reject }
+        setUnlockOpen(true)
+      })
+
+    // Passkey sessions restore from the stored PRF-derived secret like any
+    // nsec session; when it's gone (cleared storage) the dialog covers it.
+    if (state.loginMethod === 'passkey') {
+      const storedSecret = localStorage.getItem(SIGNER_SECRET_KEY)
+      if (storedSecret) {
+        try {
+          const signer = createNsecSigner(storedSecret)
+          setState(prev => ({ ...prev, signer }))
+          return Promise.resolve(signer)
+        } catch {
+          localStorage.removeItem(SIGNER_SECRET_KEY)
+        }
+      }
+    }
+
+    return openUnlockDialog()
+  }, [state.signer, state.loginMethod])
 
   const handleUnlock = useCallback(
     (
       signer: NostrSigner,
       method: LoginMethod,
-      credentials?: SignerCredentials,
+      credentials?: SignerCredentials
     ) => {
       // Keep localStorage aligned so future reloads pick the same method
       // and can silently re-create the signer.
@@ -411,7 +543,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unlockPromiseRef.current = null
       setUnlockOpen(false)
     },
-    [],
+    []
   )
 
   const handleUnlockCancel = useCallback(() => {
@@ -425,7 +557,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () =>
       createApiClient({
         getToken: () => state.jwt,
-        onUnauthorized: logout,
+        onUnauthorized: logout
       }),
     [state.jwt, logout]
   )
@@ -437,6 +569,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAuthorized,
     apiClient,
     requestSigner,
+    refreshSession
   }
 
   return (

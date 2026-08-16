@@ -13,7 +13,7 @@ describe('getOpenApiDocument', () => {
   it('registers expected security schemes', () => {
     const schemes = doc.components?.securitySchemes ?? {}
     expect(Object.keys(schemes)).toEqual(
-      expect.arrayContaining(['BearerJWT', 'NIP98', 'EventsToken']),
+      expect.arrayContaining(['BearerJWT', 'NIP98', 'EventsToken'])
     )
   })
 
@@ -26,6 +26,16 @@ describe('getOpenApiDocument', () => {
     const paths = Object.keys(doc.paths ?? {})
     const expectations = [
       '/api/jwt',
+      '/api/auth/passkey/registration/options',
+      '/api/auth/passkey/registration/verify',
+      '/api/auth/passkey/credentials',
+      '/api/auth/passkey/credentials/{id}',
+      '/api/account',
+      '/api/account/identities/link/begin',
+      '/api/account/identities/link/verify',
+      '/api/account/identities/{pubkey}',
+      '/api/account/merge/preview',
+      '/api/account/merge',
       '/api/cards',
       '/api/cards/{id}',
       '/api/card-designs',
@@ -46,10 +56,27 @@ describe('getOpenApiDocument', () => {
       '/api/remote-wallets',
       '/api/remote-wallets/{id}',
       '/api/activity',
-      '/api/events',
+      '/api/events'
     ]
     for (const expected of expectations) {
       expect(paths).toContain(expected)
+    }
+  })
+
+  it('does not document endpoints removed by the client-side PRF model', () => {
+    const paths = Object.keys(doc.paths ?? {})
+    const removed = [
+      '/api/auth/passkey/authentication/options',
+      '/api/auth/passkey/authentication/verify',
+      '/api/auth/passkey/link/options',
+      '/api/auth/passkey/link/verify',
+      '/api/auth/passkey/signer-key',
+      '/api/auth/passkey/nsec/export/options',
+      '/api/auth/passkey/nsec/export',
+      '/api/auth/passkey/session/refresh'
+    ]
+    for (const gone of removed) {
+      expect(paths).not.toContain(gone)
     }
   })
 
@@ -67,6 +94,8 @@ describe('getOpenApiDocument', () => {
   it('marks the SSE stream as text/event-stream with EventsToken security', () => {
     const events = doc.paths?.['/api/events']?.get
     expect(events?.security).toEqual([{ EventsToken: [] }])
-    expect(events?.responses?.[200]?.content?.['text/event-stream']).toBeDefined()
+    expect(
+      events?.responses?.[200]?.content?.['text/event-stream']
+    ).toBeDefined()
   })
 })

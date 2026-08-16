@@ -3,9 +3,18 @@
 import React, { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { Copy, Forward, MoreHorizontal, Plus, Star } from 'lucide-react'
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  Copy,
+  Forward,
+  MoreHorizontal,
+  Plus,
+  Star
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { AdminTopbar } from '@/components/admin/admin-topbar'
+import { ProtocolChips } from '@/components/wallet/shared/protocol-chips'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -14,28 +23,31 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
+  TooltipTrigger
 } from '@/components/ui/tooltip'
 import { useSettings } from '@/lib/client/hooks/use-settings'
 import {
   useMyAddresses,
   useAddressMutations,
-  type WalletAddress,
+  type WalletAddress
 } from '@/lib/client/hooks/use-wallet-addresses'
-import { useAddresses, type AddressData } from '@/lib/client/hooks/use-addresses'
+import {
+  useAddresses,
+  type AddressData
+} from '@/lib/client/hooks/use-addresses'
 import { NewAddressDialog } from '@/components/wallet/new-address-dialog'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -46,8 +58,29 @@ import { cn } from '@/lib/utils'
 
 const NWC_LABEL: Record<WalletAddress['nwcMode'], string> = {
   NONE: 'None',
-  RECEIVE: 'Receive',
-  SEND_RECEIVE: 'Send and Receive',
+  RECEIVE: 'Receive only',
+  SEND_RECEIVE: 'Send and receive'
+}
+
+/**
+ * The wallet's direction as arrows. The label stays as the accessible name and
+ * tooltip, so nothing is lost for screen readers or for anyone who does not
+ * read the icons the same way.
+ */
+function NwcCapabilityIcons({ mode }: { mode: WalletAddress['nwcMode'] }) {
+  if (mode === 'NONE') return null
+  return (
+    <span
+      className="inline-flex items-center gap-0.5 text-muted-foreground"
+      title={NWC_LABEL[mode]}
+      aria-label={NWC_LABEL[mode]}
+    >
+      <ArrowDownLeft className="size-3.5 text-emerald-500" aria-hidden />
+      {mode === 'SEND_RECEIVE' && (
+        <ArrowUpRight className="size-3.5" aria-hidden />
+      )}
+    </span>
+  )
 }
 
 /**
@@ -58,8 +91,8 @@ const NWC_LABEL: Record<WalletAddress['nwcMode'], string> = {
 const MODE_LABEL: Record<WalletAddress['mode'], string> = {
   IDLE: 'Idle',
   ALIAS: 'Alias',
-  CUSTOM_NWC: 'Custom NWC',
-  DEFAULT_NWC: 'Default NWC',
+  PROXY_ALIAS: 'Deferred proxy',
+  CUSTOM_NWC: 'NWC'
 }
 
 /**
@@ -108,7 +141,9 @@ export default function AdminAddressesPage() {
   // the refetched data agrees and we drop the override; on failure we drop
   // it and the star snaps back to the server's reality (plus a toast).
   // Null when no optimistic flip is in flight.
-  const [optimisticPrimary, setOptimisticPrimary] = useState<string | null>(null)
+  const [optimisticPrimary, setOptimisticPrimary] = useState<string | null>(
+    null
+  )
 
   async function handleSetPrimary(username: string) {
     setOptimisticPrimary(username)
@@ -135,7 +170,7 @@ export default function AdminAddressesPage() {
     data?.map(a =>
       !adminView && optimisticPrimary !== null
         ? { ...a, isPrimary: a.username === optimisticPrimary }
-        : a,
+        : a
     )
 
   /**
@@ -190,8 +225,8 @@ export default function AdminAddressesPage() {
                 </Label>
               </div>
             )}
-            {!adminView && (
-              createDisabledMessage ? (
+            {!adminView &&
+              (createDisabledMessage ? (
                 <TooltipProvider delayDuration={150}>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -214,8 +249,7 @@ export default function AdminAddressesPage() {
                   <Plus className="size-4" />
                   New address
                 </Button>
-              )
-            )}
+              ))}
           </div>
         }
       />
@@ -226,40 +260,40 @@ export default function AdminAddressesPage() {
           feels responsive on hover while still avoiding accidental fires
           on quick mouse passes. */}
       <TooltipProvider delayDuration={150}>
-      <div className="space-y-4 px-4 py-6 sm:px-6">
-        <div className="rounded-lg border border-border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Address</TableHead>
-                {adminView && <TableHead>Owner</TableHead>}
-                <TableHead>Mode</TableHead>
-                <TableHead className="w-12 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
+        <div className="space-y-4 px-4 py-6 sm:px-6">
+          <div className="rounded-lg border border-border bg-card">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell
-                    colSpan={adminView ? 4 : 3}
-                    className="py-12 text-center"
-                  >
-                    <Spinner size={24} />
-                  </TableCell>
+                  <TableHead>Address</TableHead>
+                  {adminView && <TableHead>Owner</TableHead>}
+                  <TableHead>Mode</TableHead>
+                  <TableHead>Protocols</TableHead>
+                  <TableHead className="w-12 text-right">Actions</TableHead>
                 </TableRow>
-              ) : !displayedAddresses || displayedAddresses.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={adminView ? 4 : 3}
-                    className="py-12 text-center text-sm text-muted-foreground"
-                  >
-                    {adminView ? (
-                      <>No lightning addresses exist yet.</>
-                    ) : (
-                      creationRestricted ? (
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={adminView ? 4 : 3}
+                      className="py-12 text-center"
+                    >
+                      <Spinner size={24} />
+                    </TableCell>
+                  </TableRow>
+                ) : !displayedAddresses || displayedAddresses.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={adminView ? 4 : 3}
+                      className="py-12 text-center text-sm text-muted-foreground"
+                    >
+                      {adminView ? (
+                        <>No lightning addresses exist yet.</>
+                      ) : creationRestricted ? (
                         <>
-                          You don&rsquo;t have any addresses yet. Ask an admin to
-                          create one for you.
+                          You don&rsquo;t have any addresses yet. Ask an admin
+                          to create one for you.
                         </>
                       ) : (
                         <>
@@ -273,174 +307,215 @@ export default function AdminAddressesPage() {
                           </button>
                           .
                         </>
-                      )
-                    )}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                displayedAddresses.map(addr => (
-                  <TableRow key={addr.username}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {/* The address text itself is now the primary
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  displayedAddresses.map(addr => (
+                    <TableRow key={addr.username}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          {/* The address text itself is now the primary
                             affordance for navigating to the edit page;
                             Copy (button next to it) and Edit (dropdown)
                             are peers rather than the only ways in. Mobile
                             hides @domain since it consumes too much room
                             next to the star + actions. */}
-                        <Link
-                          href={`/admin/addresses/${encodeURIComponent(addr.username)}`}
-                          className="font-medium hover:underline underline-offset-4"
-                        >
-                          {addr.username}
-                          <span className="hidden sm:inline">@{domain}</span>
-                        </Link>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => handleCopyAddress(addr.username)}
-                          aria-label={`Copy ${addr.username}@${domain}`}
-                        >
-                          <Copy className="size-3.5" />
-                        </Button>
-                        {addr.isPrimary && (
-                          <>
-                            {/* Mobile: compact star with a hover/focus
+                          <Link
+                            href={`/admin/addresses/${encodeURIComponent(addr.username)}`}
+                            className="font-medium hover:underline underline-offset-4"
+                          >
+                            {addr.username}
+                            <span className="hidden sm:inline">@{domain}</span>
+                          </Link>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-7 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleCopyAddress(addr.username)}
+                            aria-label={`Copy ${addr.username}@${domain}`}
+                          >
+                            <Copy className="size-3.5" />
+                          </Button>
+                          {addr.isPrimary && (
+                            <>
+                              {/* Narrow: compact star with a hover/focus
                                 tooltip — there's no room for a full
                                 "Primary" pill next to the copy button
-                                and the @domain-less address. */}
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  className="inline-flex size-5 items-center justify-center text-yellow-500 sm:hidden"
-                                  aria-label="Primary address"
-                                >
-                                  <Star
-                                    className="size-4 fill-current"
-                                    aria-hidden
-                                  />
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent>Primary</TooltipContent>
-                            </Tooltip>
-                            {/* Desktop: full Primary badge with a star
+                                and the @domain-less address. Kept up to
+                                `md` (not just `sm`) since the mobile
+                                @domain suffix reappearing at `sm` leaves
+                                even less room for the text pill. */}
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    className="inline-flex size-5 items-center justify-center text-yellow-500 md:hidden"
+                                    aria-label="Primary address"
+                                  >
+                                    <Star
+                                      className="size-4 fill-current"
+                                      aria-hidden
+                                    />
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent>Primary</TooltipContent>
+                              </Tooltip>
+                              {/* Wide: full Primary badge with a star
                                 prefix. No tooltip needed here since the
                                 label is already readable. */}
-                            <Badge
-                              variant="secondary"
-                              className="hidden items-center gap-1 text-xs sm:inline-flex"
-                            >
-                              <Star
-                                className="size-3 fill-yellow-500 text-yellow-500"
-                                aria-hidden
-                              />
-                              Primary
-                            </Badge>
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                    {adminView && (
-                      <TableCell>
-                        <span
-                          className="font-mono text-xs text-muted-foreground"
-                          title={'pubkey' in addr ? addr.pubkey : undefined}
-                        >
-                          {'pubkey' in addr ? truncateNpub(addr.pubkey) : '—'}
-                        </span>
+                              <Badge
+                                variant="secondary"
+                                className="hidden items-center gap-1 text-xs md:inline-flex"
+                              >
+                                <Star
+                                  className="size-3 fill-yellow-500 text-yellow-500"
+                                  aria-hidden
+                                />
+                                Primary
+                              </Badge>
+                            </>
+                          )}
+                        </div>
                       </TableCell>
-                    )}
-                    <TableCell>
-                      <div className="flex flex-col gap-0.5">
-                        {/* Column shows the *configured* LightningAddress
+                      {adminView && (
+                        <TableCell>
+                          {'pubkey' in addr ? (
+                            <Link
+                              href={`/admin/users/${encodeURIComponent(addr.pubkey)}`}
+                              className="font-mono text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                              title={`View ${truncateNpub(addr.pubkey)} user profile`}
+                              aria-label={`View user profile for ${truncateNpub(addr.pubkey)}`}
+                            >
+                              {truncateNpub(addr.pubkey)}
+                            </Link>
+                          ) : (
+                            <span className="font-mono text-xs text-muted-foreground">
+                              —
+                            </span>
+                          )}
+                        </TableCell>
+                      )}
+                      <TableCell>
+                        <div className="flex flex-col gap-0.5">
+                          {/* Column shows the *configured* LightningAddress
                             mode (what the user picked on the edit page).
                             For NWC modes the sub-line discloses the
                             *derived* capability (Receive / Send & Receive /
                             None) so the row tells you both intent and
                             effective state without the columns drifting. */}
-                        {/* ALIAS gets a single condensed badge
+                          {/* Redirect modes get a single condensed badge
                             `[→ target]` instead of the generic "Alias"
                             label plus a separate redirect sub-line — the
                             target address *is* the mode in this case, so
                             surfacing it as the badge content keeps the
                             cell to one row and conveys both intent and
                             destination at once. */}
-                        {addr.mode === 'ALIAS' ? (
-                          addr.redirect && (
+                          {addr.mode === 'ALIAS' ||
+                          addr.mode === 'PROXY_ALIAS' ? (
+                            addr.redirect && (
+                              <Badge
+                                variant="outline"
+                                className="w-fit items-center gap-1 font-mono text-xs font-normal"
+                              >
+                                <Forward
+                                  className="size-3 shrink-0"
+                                  aria-hidden
+                                />
+                                <span className="break-all">
+                                  {addr.mode === 'PROXY_ALIAS'
+                                    ? `Proxy → ${addr.redirect}`
+                                    : addr.redirect}
+                                </span>
+                              </Badge>
+                            )
+                          ) : (
                             <Badge
-                              variant="outline"
-                              className="w-fit items-center gap-1 font-mono text-xs font-normal"
+                              variant={
+                                addr.mode === 'IDLE' ||
+                                (addr.mode === 'CUSTOM_NWC' &&
+                                  addr.nwcMode === 'NONE')
+                                  ? 'outline'
+                                  : 'default'
+                              }
+                              className={cn(
+                                'w-fit text-xs',
+                                addr.mode === 'IDLE' &&
+                                  'italic text-muted-foreground'
+                              )}
                             >
-                              <Forward className="size-3 shrink-0" aria-hidden />
-                              <span className="break-all">{addr.redirect}</span>
+                              {MODE_LABEL[addr.mode]}
                             </Badge>
-                          )
-                        ) : (
-                          <Badge
-                            variant={
-                              addr.mode === 'IDLE' ||
-                              ((addr.mode === 'CUSTOM_NWC' || addr.mode === 'DEFAULT_NWC') &&
-                                addr.nwcMode === 'NONE')
-                                ? 'outline'
-                                : 'default'
-                            }
-                            className={cn(
-                              'w-fit text-xs',
-                              addr.mode === 'IDLE' && 'italic text-muted-foreground',
-                            )}
-                          >
-                            {MODE_LABEL[addr.mode]}
-                          </Badge>
-                        )}
+                          )}
 
-                        {/* Only surface the derived NWC capability when
+                          {/* Only surface the derived NWC capability when
                             we actually resolved one. A "None" sub-line
                             under the badge duplicated the outline badge's
                             own muted styling and wasted a row of height. */}
-                        {(addr.mode === 'CUSTOM_NWC' || addr.mode === 'DEFAULT_NWC') &&
-                          addr.nwcMode !== 'NONE' && (
-                            <span className="text-xs text-muted-foreground">
-                              {NWC_LABEL[addr.nwcMode]}
-                            </span>
+                          {addr.mode === 'CUSTOM_NWC' && (
+                            <NwcCapabilityIcons mode={addr.nwcMode} />
                           )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreHorizontal className="size-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() =>
-                              router.push(
-                                `/admin/addresses/${encodeURIComponent(addr.username)}`,
-                              )
-                            }
-                          >
-                            {adminView ? 'View details' : 'Edit'}
-                          </DropdownMenuItem>
-                          {!adminView && (
+
+                          {/* Name of the bound RemoteWallet, linking to its
+                            detail page. Only linkable in the "mine" view —
+                            the remote-wallet API is owner-gated, so an admin
+                            browsing another user's address would 404. */}
+                          {addr.mode === 'CUSTOM_NWC' &&
+                            addr.remoteWalletId &&
+                            addr.remoteWalletName &&
+                            (adminView ? (
+                              <span className="truncate text-xs text-muted-foreground">
+                                {addr.remoteWalletName}
+                              </span>
+                            ) : (
+                              <Link
+                                href={`/admin/remote-wallets/${encodeURIComponent(addr.remoteWalletId)}`}
+                                className="truncate text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+                              >
+                                {addr.remoteWalletName}
+                              </Link>
+                            ))}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <ProtocolChips
+                          protocols={addr.protocols?.protocols ?? {}}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <MoreHorizontal className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
                             <DropdownMenuItem
-                              disabled={addr.isPrimary || settingPrimary}
-                              onClick={() => handleSetPrimary(addr.username)}
+                              onClick={() =>
+                                router.push(
+                                  `/admin/addresses/${encodeURIComponent(addr.username)}`
+                                )
+                              }
                             >
-                              Set as primary
+                              {adminView ? 'View details' : 'Edit'}
                             </DropdownMenuItem>
-                          )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                            {!adminView && (
+                              <DropdownMenuItem
+                                disabled={addr.isPrimary || settingPrimary}
+                                onClick={() => handleSetPrimary(addr.username)}
+                              >
+                                Set as primary
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </div>
-      </div>
       </TooltipProvider>
 
       <NewAddressDialog

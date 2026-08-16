@@ -54,7 +54,14 @@ RUN chown -R listener:nodejs /app
 
 USER listener
 ENV NODE_ENV=production
+# Baked at build time so every event carries the release it came from — that
+# is what Sentry needs to track release health and deploys. Empty unless the
+# builder passes --build-arg SENTRY_RELEASE=<git sha>.
+ARG SENTRY_RELEASE=""
+ENV SENTRY_RELEASE=$SENTRY_RELEASE
 EXPOSE 4100
 
 WORKDIR /app/apps/listener
-CMD ["node", "dist/index.js"]
+# --enable-source-maps: tsup emits .map files into dist (copied above) — gives
+# mapped stack traces in logs and Sentry with no CI upload step.
+CMD ["node", "--enable-source-maps", "dist/index.js"]

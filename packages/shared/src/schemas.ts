@@ -10,17 +10,102 @@ export const userIdParam = z.object({
   userId: z.string().min(1, 'User ID is required')
 })
 
+/** A Nostr public key in the canonical wire format (lowercase hex, no npub). */
+export const hexPubkeySchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, 'Must be a 64-char lowercase hex pubkey')
+
+/**
+ * Upper bound for any stored media URL. Blossom URLs are ~100 chars; 2 KB
+ * leaves generous room while keeping a single row from being used as blob
+ * storage.
+ */
+export const MEDIA_URL_MAX_LENGTH = 2048
+
+/**
+ * Media URL accepted from API input (card design create/update).
+ *
+ * Zod 3's `.url()` is a bare `new URL()` constructor check, so on its own it
+ * happily accepts `javascript:`, `data:`, `file:` and every other scheme. It
+ * is kept in the chain because it is what makes the generated OpenAPI emit
+ * `format: uri`; the `.refine()` below is what actually constrains the
+ * scheme. Same idiom as `relayUrl` further down this file.
+ *
+ * `data:` URIs are deliberately rejected: every image in the product is
+ * uploaded to Blossom and referenced by its `https:` URL (see
+ * `components/admin/upload-design-dialog.tsx`), so inline art has no
+ * producer, and allowing it would turn a 2 KB text column into an
+ * unbounded-ish image store. If inline art is ever wanted, add `data:` here
+ * with an explicit, much smaller byte budget rather than reusing
+ * `MEDIA_URL_MAX_LENGTH`.
+ */
+export const imageUrlSchema = z
+  .string()
+  .trim()
+  .url('Image URL must be a valid URL')
+  .max(MEDIA_URL_MAX_LENGTH, 'Image URL too long')
+  .refine(
+    value => {
+      try {
+        const { protocol, hostname } = new URL(value)
+        return (
+          (protocol === 'https:' || protocol === 'http:') && hostname.length > 0
+        )
+      } catch {
+        return false
+      }
+    },
+    { message: 'Image URL must be an http:// or https:// URL' }
+  )
+
+/**
+ * Media URL accepted when restoring rows that are already in a database
+ * (backup import) rather than arriving from a client.
+ *
+ * Looser than {@link imageUrlSchema} on purpose: `prisma/seed.ts` writes
+ * root-relative paths (`/card-primal.png`) straight through Prisma, so a
+ * backup taken from a seeded or dev instance legitimately contains them.
+ * Requiring an absolute http(s) URL here would silently drop those rows on
+ * restore (`lib/backup/import.ts` counts a schema failure as `failed` and
+ * skips the row). Root-relative paths are inert, so they are allowed —
+ * `javascript:`, `data:`, `file:` and protocol-relative `//host` are not.
+ */
+export const storedImageUrlSchema = z
+  .string()
+  .max(MEDIA_URL_MAX_LENGTH, 'Image URL too long')
+  .refine(
+    value => {
+      // Empty is inert and renders as "No image"; keep restores permissive.
+      if (value === '') return true
+      // Root-relative, but not protocol-relative (`//host` is external).
+      if (value.startsWith('/')) return !value.startsWith('//')
+      return imageUrlSchema.safeParse(value).success
+    },
+    {
+      message:
+        'Image URL must be an http:// or https:// URL or a root-relative path'
+    }
+  )
+
 // ── Cards ───────────────────────────────────────────────────────────────────
+
+/**
+ * SIMPLE is an ordinary card; MASTER designates the holder's account-recovery
+ * card. At most one MASTER per holder — enforced in the database by a partial
+ * unique index and in the PATCH routes, which demote the previous master.
+ */
+export const cardKindSchema = z.enum(['SIMPLE', 'MASTER'])
 
 export const createCardSchema = z.object({
   id: z.string().min(1, 'Card ID is required'),
   designId: z.string().min(1, 'Design ID is required'),
   /**
-   * Card kind, declared at creation. Defaults to SIMPLE when omitted. MASTER is
-   * reserved for the deferred account-share feature but is accepted here so the
-   * field can be set ahead of that work landing.
+   * Card kind, declared at creation. Defaults to SIMPLE when omitted. Note that
+   * MASTER does not survive pairing: cards are created unpaired, and every
+   * change of holder resets `kind` to SIMPLE, so the designation has to be made
+   * by the holder (or an admin) on an already-paired card.
    */
-  kind: z.enum(['SIMPLE', 'MASTER']).optional()
+  kind: cardKindSchema.optional()
 })
 
 export const cardListQuerySchema = z.object({
@@ -29,26 +114,36 @@ export const cardListQuerySchema = z.object({
 })
 
 /**
- * Partial update for a card. Today only the wallet binding can change:
+ * Partial update for a card (admin-scoped). Two independent fields:
  *   - `remoteWalletId: string` rebinds the card to that wallet (must
  *     belong to the caller, must not be REVOKED — validated in the
  *     route handler since cross-field rules don't fit Zod cleanly).
  *   - `remoteWalletId: null` unbinds the card; spending falls back to
  *     the owner's default wallet at run-time.
+ *   - `kind` promotes/demotes the card as the holder's MASTER (recovery)
+ *     card. Requires a paired, unblocked card; promoting demotes whichever
+ *     card held the designation before.
  */
-export const updateCardSchema = z.object({
-  remoteWalletId: z.string().min(1).nullable()
-})
+export const updateCardSchema = z
+  .object({
+    remoteWalletId: z.string().min(1).nullable().optional(),
+    kind: cardKindSchema.optional()
+  })
+  .refine(v => v.remoteWalletId !== undefined || v.kind !== undefined, {
+    message: 'No fields to update'
+  })
 
 export const updateWalletCardSchema = z
   .object({
     enabled: z.boolean().optional(),
-    linkDefaultWallet: z.boolean().optional()
+    linkDefaultWallet: z.boolean().optional(),
+    kind: cardKindSchema.optional()
   })
   .refine(
     v =>
       (v.enabled !== undefined ? 1 : 0) +
-        (v.linkDefaultWallet === true ? 1 : 0) ===
+        (v.linkDefaultWallet === true ? 1 : 0) +
+        (v.kind !== undefined ? 1 : 0) ===
       1,
     { message: 'Provide exactly one card update action' }
   )
@@ -59,11 +154,7 @@ export const createCardDesignSchema = z.object({
     .trim()
     .min(1, 'Design name is required')
     .max(120, 'Design name must be 120 characters or less'),
-  imageUrl: z
-    .string()
-    .trim()
-    .url('Image URL must be a valid URL')
-    .max(2048, 'Image URL too long')
+  imageUrl: imageUrlSchema
 })
 
 /**
@@ -79,12 +170,7 @@ export const updateCardDesignSchema = z
       .min(1, 'Design name is required')
       .max(120, 'Design name must be 120 characters or less')
       .optional(),
-    imageUrl: z
-      .string()
-      .trim()
-      .url('Image URL must be a valid URL')
-      .max(2048, 'Image URL too long')
-      .optional(),
+    imageUrl: imageUrlSchema.optional(),
     /**
      * Archive toggle. `true` stamps `archivedAt = now()`, `false` clears it.
      * The wire stays as a simple boolean so the client doesn't have to know
@@ -112,9 +198,8 @@ export const payActionQuerySchema = z.object({
     .max(8192, 'Payment request is too large')
 })
 
-export const cardScanCallbackQuerySchema = scanCardQuerySchema.merge(
-  payActionQuerySchema
-)
+export const cardScanCallbackQuerySchema =
+  scanCardQuerySchema.merge(payActionQuerySchema)
 
 export const cardScanActionSchema = z.enum(['pay', 'new-otc'])
 export type CardScanAction = z.infer<typeof cardScanActionSchema>
@@ -169,7 +254,9 @@ export const lud16CallbackQuerySchema = z.object({
       LUD12_MAX_COMMENT_LENGTH,
       `Comment exceeds ${LUD12_MAX_COMMENT_LENGTH} characters`
     )
-    .optional()
+    .optional(),
+  /** NIP-57 kind:9734 zap request, encoded as JSON in the query string. */
+  nostr: z.string().max(65_536, 'Zap request is too large').optional()
 })
 
 export const updateLightningAddressSchema = z.object({
@@ -197,8 +284,8 @@ export const walletAddressUsernameParam = z.object({
 export const lightningAddressModeSchema = z.enum([
   'IDLE',
   'ALIAS',
-  'CUSTOM_NWC',
-  'DEFAULT_NWC'
+  'PROXY_ALIAS',
+  'CUSTOM_NWC'
 ])
 
 /** Body for POST /api/wallet/addresses (create). */
@@ -215,6 +302,15 @@ export const createWalletAddressSchema = z.object({
 })
 
 /**
+ * Body for POST /api/lightning-addresses — an operator provisions an address
+ * for somebody else's pubkey. `mode` is deliberately absent: the operator
+ * hands out a name, the routing default applies.
+ */
+export const provisionLightningAddressSchema = createWalletAddressSchema
+  .pick({ username: true })
+  .extend({ pubkey: hexPubkeySchema })
+
+/**
  * Body for PATCH /api/wallet/addresses/[username] (update).
  *
  * Cross-field rules (validated server-side, not via refine, so the route can
@@ -223,7 +319,7 @@ export const createWalletAddressSchema = z.object({
  *                             address ("user@host").
  *   - mode === 'CUSTOM_NWC' → `remoteWalletId` is required and must reference
  *                             a RemoteWallet owned by the caller.
- *   - mode === 'IDLE' or 'DEFAULT_NWC' → both fields are ignored / cleared.
+ *   - mode === 'IDLE'       → both fields are ignored / cleared.
  */
 export const updateWalletAddressSchema = z.object({
   mode: lightningAddressModeSchema,
@@ -237,6 +333,32 @@ export const updateWalletAddressSchema = z.object({
     .nullish(),
   remoteWalletId: z.string().min(1).nullish()
 })
+
+/** URL parameters for commands against one deferred proxy settlement. */
+export const proxyForwardingCommandParams = walletAddressUsernameParam.extend({
+  invoiceId: z.string().min(1).max(128)
+})
+
+/**
+ * Manual recovery actions for a failed deferred proxy settlement.
+ * Changing the destination is intentionally separate from retrying so the
+ * owner can review the new route before any outgoing payment is attempted.
+ */
+export const proxyForwardingCommandSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('retry') }),
+  z.object({
+    action: z.literal('change_destination'),
+    destination: z
+      .string()
+      .trim()
+      .max(254)
+      .regex(
+        /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i,
+        'Must be a valid LN address'
+      )
+      .transform(value => value.toLowerCase())
+  })
+])
 
 /** Body for POST /api/wallet/addresses/alias-probe. */
 export const probeAliasAddressSchema = z.object({
@@ -434,10 +556,163 @@ export const remoteWalletListQuerySchema = z.object({
   type: remoteWalletType.optional()
 })
 
+export const remoteWalletForwardDestinationSchema = z.object({
+  address: z.string().trim().min(3).max(320),
+  allocationBps: z.number().int().min(1).max(10_000)
+})
+
+export const remoteWalletReceiveActionConfigSchema = z.object({
+  feeBps: z.number().int().min(0).max(1_000).optional(),
+  baseFeeSats: z.number().int().nonnegative().safe().optional(),
+  enabled: z.boolean().optional(),
+  destinations: z.array(remoteWalletForwardDestinationSchema).min(1).max(20)
+})
+
+export const remoteWalletReceiveActionToggleSchema = z.object({
+  enabled: z.boolean()
+})
+
+export const remoteWalletForwardReceiptStatusSchema = z.enum([
+  'RECEIVED',
+  'FORWARDING',
+  'PARTIAL',
+  'BLOCKED',
+  'COMPLETED',
+  'RETAINED'
+])
+
+export const remoteWalletForwardReceiptListQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  status: remoteWalletForwardReceiptStatusSchema.optional()
+})
+
+export const remoteWalletForwardActivityListQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30)
+})
+
+export const remoteWalletForwardReceiptParamsSchema = z.object({
+  id: z.string().min(1),
+  receiptId: z.string().min(1)
+})
+
+export const remoteWalletForwardRetrySchema = z.object({
+  legIds: z.array(z.string().min(1)).max(20).optional()
+})
+
+// ── Remote wallet notifications ────────────────────────────────────────────
+
+export const remoteWalletNotificationActionSchema = z.enum([
+  'RECEIVED',
+  'FORWARDED'
+])
+
+const remoteWalletNotificationNameSchema = z.string().trim().min(1).max(80)
+const remoteWalletNotificationRelaySchema = z
+  .string()
+  .trim()
+  .max(512)
+  .refine(value => {
+    try {
+      const url = new URL(value)
+      return (
+        (url.protocol === 'wss:' || url.protocol === 'ws:') &&
+        url.hostname.length > 0
+      )
+    } catch {
+      return false
+    }
+  }, 'Relay must use ws:// or wss://')
+
+export const createRemoteWalletNotificationSchema = z.discriminatedUnion(
+  'channel',
+  [
+    z.object({
+      name: remoteWalletNotificationNameSchema,
+      channel: z.literal('WEBHOOK'),
+      action: remoteWalletNotificationActionSchema,
+      webhookUrl: z
+        .string()
+        .trim()
+        .url()
+        .max(2048)
+        .refine(value => {
+          try {
+            return new URL(value).protocol === 'https:'
+          } catch {
+            return false
+          }
+        }, 'Webhook URL must use HTTPS')
+    }),
+    z.object({
+      name: remoteWalletNotificationNameSchema,
+      channel: z.literal('NOSTR'),
+      action: remoteWalletNotificationActionSchema,
+      kind: z.number().int().min(0).max(2_147_483_647),
+      pTag: z.string().trim().min(1).max(128),
+      relays: z.array(remoteWalletNotificationRelaySchema).min(1).max(12),
+      content: z.string().max(16_384).default('{{payload}}'),
+      nip44: z.boolean().default(false)
+    })
+  ]
+)
+
+export const remoteWalletNotificationToggleSchema = z.object({
+  enabled: z.boolean()
+})
+
+export const remoteWalletNotificationListQuerySchema = z.object({
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(30)
+})
+
+export const remoteWalletNotificationParamsSchema = z.object({
+  id: z.string().min(1),
+  notificationId: z.string().min(1)
+})
+
+export const remoteWalletNotificationDeliveryParamsSchema = z.object({
+  id: z.string().min(1),
+  deliveryId: z.string().min(1)
+})
+
 // ── JWT ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Session JWTs are stateless and unrevocable, so their lifetime is capped:
+ * a leaked (or over-generous) token must not stay usable for weeks. Device
+ * tokens have their own schema (`deviceTokenExpiresIn`) with operator-chosen
+ * lifetimes.
+ */
+export const MAX_SESSION_JWT_SECONDS = 24 * 60 * 60 // 24h
+
+/** Parses an `ms`-style duration (`30m`, `8h`, `1d`) or bare seconds into seconds. */
+function sessionDurationToSeconds(value: string): number | null {
+  // `d` is accepted even though `2d` exceeds the cap — `1d` is a legal way to
+  // spell the maximum, and rejecting the unit outright makes a valid request
+  // look malformed. `w` is omitted: every `w` value is over the cap.
+  const match = /^(\d+)\s*(s|m|h|d)?$/i.exec(value.trim())
+  if (!match) return null
+  const amount = Number(match[1])
+  const unit = (match[2] ?? 's').toLowerCase()
+  const factor =
+    unit === 'd' ? 86400 : unit === 'h' ? 3600 : unit === 'm' ? 60 : 1
+  return amount * factor
+}
+
 export const jwtRequestSchema = z.object({
-  expiresIn: z.string().optional().default('1h')
+  expiresIn: z
+    .string()
+    .trim()
+    .refine(value => {
+      const seconds = sessionDurationToSeconds(value)
+      return (
+        seconds !== null && seconds >= 1 && seconds <= MAX_SESSION_JWT_SECONDS
+      )
+    }, 'Use a duration like 30m or 8h (1 second to 24 hours)')
+    .optional()
+    .default('1h')
 })
 
 // ── Device Tokens (QR-based JWT login, B.0) ──────────────────────────────────
@@ -673,3 +948,280 @@ export const backupImportResultSchema = z.object({
   importedAt: z.string()
 })
 export type BackupImportResult = z.infer<typeof backupImportResultSchema>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Passkeys (WebAuthn)
+// ─────────────────────────────────────────────────────────────────────────────
+// Structural validation only — deep cryptographic validation of the WebAuthn
+// payloads belongs to @simplewebauthn/server on the route side.
+
+// `hexPubkeySchema` is defined in the Common block at the top of this file —
+// address provisioning needs it well before this section.
+
+/** A signed Nostr event, as proof of key control (NIP-42 kind 22242). */
+export const signedNostrEventSchema = z
+  .object({
+    id: z.string(),
+    pubkey: hexPubkeySchema,
+    created_at: z.number(),
+    kind: z.number(),
+    tags: z.array(z.array(z.string())),
+    content: z.string(),
+    sig: z.string()
+  })
+  .passthrough()
+
+export const passkeyLabelSchema = z.string().trim().min(1).max(64)
+
+/** Minimal structural shape of a browser RegistrationResponseJSON. */
+export const webauthnRegistrationResponseSchema = z
+  .object({
+    id: z.string().min(1),
+    rawId: z.string().min(1),
+    type: z.literal('public-key'),
+    response: z
+      .object({
+        clientDataJSON: z.string().min(1),
+        attestationObject: z.string().min(1),
+        transports: z.array(z.string()).optional()
+      })
+      .passthrough(),
+    clientExtensionResults: z.record(z.unknown()).default({}),
+    authenticatorAttachment: z.string().optional()
+  })
+  .passthrough()
+
+export const passkeyRegistrationOptionsRequestSchema = z.object({
+  label: passkeyLabelSchema.optional()
+})
+
+export const passkeyRegistrationVerifyRequestSchema = z.object({
+  challenge: z.string().min(16).max(128),
+  credential: webauthnRegistrationResponseSchema,
+  /** The PRF-derived Nostr pubkey this credential IS (client-derived). */
+  pubkey: hexPubkeySchema,
+  /**
+   * NIP-42 (kind 22242) event signed by the derived key, carrying the
+   * WebAuthn challenge in a `challenge` tag — proves the client actually
+   * controls the pubkey it claims for this credential.
+   */
+  proof: signedNostrEventSchema,
+  label: passkeyLabelSchema.optional()
+})
+export type PasskeyRegistrationVerifyRequest = z.infer<
+  typeof passkeyRegistrationVerifyRequestSchema
+>
+
+export const updatePasskeyCredentialSchema = z.object({
+  label: passkeyLabelSchema
+})
+
+export const passkeyCredentialSummarySchema = z.object({
+  id: z.string(),
+  label: z.string().nullable(),
+  deviceType: z.string(),
+  backedUp: z.boolean(),
+  aaguid: z.string().nullable(),
+  rpId: z.string(),
+  /** The Nostr identity this passkey derives (PRF); null for pre-PRF rows. */
+  pubkey: z.string().nullable(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable()
+})
+export type PasskeyCredentialSummary = z.infer<
+  typeof passkeyCredentialSummarySchema
+>
+
+export const passkeyCredentialListResponseSchema = z.object({
+  credentials: z.array(passkeyCredentialSummarySchema),
+  /** True when the server custodies this account's Nostr key (passkey-native). */
+  hasManagedKey: z.boolean(),
+  /**
+   * True once the custodied key has been exported at least once. Lets the
+   * client permit deleting the final passkey (the server unblocks it too).
+   * Always false when `hasManagedKey` is false.
+   */
+  managedKeyExported: z.boolean()
+})
+export type PasskeyCredentialListResponse = z.infer<
+  typeof passkeyCredentialListResponseSchema
+>
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Account (multi-pubkey identities, linking & merge)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const nostrIdentitySummarySchema = z.object({
+  pubkey: hexPubkeySchema,
+  isPrimary: z.boolean(),
+  label: z.string().nullable(),
+  createdAt: z.string(),
+  /**
+   * True when the server custodies this identity's secret key (a passkey-
+   * native "hosted" key), so it can be exported via a passkey assertion.
+   * Optional: only the account summary populates it; link/rename responses
+   * omit it (the Account screen re-reads the summary after mutations).
+   */
+  custodied: z.boolean().optional()
+})
+export type NostrIdentitySummary = z.infer<typeof nostrIdentitySummarySchema>
+
+export const accountSummaryResponseSchema = z.object({
+  userId: z.string(),
+  /** The account's public identity — mirrors the isPrimary NostrIdentity. */
+  primaryPubkey: hexPubkeySchema,
+  identities: z.array(nostrIdentitySummarySchema),
+  credentials: z.array(passkeyCredentialSummarySchema),
+  hasManagedKey: z.boolean(),
+  managedKeyExported: z.boolean()
+})
+export type AccountSummaryResponse = z.infer<
+  typeof accountSummaryResponseSchema
+>
+
+export const accountLinkBeginRequestSchema = z.object({
+  method: z.literal('nostr')
+})
+export const accountLinkBeginResponseSchema = z.object({
+  /**
+   * Nostr: signed challenge token whose embedded nonce the other key must
+   * sign (NIP-42-style kind-22242 event with a `challenge` tag).
+   * Passkey: absent — the client uses POST /api/auth/passkey/authentication/options.
+   */
+  challenge: z.string().optional(),
+  /** The nonce to embed in the proof event (nostr method only). */
+  nonce: z.string().optional(),
+  expiresIn: z.number()
+})
+export type AccountLinkBeginResponse = z.infer<
+  typeof accountLinkBeginResponseSchema
+>
+
+/**
+ * Link/merge proof is Nostr-only: proving control of another account's
+ * passkey happens CLIENT-SIDE (PRF → derived key → this same signed-event
+ * proof), so there is no server-side passkey-assertion arm.
+ */
+export const accountLinkVerifyRequestSchema = z.object({
+  method: z.literal('nostr'),
+  challenge: z.string().min(16),
+  event: signedNostrEventSchema,
+  label: z.string().trim().min(1).max(64).optional()
+})
+export type AccountLinkVerifyRequest = z.infer<
+  typeof accountLinkVerifyRequestSchema
+>
+
+export const accountMergeCollisionSchema = z.object({
+  kind: z.enum([
+    'managed-key-unexported',
+    'managed-key-dropped',
+    'alby-subaccount-dropped',
+    'wallet-name-renamed',
+    'primary-address-kept',
+    'default-wallet-kept'
+  ]),
+  detail: z.string()
+})
+
+export const accountResourceSummarySchema = z.object({
+  userId: z.string(),
+  primaryPubkey: hexPubkeySchema,
+  identities: z.array(
+    z.object({
+      pubkey: hexPubkeySchema,
+      isPrimary: z.boolean(),
+      label: z.string().nullable()
+    })
+  ),
+  passkeys: z.number(),
+  lightningAddresses: z.array(z.string()),
+  /** Username of the primary lightning address, when one exists. */
+  primaryAddress: z.string().nullable(),
+  remoteWallets: z.number(),
+  /** Full wallet list so the merge wizard can offer a default-wallet choice. */
+  wallets: z.array(
+    z.object({ id: z.string(), name: z.string(), isDefault: z.boolean() })
+  ),
+  cards: z.number(),
+  cardDesigns: z.number(),
+  invoices: z.number(),
+  /** Stored NIP-65 relay list (empty = operator defaults). */
+  relays: z.array(z.string()),
+  /** Cached kind-0 profile of the primary pubkey, for per-field choices. */
+  profile: z
+    .object({
+      name: z.string().optional(),
+      displayName: z.string().optional(),
+      picture: z.string().optional()
+    })
+    .nullable(),
+  hasAlbySubAccount: z.boolean(),
+  hasManagedKey: z.boolean(),
+  managedKeyExported: z.boolean()
+})
+
+/**
+ * Result of the link/verify proof. Either the pubkey was unowned and is now
+ * linked, or it belongs to another account and a merge ticket is returned
+ * for the preview/commit flow.
+ */
+export const accountLinkVerifyResponseSchema = z.object({
+  linked: z.boolean(),
+  identity: nostrIdentitySummarySchema.optional(),
+  mergeTicket: z.string().optional(),
+  otherAccount: accountResourceSummarySchema.optional()
+})
+export type AccountLinkVerifyResponse = z.infer<
+  typeof accountLinkVerifyResponseSchema
+>
+
+export const accountMergePreviewRequestSchema = z.object({
+  mergeTicket: z.string().min(16)
+})
+export const accountMergePreviewResponseSchema = z.object({
+  survivor: accountResourceSummarySchema,
+  absorbed: accountResourceSummarySchema,
+  collisions: z.array(accountMergeCollisionSchema),
+  blocked: z.boolean()
+})
+export type AccountMergePreviewResponse = z.infer<
+  typeof accountMergePreviewResponseSchema
+>
+
+export const accountMergeRequestSchema = z.object({
+  mergeTicket: z.string().min(16),
+  mainPubkey: hexPubkeySchema,
+  /**
+   * Answers to merge conflicts from the wizard's resolve step. Omitted
+   * fields fall back to survivor-wins defaults. Relay lists are always
+   * unioned; profile choices are applied client-side (kind-0 publish).
+   */
+  resolutions: z
+    .object({
+      primaryAddressUsername: z.string().optional(),
+      defaultWalletId: z.string().optional()
+    })
+    .optional()
+})
+export const accountMergeResponseSchema = z.object({
+  survivorId: z.string(),
+  mainPubkey: hexPubkeySchema,
+  movedIdentities: z.number(),
+  movedPasskeys: z.number(),
+  movedAddresses: z.number(),
+  movedWallets: z.number(),
+  /** Size of the merged (unioned) relay list on the surviving account. */
+  mergedRelays: z.number()
+})
+export type AccountMergeResponse = z.infer<typeof accountMergeResponseSchema>
+
+export const updateIdentityRequestSchema = z
+  .object({
+    isPrimary: z.literal(true).optional(),
+    label: z.string().trim().min(1).max(64).nullable().optional()
+  })
+  .refine(d => d.isPrimary !== undefined || d.label !== undefined, {
+    message: 'Provide isPrimary or label'
+  })
+export type UpdateIdentityRequest = z.infer<typeof updateIdentityRequestSchema>

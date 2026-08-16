@@ -5,6 +5,7 @@ import { withErrorHandling } from '@/types/server/error-handler'
 import {
   AuthenticationError,
   InternalServerError,
+  ValidationError
 } from '@/types/server/errors'
 import { logger } from '@/lib/logger'
 import { jwtRequestSchema } from '@/lib/validation/schemas'
@@ -14,8 +15,8 @@ import { rateLimit, RateLimitPresets } from '@/lib/middleware/rate-limit'
 import { validateNip98 } from '@/lib/nip98'
 import { getRolePermissions } from '@/lib/auth/permissions'
 import { resolveRole } from '@/lib/auth/resolve-role'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
-import { prisma } from '@/lib/prisma'
 
 /**
  * POST /api/jwt - Authenticate with NIP-98, receive a JWT session token.
@@ -39,10 +40,11 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
       event: ActivityEvent.USER_AUTH_FAILED,
       level: 'WARN',
       message: 'NIP-98 authentication failed on /api/jwt',
-      metadata: { reason: error instanceof Error ? error.message : 'unknown' },
+      metadata: { reason: error instanceof Error ? error.message : 'unknown' }
     })
     throw new AuthenticationError('Invalid NIP-98 authentication', {
-      details: error instanceof Error ? error.message : 'Invalid or missing Nostr auth',
+      details:
+        error instanceof Error ? error.message : 'Invalid or missing Nostr auth'
     })
   }
 
@@ -50,9 +52,16 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
   let expiresIn: string | number = '1h'
   try {
     const data = await validateBody(request, jwtRequestSchema)
-    expiresIn = /^\d+$/.test(data.expiresIn) ? Number(data.expiresIn) : data.expiresIn
-  } catch {
-    // Body is optional for this endpoint; default to 1h
+    expiresIn = /^\d+$/.test(data.expiresIn)
+      ? Number(data.expiresIn)
+      : data.expiresIn
+  } catch (error) {
+    // A missing or unparseable body is fine — the body is optional here and
+    // defaults to 1h. But a body that IS present carrying an invalid or
+    // over-cap `expiresIn` must surface as a 400: silently downgrading it to
+    // 1h and returning 200 reads as a phantom "my session expires early" bug
+    // with nothing in the response to explain it.
+    if (error instanceof ValidationError) throw error
   }
 
   // 3. Get JWT secret
@@ -62,44 +71,44 @@ export const POST = withErrorHandling(async (request: NextRequest) => {
     throw new InternalServerError('Server configuration error')
   }
 
-  // 4. Resolve user role and permissions
+  // 4. Resolve the account (any linked pubkey → same account) and its role.
+  // The session presents the account's PRIMARY pubkey as its identity even
+  // when a secondary identity signed the NIP-98 event; `authPubkey` records
+  // which key actually authenticated.
+  const account = await resolveAccountByPubkey(pubkey).catch(() => null)
+  const sessionPubkey = account?.primaryPubkey ?? pubkey
   const role = await resolveRole(pubkey)
   const permissions = getRolePermissions(role)
 
   // 5. Create JWT with identity and authorization claims
   const token = createJwtToken(
     {
-      userId: pubkey,
-      pubkey,
+      userId: account?.id ?? sessionPubkey,
+      pubkey: sessionPubkey,
+      authPubkey: pubkey,
       role,
-      permissions,
+      permissions
     },
     config.jwt.secret,
     {
       expiresIn,
       issuer: 'lawallet-nwc',
-      audience: 'lawallet-users',
+      audience: 'lawallet-users'
     }
   )
-
-  // Best-effort resolve of userId for attribution; pubkey is the stable id,
-  // but the ActivityLog.userId column FKs to User.id so we look it up.
-  const userRecord = await prisma.user
-    .findUnique({ where: { pubkey }, select: { id: true } })
-    .catch(() => null)
 
   logActivity.fireAndForget({
     category: 'USER',
     event: ActivityEvent.USER_JWT_ISSUED,
-    message: `JWT issued for ${pubkey.slice(0, 8)}… (role=${role})`,
-    userId: userRecord?.id ?? null,
-    metadata: { pubkey, role, expiresIn },
+    message: `JWT issued for ${sessionPubkey.slice(0, 8)}… (role=${role})`,
+    userId: account?.id ?? null,
+    metadata: { pubkey: sessionPubkey, authPubkey: pubkey, role, expiresIn }
   })
 
   return NextResponse.json({
     token,
     expiresIn,
-    type: 'Bearer',
+    type: 'Bearer'
   })
 })
 
@@ -127,7 +136,7 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
   try {
     const result = await validateJwtFromRequest(request, jwtSecret!, {
       issuer: 'lawallet-nwc',
-      audience: 'lawallet-users',
+      audience: 'lawallet-users'
     })
 
     return NextResponse.json({
@@ -136,12 +145,12 @@ export const GET = withErrorHandling(async (request: NextRequest) => {
       role: result.payload.role,
       permissions: result.payload.permissions,
       issuedAt: new Date(result.payload.iat * 1000).toISOString(),
-      expiresAt: new Date(result.payload.exp * 1000).toISOString(),
+      expiresAt: new Date(result.payload.exp * 1000).toISOString()
     })
   } catch (error) {
     logger.error({ err: error }, 'JWT validation error')
     throw new AuthenticationError('Invalid or expired token', {
-      details: error instanceof Error ? error.message : 'Unknown error',
+      details: error instanceof Error ? error.message : 'Unknown error'
     })
   }
 })

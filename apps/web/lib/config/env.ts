@@ -27,6 +27,41 @@ const envSchema = z.object({
     .optional()
     .describe('Secret key for JWT token signing and verification'),
 
+  // Nostr key vault (passkey accounts)
+  KEY_VAULT_SECRET: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .min(32, 'KEY_VAULT_SECRET must be at least 32 characters long')
+      .optional()
+      .describe(
+        'Master secret encrypting server-custodied Nostr keys (passkey accounts). Losing it makes those keys unrecoverable.'
+      )
+  ),
+
+  KEY_VAULT_SECRET_PREVIOUS: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .optional()
+      .describe(
+        'Comma-separated previous KEY_VAULT_SECRET values still accepted for decryption during rotation'
+      )
+  ),
+
+  // NWC connection vault. Kept separate from the user-key vault so the
+  // listener never needs access to passkey-custody key material.
+  NWC_VAULT_SECRET: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .min(32, 'NWC_VAULT_SECRET must be at least 32 characters long')
+      .optional()
+      .describe(
+        'Master secret encrypting RemoteWallet NWC connection strings, the settings-managed proxy NWC URI, and the zap receipt signer'
+      )
+  ),
+
   // NWC Listener service (optional — web runs without it)
   LISTENER_URL: z.preprocess(
     emptyEnvToUndefined,
@@ -54,7 +89,10 @@ const envSchema = z.object({
     emptyEnvToUndefined,
     z
       .string()
-      .min(32, 'LISTENER_REQUEST_AUTH_SECRET must be at least 32 characters long')
+      .min(
+        32,
+        'LISTENER_REQUEST_AUTH_SECRET must be at least 32 characters long'
+      )
       .optional()
       .describe(
         'Dedicated web-to-listener bearer secret (falls back to LISTENER_AUTH_SECRET)'
@@ -136,14 +174,18 @@ const envSchema = z.object({
     .default('60')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .describe('Maximum requests per window for unauthenticated users (default: 60)'),
+    .describe(
+      'Maximum requests per window for unauthenticated users (default: 60)'
+    ),
 
   RATE_LIMIT_MAX_REQUESTS_AUTH: z
     .string()
     .default('300')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .describe('Maximum requests per window for authenticated users (default: 300)'),
+    .describe(
+      'Maximum requests per window for authenticated users (default: 300)'
+    ),
 
   UPSTASH_REDIS_URL: z
     .string()
@@ -210,6 +252,25 @@ const envSchema = z.object({
     .pipe(z.number().int().positive())
     .default('10')
     .describe('Maximum number of files per upload request (default: 10)'),
+
+  // Sentry error monitoring (optional — nothing initializes without a DSN)
+  SENTRY_DSN: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .url('SENTRY_DSN must be a valid URL')
+      .optional()
+      .describe('Sentry DSN for server-side error reporting (optional)')
+  ),
+
+  NEXT_PUBLIC_SENTRY_DSN: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .url('NEXT_PUBLIC_SENTRY_DSN must be a valid URL')
+      .optional()
+      .describe('Sentry DSN for browser-side error reporting (optional)')
+  ),
 
   NOSTR_PROFILE_CACHE_DIR: z
     .string()

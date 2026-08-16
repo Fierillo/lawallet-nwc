@@ -41,13 +41,13 @@ export const CURRENCY_CATALOG: Currency[] = [
   { code: 'PEN', name: 'Sol' },
   { code: 'USD', name: 'Dolar Americano' },
   { code: 'UYU', name: 'Peso Uruguayo' },
-  { code: 'VES', name: 'Bolívar' },
+  { code: 'VES', name: 'Bolívar' }
 ]
 
 const STORAGE_KEY = 'lawallet-active-currencies'
 const DEFAULT_ACTIVE: readonly string[] = ['SAT', 'BTC']
 const LOCKED_CODES = new Set(
-  CURRENCY_CATALOG.filter(c => c.locked).map(c => c.code),
+  CURRENCY_CATALOG.filter(c => c.locked).map(c => c.code)
 )
 
 let cache: string[] | null = null
@@ -116,9 +116,7 @@ function onStorage(e: StorageEvent) {
 
 /** Hook returning the currently active currencies in display order. */
 export function useActiveCurrencies(): Currency[] {
-  const codes = useSyncExternalStore(subscribe, read, () => [
-    ...DEFAULT_ACTIVE,
-  ])
+  const codes = useSyncExternalStore(subscribe, read, () => [...DEFAULT_ACTIVE])
   const out: Currency[] = []
   for (const code of codes) {
     const match = CURRENCY_CATALOG.find(c => c.code === code)
@@ -154,7 +152,24 @@ export const currenciesActions = {
       safe.push(code)
     }
     write(safe)
-  },
+  }
+}
+
+/**
+ * Restores account-scoped display preferences to their defaults on logout.
+ * Subscribers are notified so a still-mounted wallet shell cannot retain the
+ * previous account's selected currencies for a frame.
+ */
+export function clearCurrencyPreferences(): void {
+  cache = ensureLocked([...DEFAULT_ACTIVE])
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(STORAGE_KEY)
+    } catch {
+      // ignore unavailable storage
+    }
+  }
+  for (const listener of listeners) listener()
 }
 
 /** Test-only hook to drop the in-memory cache between cases. */

@@ -22,6 +22,18 @@ export interface AppConfig {
     enabled: boolean
   }
 
+  // Nostr key vault — at-rest encryption of custodied keys (passkey accounts)
+  keyVault: {
+    secret: string | undefined
+    previousSecrets: string[]
+    enabled: boolean
+  }
+
+  nwcVault: {
+    secret: string | undefined
+    enabled: boolean
+  }
+
   // NWC Listener service env values — raw inputs only. The EFFECTIVE config
   // (merged with the Settings DB, incl. the enable toggle) comes from
   // lib/listener-config.ts `getListenerConfig()`; consumers use that, not this.
@@ -69,6 +81,12 @@ export interface AppConfig {
 
   nostrProfileCache: {
     dir: string | undefined
+  }
+
+  // Sentry error monitoring (server-side DSN)
+  sentry: {
+    dsn: string | undefined
+    enabled: boolean
   }
 
   // Rate Limiting
@@ -121,6 +139,20 @@ export function getConfig(strict: boolean = true): AppConfig {
       enabled: !!env.JWT_SECRET
     },
 
+    keyVault: {
+      secret: env.KEY_VAULT_SECRET,
+      previousSecrets: (env.KEY_VAULT_SECRET_PREVIOUS ?? '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean),
+      enabled: !!env.KEY_VAULT_SECRET
+    },
+
+    nwcVault: {
+      secret: env.NWC_VAULT_SECRET,
+      enabled: !!env.NWC_VAULT_SECRET
+    },
+
     listener: {
       url: env.LISTENER_URL,
       secret: env.LISTENER_AUTH_SECRET,
@@ -162,6 +194,11 @@ export function getConfig(strict: boolean = true): AppConfig {
 
     nostrProfileCache: {
       dir: env.NOSTR_PROFILE_CACHE_DIR
+    },
+
+    sentry: {
+      dsn: env.SENTRY_DSN,
+      enabled: !!env.SENTRY_DSN
     },
 
     rateLimit: {

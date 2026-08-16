@@ -5,40 +5,45 @@ import { AuthenticationError, AuthorizationError } from '@/types/server/errors'
 
 // Mock dependencies
 vi.mock('@/lib/nip98', () => ({
-  validateNip98: vi.fn(),
+  validateNip98: vi.fn()
 }))
 
 vi.mock('@/lib/jwt', () => ({
-  validateJwtFromRequest: vi.fn(),
+  validateJwtFromRequest: vi.fn()
 }))
 
 vi.mock('@/lib/config', () => ({
   getConfig: vi.fn(() => ({
-    jwt: { enabled: true, secret: 'a'.repeat(32) },
-  })),
+    jwt: { enabled: true, secret: 'a'.repeat(32) }
+  }))
 }))
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     user: {
-      findUnique: vi.fn(),
+      findUnique: vi.fn()
     },
-  },
+    // Account resolution (lib/auth/account) checks NostrIdentity first and
+    // falls back to User.pubkey — the tests mock only the User fallback.
+    nostrIdentity: {
+      findUnique: vi.fn()
+    }
+  }
 }))
 
 vi.mock('@/lib/settings', () => ({
-  getSettings: vi.fn(),
+  getSettings: vi.fn()
 }))
 
 vi.mock('@/lib/public-url', () => ({
-  resolveApiUrl: vi.fn(async () => 'https://app.example.com'),
+  resolveApiUrl: vi.fn(async () => 'https://app.example.com')
 }))
 
 import {
   authenticate,
   authenticateWithRole,
   authenticateWithPermission,
-  withAuth,
+  withAuth
 } from '@/lib/auth/unified-auth'
 import { validateNip98 } from '@/lib/nip98'
 import { validateJwtFromRequest } from '@/lib/jwt'
@@ -63,14 +68,14 @@ afterEach(() => {
 function mockNostrRequest(url = 'http://localhost:3000/api/test') {
   return new Request(url, {
     method: 'GET',
-    headers: { Authorization: 'Nostr dGVzdA==' },
+    headers: { Authorization: 'Nostr dGVzdA==' }
   })
 }
 
 function mockBearerRequest(url = 'http://localhost:3000/api/test') {
   return new Request(url, {
     method: 'GET',
-    headers: { Authorization: 'Bearer valid-jwt-token' },
+    headers: { Authorization: 'Bearer valid-jwt-token' }
   })
 }
 
@@ -81,8 +86,13 @@ function mockNoAuthRequest(url = 'http://localhost:3000/api/test') {
 describe('authenticate', () => {
   describe('with NIP-98 (Nostr header)', () => {
     it('returns pubkey and role from DB', async () => {
-      vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-      vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'OPERATOR' } as any)
+      vi.mocked(validateNip98).mockResolvedValue({
+        pubkey: PUBKEY,
+        event: {} as any
+      })
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        role: 'OPERATOR'
+      } as any)
       vi.mocked(getSettings).mockResolvedValue({})
 
       const result = await authenticate(mockNostrRequest())
@@ -92,8 +102,13 @@ describe('authenticate', () => {
     })
 
     it('falls back to Settings root for admin', async () => {
-      vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-      vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'USER' } as any)
+      vi.mocked(validateNip98).mockResolvedValue({
+        pubkey: PUBKEY,
+        event: {} as any
+      })
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        role: 'USER'
+      } as any)
       vi.mocked(getSettings).mockResolvedValue({ root: PUBKEY })
 
       const result = await authenticate(mockNostrRequest())
@@ -104,27 +119,78 @@ describe('authenticate', () => {
     it('throws AuthenticationError on invalid NIP-98', async () => {
       vi.mocked(validateNip98).mockRejectedValue(new Error('bad event'))
 
-      await expect(authenticate(mockNostrRequest())).rejects.toThrow(AuthenticationError)
+      await expect(authenticate(mockNostrRequest())).rejects.toThrow(
+        AuthenticationError
+      )
     })
   })
 
   describe('with JWT (Bearer header)', () => {
-    it('returns pubkey and role from JWT claims', async () => {
+    beforeEach(() => {
+      // Session JWTs re-resolve the role from the DB on every request, so
+      // default to "no account, no root" and let each test opt into a role.
+      // (clearAllMocks keeps stale mockResolvedValue implementations — set
+      // them explicitly or a previous describe's role leaks into this one.)
+      vi.mocked(prisma.nostrIdentity.findUnique).mockResolvedValue(null)
+      vi.mocked(prisma.user.findUnique).mockResolvedValue(null)
+      vi.mocked(getSettings).mockResolvedValue({})
+    })
+
+    it('re-resolves a session JWT role from the DB instead of trusting the claim', async () => {
       vi.mocked(validateJwtFromRequest).mockResolvedValue({
         payload: { pubkey: PUBKEY, role: 'ADMIN', iat: 1000, exp: 2000 },
-        header: { alg: 'HS256' },
+        header: { alg: 'HS256' }
+      } as any)
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        id: 'user-1',
+        pubkey: PUBKEY,
+        role: 'OPERATOR'
       } as any)
 
       const result = await authenticate(mockBearerRequest())
       expect(result.pubkey).toBe(PUBKEY)
-      expect(result.role).toBe(Role.ADMIN)
+      // The claim says ADMIN, the DB says OPERATOR — the DB wins.
+      expect(result.role).toBe(Role.OPERATOR)
       expect(result.method).toBe('jwt')
+    })
+
+    it('a demoted admin loses privileges immediately, even with a live token', async () => {
+      vi.mocked(validateJwtFromRequest).mockResolvedValue({
+        payload: { pubkey: PUBKEY, role: 'ADMIN', iat: 1000, exp: 2000 },
+        header: { alg: 'HS256' }
+      } as any)
+      vi.mocked(prisma.user.findUnique).mockResolvedValue({
+        id: 'user-1',
+        pubkey: PUBKEY,
+        role: 'USER'
+      } as any)
+      vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
+
+      const result = await authenticate(mockBearerRequest())
+      expect(result.role).toBe(Role.USER)
+      await expect(
+        authenticateWithPermission(
+          mockBearerRequest(),
+          Permission.SETTINGS_WRITE
+        )
+      ).rejects.toThrow(AuthorizationError)
+    })
+
+    it('falls back to the Settings root for admin on a session JWT', async () => {
+      vi.mocked(validateJwtFromRequest).mockResolvedValue({
+        payload: { pubkey: PUBKEY, role: 'USER', iat: 1000, exp: 2000 },
+        header: { alg: 'HS256' }
+      } as any)
+      vi.mocked(getSettings).mockResolvedValue({ root: PUBKEY })
+
+      const result = await authenticate(mockBearerRequest())
+      expect(result.role).toBe(Role.ADMIN)
     })
 
     it('falls back to USER when JWT has invalid role', async () => {
       vi.mocked(validateJwtFromRequest).mockResolvedValue({
         payload: { pubkey: PUBKEY, role: 'INVALID', iat: 1000, exp: 2000 },
-        header: { alg: 'HS256' },
+        header: { alg: 'HS256' }
       } as any)
 
       const result = await authenticate(mockBearerRequest())
@@ -134,37 +200,45 @@ describe('authenticate', () => {
     it('throws AuthenticationError when JWT missing pubkey', async () => {
       vi.mocked(validateJwtFromRequest).mockResolvedValue({
         payload: { role: 'ADMIN', iat: 1000, exp: 2000 },
-        header: { alg: 'HS256' },
+        header: { alg: 'HS256' }
       } as any)
 
-      await expect(authenticate(mockBearerRequest())).rejects.toThrow(AuthenticationError)
+      await expect(authenticate(mockBearerRequest())).rejects.toThrow(
+        AuthenticationError
+      )
     })
 
     it('throws AuthenticationError on invalid JWT', async () => {
       vi.mocked(validateJwtFromRequest).mockRejectedValue(new Error('invalid'))
 
-      await expect(authenticate(mockBearerRequest())).rejects.toThrow(AuthenticationError)
+      await expect(authenticate(mockBearerRequest())).rejects.toThrow(
+        AuthenticationError
+      )
     })
 
     it('throws AuthenticationError when JWT not configured', async () => {
       vi.mocked(getConfig).mockReturnValue({
-        jwt: { enabled: false, secret: undefined },
+        jwt: { enabled: false, secret: undefined }
       } as any)
 
-      await expect(authenticate(mockBearerRequest())).rejects.toThrow(AuthenticationError)
+      await expect(authenticate(mockBearerRequest())).rejects.toThrow(
+        AuthenticationError
+      )
     })
   })
 
   describe('without auth header', () => {
     it('throws AuthenticationError', async () => {
-      await expect(authenticate(mockNoAuthRequest())).rejects.toThrow(AuthenticationError)
+      await expect(authenticate(mockNoAuthRequest())).rejects.toThrow(
+        AuthenticationError
+      )
     })
   })
 
   describe('with unsupported auth scheme', () => {
     it('throws AuthenticationError', async () => {
       const request = new Request('http://localhost:3000/api/test', {
-        headers: { Authorization: 'Basic abc123' },
+        headers: { Authorization: 'Basic abc123' }
       })
       await expect(authenticate(request)).rejects.toThrow(AuthenticationError)
     })
@@ -173,8 +247,13 @@ describe('authenticate', () => {
 
 describe('authenticateWithRole', () => {
   it('passes when role is sufficient', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const result = await authenticateWithRole(mockNostrRequest(), Role.ADMIN)
@@ -182,7 +261,10 @@ describe('authenticateWithRole', () => {
   })
 
   it('throws AuthorizationError when role is insufficient', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'USER' } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
 
@@ -193,12 +275,20 @@ describe('authenticateWithRole', () => {
 
   it('works with JWT auth too', async () => {
     vi.mocked(getConfig).mockReturnValue({
-      jwt: { enabled: true, secret: 'a'.repeat(32) },
+      jwt: { enabled: true, secret: 'a'.repeat(32) }
     } as any)
     vi.mocked(validateJwtFromRequest).mockResolvedValue({
       payload: { pubkey: PUBKEY, role: 'ADMIN', iat: 1000, exp: 2000 },
-      header: { alg: 'HS256' },
+      header: { alg: 'HS256' }
     } as any)
+    // Session JWT: the role gate reads the DB role, not the claim.
+    vi.mocked(prisma.nostrIdentity.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      id: 'user-1',
+      pubkey: PUBKEY,
+      role: 'ADMIN'
+    } as any)
+    vi.mocked(getSettings).mockResolvedValue({})
 
     const result = await authenticateWithRole(mockBearerRequest(), Role.ADMIN)
     expect(result.pubkey).toBe(PUBKEY)
@@ -208,16 +298,27 @@ describe('authenticateWithRole', () => {
 
 describe('authenticateWithPermission', () => {
   it('passes when role has the permission', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
-    const result = await authenticateWithPermission(mockNostrRequest(), Permission.SETTINGS_WRITE)
+    const result = await authenticateWithPermission(
+      mockNostrRequest(),
+      Permission.SETTINGS_WRITE
+    )
     expect(result.pubkey).toBe(PUBKEY)
   })
 
   it('throws AuthorizationError when permission is denied', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'USER' } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
 
@@ -229,8 +330,13 @@ describe('authenticateWithPermission', () => {
 
 describe('withAuth', () => {
   it('calls handler with auth result', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
@@ -245,27 +351,36 @@ describe('withAuth', () => {
   })
 
   it('enforces requiredRole option', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'USER' } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
 
     const handler = vi.fn()
     const wrapped = withAuth(handler, { requiredRole: Role.ADMIN })
 
-    await expect(wrapped(mockNostrRequest())).rejects.toThrow(AuthorizationError)
+    await expect(wrapped(mockNostrRequest())).rejects.toThrow(
+      AuthorizationError
+    )
     expect(handler).not.toHaveBeenCalled()
   })
 
   it('enforces requireNip98 option (rejects Bearer)', async () => {
     // Even though JWT would be valid, requireNip98 forces NIP-98 path
     // which will fail because the Bearer request doesn't have a Nostr header
-    vi.mocked(validateNip98).mockRejectedValue(new Error('not a Nostr auth header'))
+    vi.mocked(validateNip98).mockRejectedValue(
+      new Error('not a Nostr auth header')
+    )
 
     const handler = vi.fn()
     const wrapped = withAuth(handler, { requireNip98: true })
 
     // Bearer request should fail when NIP-98 is required
-    await expect(wrapped(mockBearerRequest())).rejects.toThrow(AuthenticationError)
+    await expect(wrapped(mockBearerRequest())).rejects.toThrow(
+      AuthenticationError
+    )
     expect(handler).not.toHaveBeenCalled()
   })
 })
@@ -273,19 +388,43 @@ describe('withAuth', () => {
 describe('device-token scopes (B.0)', () => {
   function mockDeviceToken(role: string, scopes: unknown) {
     vi.mocked(getConfig).mockReturnValue({
-      jwt: { enabled: true, secret: 'a'.repeat(32) },
+      jwt: { enabled: true, secret: 'a'.repeat(32) }
     } as any)
     vi.mocked(validateJwtFromRequest).mockResolvedValue({
-      payload: { pubkey: PUBKEY, role, scopes, iat: 1000, exp: 2000 },
-      header: { alg: 'HS256' },
+      payload: {
+        pubkey: PUBKEY,
+        role,
+        scopes,
+        // kind: 'device' + matching apiUrl mark this as a device token —
+        // without them the payload is a session JWT and the role gets
+        // re-resolved from the DB instead of read from the claim.
+        kind: 'device',
+        apiUrl: 'https://app.example.com',
+        iat: 1000,
+        exp: 2000
+      },
+      header: { alg: 'HS256' }
     } as any)
   }
+
+  it('keeps the minted role without a DB role lookup', async () => {
+    mockDeviceToken('OPERATOR', undefined)
+
+    const result = await authenticate(mockBearerRequest())
+    expect(result.role).toBe(Role.OPERATOR)
+    expect(prisma.nostrIdentity.findUnique).not.toHaveBeenCalled()
+    expect(prisma.user.findUnique).not.toHaveBeenCalled()
+    expect(getSettings).not.toHaveBeenCalled()
+  })
 
   it('surfaces a valid scopes array on the AuthResult', async () => {
     mockDeviceToken('OPERATOR', ['cards:read', 'cards:write'])
 
     const result = await authenticate(mockBearerRequest())
-    expect(result.scopes).toEqual([Permission.CARDS_READ, Permission.CARDS_WRITE])
+    expect(result.scopes).toEqual([
+      Permission.CARDS_READ,
+      Permission.CARDS_WRITE
+    ])
   })
 
   it('narrows permission checks to the scopes claim', async () => {
@@ -293,12 +432,12 @@ describe('device-token scopes (B.0)', () => {
 
     // In scope → allowed
     await expect(
-      authenticateWithPermission(mockBearerRequest(), Permission.CARDS_READ),
+      authenticateWithPermission(mockBearerRequest(), Permission.CARDS_READ)
     ).resolves.toMatchObject({ pubkey: PUBKEY })
 
     // Out of scope → denied even though ADMIN would normally hold it
     await expect(
-      authenticateWithPermission(mockBearerRequest(), Permission.SETTINGS_WRITE),
+      authenticateWithPermission(mockBearerRequest(), Permission.SETTINGS_WRITE)
     ).rejects.toThrow(AuthorizationError)
   })
 
@@ -308,7 +447,7 @@ describe('device-token scopes (B.0)', () => {
     mockDeviceToken('USER', ['cards:write'])
 
     await expect(
-      authenticateWithPermission(mockBearerRequest(), Permission.CARDS_WRITE),
+      authenticateWithPermission(mockBearerRequest(), Permission.CARDS_WRITE)
     ).resolves.toMatchObject({ pubkey: PUBKEY })
   })
 
@@ -319,7 +458,7 @@ describe('device-token scopes (B.0)', () => {
     const result = await authenticate(mockBearerRequest())
     expect(result.scopes).toBeUndefined()
     await expect(
-      authenticateWithPermission(mockBearerRequest(), Permission.SETTINGS_WRITE),
+      authenticateWithPermission(mockBearerRequest(), Permission.SETTINGS_WRITE)
     ).resolves.toMatchObject({ pubkey: PUBKEY })
   })
 
@@ -334,7 +473,7 @@ describe('device-token scopes (B.0)', () => {
 describe('device-token apiUrl enforcement (B.0)', () => {
   function mockDeviceTokenWithApiUrl(apiUrl: unknown) {
     vi.mocked(getConfig).mockReturnValue({
-      jwt: { enabled: true, secret: 'a'.repeat(32) },
+      jwt: { enabled: true, secret: 'a'.repeat(32) }
     } as any)
     vi.mocked(validateJwtFromRequest).mockResolvedValue({
       payload: {
@@ -343,9 +482,9 @@ describe('device-token apiUrl enforcement (B.0)', () => {
         kind: 'device',
         apiUrl,
         iat: 1000,
-        exp: 2000,
+        exp: 2000
       },
-      header: { alg: 'HS256' },
+      header: { alg: 'HS256' }
     } as any)
   }
 
@@ -362,7 +501,7 @@ describe('device-token apiUrl enforcement (B.0)', () => {
     mockDeviceTokenWithApiUrl('https://app.example.com/')
 
     await expect(authenticate(mockBearerRequest())).resolves.toMatchObject({
-      pubkey: PUBKEY,
+      pubkey: PUBKEY
     })
   })
 
@@ -370,7 +509,7 @@ describe('device-token apiUrl enforcement (B.0)', () => {
     mockDeviceTokenWithApiUrl('https://other.example.com')
 
     await expect(authenticate(mockBearerRequest())).rejects.toThrow(
-      AuthenticationError,
+      AuthenticationError
     )
   })
 
@@ -378,18 +517,23 @@ describe('device-token apiUrl enforcement (B.0)', () => {
     mockDeviceTokenWithApiUrl(undefined)
 
     await expect(authenticate(mockBearerRequest())).rejects.toThrow(
-      AuthenticationError,
+      AuthenticationError
     )
   })
 
   it('does not enforce apiUrl on a session JWT (no kind claim)', async () => {
     vi.mocked(validateJwtFromRequest).mockResolvedValue({
       payload: { pubkey: PUBKEY, role: 'ADMIN', iat: 1000, exp: 2000 },
-      header: { alg: 'HS256' },
+      header: { alg: 'HS256' }
     } as any)
+    // Session JWTs re-resolve the role from the DB — pin it explicitly.
+    vi.mocked(prisma.nostrIdentity.findUnique).mockResolvedValue(null)
+    vi.mocked(prisma.user.findUnique).mockResolvedValue(null)
+    vi.mocked(getSettings).mockResolvedValue({})
 
     const result = await authenticate(mockBearerRequest())
     expect(result.pubkey).toBe(PUBKEY)
+    expect(result.role).toBe(Role.USER)
     expect(resolveApiUrl).not.toHaveBeenCalled()
   })
 })

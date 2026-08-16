@@ -1,4 +1,5 @@
 import { decode } from 'light-bolt11-decoder'
+import bolt11Codec from 'bolt11'
 import {
   CARD_MAX_WITHDRAWABLE_MSATS,
   CARD_MIN_WITHDRAWABLE_MSATS
@@ -46,6 +47,47 @@ export function extractAmountSats(bolt11: string): number | null {
   } catch {
     return null
   }
+}
+
+/** Exact amount/hash/expiry validation shared by deferred proxy forwarding. */
+export function parseExactPaymentInvoice(bolt11: string): {
+  paymentHash: string
+  amountMsats: number
+  expiresAt: number
+  descriptionHash: string | null
+} {
+  let decoded: ReturnType<typeof bolt11Codec.decode>
+  try {
+    // This decoder verifies the checksum/signature and optional payee pubkey
+    // binding; light-bolt11-decoder intentionally does not.
+    decoded = decodeVerifiedInvoice(bolt11)
+  } catch {
+    throw new Error('Invalid Lightning invoice')
+  }
+  const amountMsats = Number(decoded.millisatoshis)
+  const paymentHash = decoded.tagsObject.payment_hash?.toLowerCase() ?? ''
+  const descriptionHash =
+    decoded.tagsObject.purpose_commit_hash?.toLowerCase() ?? null
+  if (!Number.isSafeInteger(amountMsats) || amountMsats <= 0) {
+    throw new Error('Lightning invoice must contain a positive exact amount')
+  }
+  if (!/^[0-9a-f]{64}$/.test(paymentHash)) {
+    throw new Error('Lightning invoice payment hash is missing or invalid')
+  }
+  const expiresAtSeconds = decoded.timeExpireDate
+  if (!Number.isFinite(expiresAtSeconds)) {
+    throw new Error('Lightning invoice expiry is missing or invalid')
+  }
+  return {
+    paymentHash,
+    amountMsats,
+    expiresAt: expiresAtSeconds! * 1000,
+    descriptionHash
+  }
+}
+
+function decodeVerifiedInvoice(value: string) {
+  return bolt11Codec.decode(value)
 }
 
 export interface CardPaymentInvoice {
@@ -118,16 +160,18 @@ export function parseCardPaymentInvoice(
     timestampSection && 'value' in timestampSection
       ? Number(timestampSection.value)
       : Number.NaN
-  // light-bolt11-decoder exposes `expiry` as the absolute expiry timestamp
-  // (`timestamp + expiry_tag`), not as the tag's duration. When the optional
-  // tag is absent BOLT-11's default lifetime is one hour.
-  const expiresAtSeconds =
-    typeof decoded.expiry === 'number' && Number.isFinite(decoded.expiry)
-      ? decoded.expiry
-      : timestamp + 3600
   if (!Number.isFinite(timestamp)) {
     throw new Error('Invoice timestamp is missing or invalid')
   }
+  // light-bolt11-decoder exposes `expiry` as the tag's *duration* in seconds,
+  // not as an absolute timestamp, so it must be added to the invoice
+  // timestamp. When the optional tag is absent BOLT-11's default lifetime is
+  // one hour.
+  const expirySeconds =
+    typeof decoded.expiry === 'number' && Number.isFinite(decoded.expiry)
+      ? decoded.expiry
+      : 3600
+  const expiresAtSeconds = timestamp + expirySeconds
   const expiresAt = expiresAtSeconds * 1000
   const invoice = {
     bolt11,

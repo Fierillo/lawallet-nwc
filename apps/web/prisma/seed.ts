@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto'
 import { PrismaClient } from '../lib/generated/prisma'
+import { encryptRemoteWalletEnvelope } from '../lib/wallet/remote-wallet-vault-core'
+import { DEV_ADMIN_USER_ID } from '../lib/dev-identity'
 import { mockUserData } from '../mocks/user'
 import { mockLightningAddressData } from '../mocks/lightning-address'
 import { mockNtag424Data } from '../mocks/ntag424'
@@ -7,6 +10,12 @@ import { mockCardDesignData } from '../mocks/card-design'
 const prisma = new PrismaClient()
 
 async function main() {
+  const nwcVaultSecret = process.env.NWC_VAULT_SECRET
+  if (!nwcVaultSecret || nwcVaultSecret.length < 32) {
+    throw new Error(
+      'NWC_VAULT_SECRET (32+ characters) is required to seed NWC wallets'
+    )
+  }
   console.log('🌱 Starting seeding...')
 
   // Create users first since they are referenced by other entities
@@ -17,7 +26,14 @@ async function main() {
         data: {
           id: user.id,
           pubkey: user.pubkey,
-          createdAt: user.createdAt
+          createdAt: user.createdAt,
+          // Session JWTs re-resolve the role from the DB on every request, so
+          // the dev admin must actually carry ADMIN here — minting a token
+          // with an ADMIN claim is no longer enough (e2e fixtures do that).
+          role: user.id === DEV_ADMIN_USER_ID ? 'ADMIN' : undefined,
+          nostrIdentities: {
+            create: { pubkey: user.pubkey, isPrimary: true }
+          }
         }
       })
     )
@@ -31,18 +47,28 @@ async function main() {
   const remoteWallets = await Promise.all(
     mockUserData
       .filter(u => Boolean(u.nwc))
-      .map(u =>
-        prisma.remoteWallet.create({
+      .map(u => {
+        const walletId = randomUUID()
+        return prisma.remoteWallet.create({
           data: {
+            id: walletId,
             userId: u.id,
             name: 'NWC Wallet',
             type: 'NWC',
-            config: { connectionString: u.nwc as string, mode: 'RECEIVE' },
+            config: {
+              connectionString: encryptRemoteWalletEnvelope(
+                u.nwc as string,
+                walletId,
+                nwcVaultSecret
+              ),
+              mode: 'RECEIVE'
+            },
+            nwcConfigEncryptedAt: new Date(),
             status: 'ACTIVE',
             isDefault: true
           }
         })
-      )
+      })
   )
   console.log(`Created ${remoteWallets.length} remote wallets`)
 

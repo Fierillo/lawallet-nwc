@@ -33,6 +33,14 @@ import {
   type StoredEvent
 } from './store'
 import { WebhookDispatcher } from './webhook'
+import { requestProxyReconcile } from './proxy-reconcile'
+import { createProcessErrorReporter } from './process-errors'
+import {
+  captureException,
+  endSentrySession,
+  flushSentry,
+  initSentry
+} from './sentry'
 
 async function main(): Promise<void> {
   // @getalby/sdk's relay layer needs the global WebSocket (Node >= 22).
@@ -43,6 +51,7 @@ async function main(): Promise<void> {
     )
   }
   const env = getEnv()
+  initSentry(env)
   const logger = initLogger(env)
   patchConsole(logger)
   const log = createLogger({ module: 'main' })
@@ -54,15 +63,15 @@ async function main(): Promise<void> {
   // durable state lives in Postgres and whose relay connections auto-reconnect,
   // so dropping every live connection on one stray async error is worse than
   // continuing. (The /health endpoint still exposes real trouble.)
-  process.on('unhandledRejection', reason => {
-    log.error(
-      { err: reason instanceof Error ? reason : new Error(String(reason)) },
-      'process.unhandled_rejection'
-    )
+  const reportProcessError = createProcessErrorReporter(log, {
+    onReport: (kind, error) => captureException(error, { tags: { kind } })
   })
-  process.on('uncaughtException', err => {
-    log.error({ err }, 'process.uncaught_exception')
-  })
+  process.on('unhandledRejection', reason =>
+    reportProcessError('unhandled_rejection', reason)
+  )
+  process.on('uncaughtException', err =>
+    reportProcessError('uncaught_exception', err)
+  )
 
   const pgPool = createPgPool(env, createLogger({ module: 'db' }))
   await waitForDb(pgPool, log)
@@ -233,6 +242,7 @@ async function main(): Promise<void> {
     log: createLogger({ module: 'pool' }),
     onNotification,
     onWalletError: (wallet, error) => {
+      captureException(error, { tags: { walletId: wallet.id } })
       void dispatcher
         .sendListenerError(wallet.id, 'connection_failed', error.message)
         .catch(() => {})
@@ -257,7 +267,7 @@ async function main(): Promise<void> {
     : null
 
   nwcPool.seedLastEventAt(await lastEventAtByWallet(pgPool))
-  const wallets = await loadActiveNwcWallets(pgPool, log)
+  const wallets = await loadActiveNwcWallets(pgPool, log, env)
   log.info({ count: wallets.length }, 'wallets.loaded')
   await nwcPool.reconcile(wallets)
   // Re-seed: reconcile created the connections the seed applies to.
@@ -270,12 +280,12 @@ async function main(): Promise<void> {
       metrics.notifiesReceived++
       if (!payload) {
         metrics.reconciles++
-        void loadActiveNwcWallets(pgPool, log)
+        void loadActiveNwcWallets(pgPool, log, env)
           .then(desired => nwcPool.reconcile(desired))
           .catch(err => log.error({ err }, 'reconcile.full_failed'))
         return
       }
-      void loadActiveWalletById(pgPool, payload.id, log)
+      void loadActiveWalletById(pgPool, payload.id, log, env)
         .then(row => nwcPool.reconcileOne(payload.id, row))
         .catch(err =>
           log.error({ err, walletId: payload.id }, 'reconcile.one_failed')
@@ -303,13 +313,17 @@ async function main(): Promise<void> {
   })
   log.info({ port: env.LISTENER_PORT }, 'http.listening')
 
+  // Recover due settlements immediately after startup; the interval below is
+  // the durable ten-minute safety net rather than a startup delay.
+  void requestProxyReconcile(env, createLogger({ module: 'proxy-reconcile' }))
+
   const timers: NodeJS.Timeout[] = [
     setInterval(() => {
       metrics.reconciles++
       // Wallets may gain list_transactions support over time — let the next
       // catch-up retry them.
       catchup.resetUnsupported()
-      void loadActiveNwcWallets(pgPool, log)
+      void loadActiveNwcWallets(pgPool, log, env)
         .then(desired => nwcPool.reconcile(desired))
         .catch(err => log.error({ err }, 'reconcile.periodic_failed'))
     }, env.RECONCILE_INTERVAL_MS),
@@ -330,7 +344,13 @@ async function main(): Promise<void> {
           .catch(err => log.error({ err }, 'webhook.sweep_failed'))
       },
       5 * 60 * 1000
-    )
+    ),
+    setInterval(() => {
+      void requestProxyReconcile(
+        env,
+        createLogger({ module: 'proxy-reconcile' })
+      )
+    }, env.PROXY_RECONCILE_INTERVAL_MS)
   ]
   if (env.CATCHUP_ENABLED && env.CATCHUP_INTERVAL_MS > 0) {
     // Safety net for gaps neither the subscribe hook nor the reconnect
@@ -371,6 +391,8 @@ async function main(): Promise<void> {
       await changeListener.stop()
       await nwcPool.closeAll()
       await pgPool.end()
+      endSentrySession()
+      await flushSentry(2000)
       log.info('shutdown.complete')
       process.exit(0)
     })().catch(err => {

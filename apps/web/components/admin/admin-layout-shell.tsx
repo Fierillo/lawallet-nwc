@@ -3,10 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Database, RefreshCw } from 'lucide-react'
 import { usePathname, useRouter } from 'next/navigation'
-import {
-  SidebarProvider,
-  SidebarInset,
-} from '@/components/ui/sidebar'
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/components/admin/auth-context'
@@ -22,8 +19,11 @@ interface DatabaseStatus {
 }
 
 const HEALTH_POLL_INTERVAL_MS = 25_000
+const ADMIN_SIDEBAR_BREAKPOINT = 1024
 
-function useDatabaseStatus(enabled: boolean): DatabaseStatus & { refetch: () => Promise<void> } {
+function useDatabaseStatus(
+  enabled: boolean
+): DatabaseStatus & { refetch: () => Promise<void> } {
   const [checking, setChecking] = useState(enabled)
   const [error, setError] = useState<Error | null>(null)
 
@@ -39,12 +39,19 @@ function useDatabaseStatus(enabled: boolean): DatabaseStatus & { refetch: () => 
       const response = await fetch('/api/health', { cache: 'no-store' })
       const body = await response.json().catch(() => null)
       if (!response.ok || body?.database === 'down') {
-        const detail = typeof body?.detail === 'string' ? `: ${body.detail}` : ''
-        throw new Error(`${body?.message || 'Database server is not accessible'}${detail}`)
+        const detail =
+          typeof body?.detail === 'string' ? `: ${body.detail}` : ''
+        throw new Error(
+          `${body?.message || 'Database server is not accessible'}${detail}`
+        )
       }
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err : new Error('Database server is not accessible'))
+      setError(
+        err instanceof Error
+          ? err
+          : new Error('Database server is not accessible')
+      )
     } finally {
       setChecking(false)
     }
@@ -53,7 +60,10 @@ function useDatabaseStatus(enabled: boolean): DatabaseStatus & { refetch: () => 
   useEffect(() => {
     void check()
     if (!enabled) return
-    const interval = window.setInterval(() => void check(), HEALTH_POLL_INTERVAL_MS)
+    const interval = window.setInterval(
+      () => void check(),
+      HEALTH_POLL_INTERVAL_MS
+    )
     return () => window.clearInterval(interval)
   }, [check, enabled])
 
@@ -63,7 +73,7 @@ function useDatabaseStatus(enabled: boolean): DatabaseStatus & { refetch: () => 
 function DatabaseUnavailable({
   error,
   checking,
-  onRetry,
+  onRetry
 }: {
   error: Error
   checking: boolean
@@ -93,8 +103,15 @@ function DatabaseUnavailable({
           </div>
         </div>
         <div className="mt-5 flex justify-end">
-          <Button variant="outline" size="sm" onClick={onRetry} disabled={checking}>
-            <RefreshCw className={`mr-2 size-4 ${checking ? 'animate-spin' : ''}`} />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+            disabled={checking}
+          >
+            <RefreshCw
+              className={`mr-2 size-4 ${checking ? 'animate-spin' : ''}`}
+            />
             Retry
           </Button>
         </div>
@@ -127,7 +144,7 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex min-h-dvh bg-background">
         {/* Sidebar skeleton */}
-        <div className="hidden md:flex w-64 flex-col border-r border-border p-4 gap-4">
+        <div className="hidden lg:flex w-64 flex-col border-r border-border p-4 gap-4">
           <Skeleton className="h-8 w-32" />
           <div className="flex flex-col gap-2 mt-4">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -164,7 +181,7 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
   // non-admin users see the maintenance screen while admins keep a banner
   // at the top and can still toggle the flag.
   return (
-    <SidebarProvider>
+    <SidebarProvider mobileBreakpoint={ADMIN_SIDEBAR_BREAKPOINT}>
       <AdminSidebar disabled={databaseDown} />
       {/* `min-w-0` on the SidebarInset main prevents flex children
           (wide tables, long URLs, stat cards) from expanding the layout
@@ -172,7 +189,7 @@ export function AdminLayoutShell({ children }: { children: React.ReactNode }) {
           internal overflow:auto has nothing to clip against and the
           whole admin shell scrolls horizontally. */}
       <SidebarInset className="min-w-0">
-        <main className="flex min-w-0 flex-1 flex-col pb-16 md:pb-0">
+        <main className="flex min-w-0 flex-1 flex-col pb-16 lg:pb-0">
           {database.error ? (
             <DatabaseUnavailable
               error={database.error}

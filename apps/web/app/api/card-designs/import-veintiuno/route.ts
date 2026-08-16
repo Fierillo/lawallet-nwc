@@ -7,6 +7,7 @@ import { withErrorHandling } from '@/types/server/error-handler'
 import { InternalServerError, ValidationError } from '@/types/server/errors'
 import { logger } from '@/lib/logger'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
+import { imageUrlSchema } from '@/lib/validation/schemas'
 import { eventBus } from '@/lib/events/event-bus'
 
 /**
@@ -64,25 +65,41 @@ export const POST = withErrorHandling(async (request: Request) => {
   const isDevelopment = process.env.NODE_ENV === 'development'
   if (domain !== VEINTIUNO_DOMAIN && !isDevelopment) {
     throw new ValidationError(
-      `Importing the veintiuno.lat catalog is only available on ${VEINTIUNO_DOMAIN}`,
+      `Importing the veintiuno.lat catalog is only available on ${VEINTIUNO_DOMAIN}`
     )
   }
 
   logger.info('Fetching full card catalog from veintiuno.lat')
   const res = await fetch(CARDS_URL)
   if (!res.ok) {
-    logger.error({ status: res.status }, 'Failed to fetch cards from veintiuno.lat')
+    logger.error(
+      { status: res.status },
+      'Failed to fetch cards from veintiuno.lat'
+    )
     throw new InternalServerError('Failed to fetch cards from veintiuno.lat', {
-      details: { status: res.status },
+      details: { status: res.status }
     })
   }
 
   const payload = (await res.json()) as unknown
   const cards = Array.isArray(payload) ? (payload as VeintiunoCard[]) : []
-  // Keep only well-formed entries: an id and an absolute image URL.
-  const valid = cards.filter(
-    c => !!c?.id && typeof c.imageUrl === 'string' && /^https?:\/\//.test(c.imageUrl),
-  )
+  // Keep only well-formed entries: an id and an http(s) image URL within the
+  // stored-length budget. `imageUrlSchema` rather than a `^https?://` regex so
+  // a compromised or changed upstream catalog can't smuggle a `javascript:` /
+  // `data:` / `file:` URL into a column the admin UI renders.
+  const valid = cards.flatMap(c => {
+    const parsed = imageUrlSchema.safeParse(c?.imageUrl)
+    if (!c?.id || !parsed.success) return []
+    // Carry the parsed (trimmed) URL forward, not the raw upstream string.
+    return [{ ...c, imageUrl: parsed.data }]
+  })
+  const rejected = cards.length - valid.length
+  if (rejected > 0) {
+    logger.warn(
+      { rejected },
+      'Skipped catalog entries with a missing id or unusable image URL'
+    )
+  }
   logger.info({ count: valid.length }, 'Fetched valid designs from catalog')
 
   if (valid.length === 0) {
@@ -91,14 +108,14 @@ export const POST = withErrorHandling(async (request: Request) => {
       message: 'No designs to import',
       imported: 0,
       updated: 0,
-      total: 0,
+      total: 0
     })
   }
 
   // Which ids already exist, so we can report imported vs updated counts.
   const existing = await prisma.cardDesign.findMany({
     where: { id: { in: valid.map(c => c.id) } },
-    select: { id: true },
+    select: { id: true }
   })
   const existingIds = new Set(existing.map(d => d.id))
 
@@ -112,14 +129,14 @@ export const POST = withErrorHandling(async (request: Request) => {
           id: card.id,
           imageUrl: card.imageUrl,
           description: designName(card),
-          userId: null,
+          userId: null
         },
         update: {
           imageUrl: card.imageUrl,
-          description: designName(card),
-        },
-      }),
-    ),
+          description: designName(card)
+        }
+      })
+    )
   )
 
   const imported = valid.filter(c => !existingIds.has(c.id)).length
@@ -133,7 +150,7 @@ export const POST = withErrorHandling(async (request: Request) => {
     message: `Imported ${imported} new design${imported === 1 ? '' : 's'}, updated ${updated}`,
     imported,
     updated,
-    total: valid.length,
+    total: valid.length
   })
 })
 
@@ -152,7 +169,7 @@ export const DELETE = withErrorHandling(async (request: Request) => {
 
   // Only delete designs no card depends on; the rest stay (and are reported).
   const { count: removed } = await prisma.cardDesign.deleteMany({
-    where: { ...where, cards: { none: {} } },
+    where: { ...where, cards: { none: {} } }
   })
   const skipped = total - removed
 
@@ -168,6 +185,6 @@ export const DELETE = withErrorHandling(async (request: Request) => {
         ? `Removed ${removed} imported design${removed === 1 ? '' : 's'}; kept ${skipped} still used by a card`
         : `Removed ${removed} imported design${removed === 1 ? '' : 's'}`,
     removed,
-    skipped,
+    skipped
   })
 })

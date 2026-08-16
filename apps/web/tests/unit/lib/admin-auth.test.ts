@@ -5,19 +5,24 @@ import { AuthenticationError, AuthorizationError } from '@/types/server/errors'
 
 // Mock dependencies
 vi.mock('@/lib/nip98', () => ({
-  validateNip98: vi.fn(),
+  validateNip98: vi.fn()
 }))
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     user: {
-      findUnique: vi.fn(),
+      findUnique: vi.fn()
     },
-  },
+    // Account resolution (lib/auth/account) checks NostrIdentity first and
+    // falls back to User.pubkey — the tests mock only the User fallback.
+    nostrIdentity: {
+      findUnique: vi.fn()
+    }
+  }
 }))
 
 vi.mock('@/lib/settings', () => ({
-  getSettings: vi.fn(),
+  getSettings: vi.fn()
 }))
 
 import {
@@ -27,7 +32,7 @@ import {
   validateAdminAuth,
   withAdminAuth,
   withRoleAuth,
-  withPermissionAuth,
+  withPermissionAuth
 } from '@/lib/admin-auth'
 import { validateNip98 } from '@/lib/nip98'
 import { prisma } from '@/lib/prisma'
@@ -42,31 +47,39 @@ beforeEach(() => {
 function mockRequest(url = 'http://localhost:3000/api/admin/test') {
   return new Request(url, {
     method: 'GET',
-    headers: { Authorization: 'Nostr dGVzdA==' },
+    headers: { Authorization: 'Nostr dGVzdA==' }
   })
 }
 
 describe('validateNip98Auth', () => {
   it('returns pubkey on success', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
     const result = await validateNip98Auth(mockRequest())
     expect(result).toBe(PUBKEY)
   })
 
   it('throws AuthenticationError on nip98 failure', async () => {
     vi.mocked(validateNip98).mockRejectedValue(new Error('bad event'))
-    await expect(validateNip98Auth(mockRequest())).rejects.toThrow(AuthenticationError)
+    await expect(validateNip98Auth(mockRequest())).rejects.toThrow(
+      AuthenticationError
+    )
   })
 })
 
 describe('validateRoleAuth', () => {
   beforeEach(() => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
   })
 
   it('passes when user has sufficient role from DB', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue({
-      role: 'ADMIN',
+      role: 'ADMIN'
     } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
@@ -76,18 +89,18 @@ describe('validateRoleAuth', () => {
 
   it('throws AuthorizationError when user role is insufficient', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue({
-      role: 'USER',
+      role: 'USER'
     } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different_pubkey' })
 
-    await expect(
-      validateRoleAuth(mockRequest(), Role.ADMIN)
-    ).rejects.toThrow(AuthorizationError)
+    await expect(validateRoleAuth(mockRequest(), Role.ADMIN)).rejects.toThrow(
+      AuthorizationError
+    )
   })
 
   it('falls back to Settings root for ADMIN role', async () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue({
-      role: 'USER',
+      role: 'USER'
     } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: PUBKEY })
 
@@ -107,22 +120,30 @@ describe('validateRoleAuth', () => {
     vi.mocked(prisma.user.findUnique).mockResolvedValue(null)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
 
-    await expect(
-      validateRoleAuth(mockRequest(), Role.VIEWER)
-    ).rejects.toThrow(AuthorizationError)
+    await expect(validateRoleAuth(mockRequest(), Role.VIEWER)).rejects.toThrow(
+      AuthorizationError
+    )
   })
 })
 
 describe('validatePermissionAuth', () => {
   beforeEach(() => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
   })
 
   it('passes when user role has the permission', async () => {
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
-    const result = await validatePermissionAuth(mockRequest(), Permission.SETTINGS_WRITE)
+    const result = await validatePermissionAuth(
+      mockRequest(),
+      Permission.SETTINGS_WRITE
+    )
     expect(result).toBe(PUBKEY)
   })
 
@@ -138,8 +159,13 @@ describe('validatePermissionAuth', () => {
 
 describe('validateAdminAuth', () => {
   it('delegates to validateRoleAuth with ADMIN', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const result = await validateAdminAuth(mockRequest())
@@ -149,8 +175,13 @@ describe('validateAdminAuth', () => {
 
 describe('withAdminAuth', () => {
   it('calls handler after successful admin auth', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
@@ -171,8 +202,13 @@ describe('withAdminAuth', () => {
 
 describe('withRoleAuth', () => {
   it('calls handler when role is sufficient', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'OPERATOR' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'OPERATOR'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
@@ -184,8 +220,13 @@ describe('withRoleAuth', () => {
 
 describe('withPermissionAuth', () => {
   it('calls handler when permission is granted', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
-    vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'ADMIN' } as any)
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({
+      role: 'ADMIN'
+    } as any)
     vi.mocked(getSettings).mockResolvedValue({})
 
     const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
@@ -195,7 +236,10 @@ describe('withPermissionAuth', () => {
   })
 
   it('throws when permission is denied', async () => {
-    vi.mocked(validateNip98).mockResolvedValue({ pubkey: PUBKEY, event: {} as any })
+    vi.mocked(validateNip98).mockResolvedValue({
+      pubkey: PUBKEY,
+      event: {} as any
+    })
     vi.mocked(prisma.user.findUnique).mockResolvedValue({ role: 'USER' } as any)
     vi.mocked(getSettings).mockResolvedValue({ root: 'different' })
 

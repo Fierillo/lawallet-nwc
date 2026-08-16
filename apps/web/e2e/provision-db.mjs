@@ -79,7 +79,14 @@ if (!new URL(databaseUrl).pathname.endsWith('_e2e')) {
 const env = {
   ...process.env,
   DATABASE_URL: databaseUrl,
-  E2E_DATABASE_URL: databaseUrl
+  E2E_DATABASE_URL: databaseUrl,
+  // The seed encrypts mock NWC wallets and refuses to run without a 32+ char
+  // vault secret. Provide a fixed E2E default so `pnpm e2e` needs zero setup
+  // (a real env value still wins). Must match E2E_NWC_VAULT_SECRET in
+  // e2e/env.ts so the webServer decrypts what the seed encrypted.
+  NWC_VAULT_SECRET:
+    process.env.NWC_VAULT_SECRET ||
+    'ci-e2e-nwc-vault-secret-minimum-32-characters'
 }
 const run = cmd => execSync(cmd, { cwd: webRoot, env, stdio: 'inherit' })
 
@@ -96,14 +103,18 @@ async function ensureDatabaseExists() {
   const { PrismaClient } = require(
     path.join(webRoot, 'lib', 'generated', 'prisma', 'index.js')
   )
-  const prisma = new PrismaClient({ datasources: { db: { url: adminUrl.toString() } } })
+  const prisma = new PrismaClient({
+    datasources: { db: { url: adminUrl.toString() } }
+  })
 
   try {
     const existing = await prisma.$queryRawUnsafe(
       `SELECT 1 FROM pg_database WHERE datname = '${databaseName.replace(/'/g, "''")}'`
     )
     if (existing.length === 0) {
-      await prisma.$executeRawUnsafe(`CREATE DATABASE ${quotePgIdentifier(databaseName)}`)
+      await prisma.$executeRawUnsafe(
+        `CREATE DATABASE ${quotePgIdentifier(databaseName)}`
+      )
     }
   } finally {
     await prisma.$disconnect()

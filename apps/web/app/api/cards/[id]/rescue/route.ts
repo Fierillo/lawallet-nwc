@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { authenticateWithPermission } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { Permission } from '@/lib/auth/permissions'
 import { idParam } from '@/lib/validation/schemas'
 import { validateParams } from '@/lib/validation/middleware'
@@ -25,38 +26,38 @@ import { ActivityEvent, logActivity } from '@/lib/activity-log'
 export const POST = withErrorHandling(
   async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
     await checkRequestLimits(request, 'json')
-    const auth = await authenticateWithPermission(request, Permission.CARDS_WRITE)
+    const auth = await authenticateWithPermission(
+      request,
+      Permission.CARDS_WRITE
+    )
     await rateLimit(request, RateLimitPresets.sensitive)
 
     const { id } = validateParams(await params, idParam)
 
     const card = await prisma.card.findUnique({
       where: { id },
-      select: { id: true, blockedAt: true },
+      select: { id: true, blockedAt: true }
     })
     if (!card) throw new NotFoundError('Card not found')
     // A blocked card (reset keys exported via /wipe) is decommissioned — it
     // can't be rescued/re-issued, only deleted.
     if (card.blockedAt !== null) {
       throw new ConflictError(
-        'This card has been blocked (reset keys exported) and can no longer be rescued — delete it instead.',
+        'This card has been blocked (reset keys exported) and can no longer be rescued — delete it instead.'
       )
     }
 
     // Activation links target the wallet app — use the instance endpoint, not
     // the LUD-16 domain.
     const url = await resolveApiUrl(request)
-    const issuer = await prisma.user.findUnique({
-      where: { pubkey: auth.pubkey },
-      select: { id: true },
-    })
+    const issuer = await resolveAccountByPubkey(auth.pubkey)
 
     const token = await prisma.$transaction(async tx => {
       // Revoke every outstanding token and unassign the card (holder, lightning
       // address, and bound wallet all cleared) to return it to inventory.
       await tx.cardActivationToken.updateMany({
         where: { cardId: id, status: 'PENDING' },
-        data: { status: 'REVOKED' },
+        data: { status: 'REVOKED' }
       })
       await unpairCard(tx, id)
       // mintActivationToken re-runs the same-kind revoke (now a no-op) then
@@ -65,7 +66,7 @@ export const POST = withErrorHandling(
         cardId: id,
         qrKind: 'ONE_TIME',
         baseUrl: url,
-        issuedByUserId: issuer?.id ?? null,
+        issuedByUserId: issuer?.id ?? null
       })
     })
 
@@ -75,7 +76,7 @@ export const POST = withErrorHandling(
       event: ActivityEvent.CARD_RESCUED,
       message: `Card ${id} rescued — fresh ONE_TIME QR issued`,
       userId: issuer?.id ?? undefined,
-      metadata: { cardId: id, tokenId: token.id },
+      metadata: { cardId: id, tokenId: token.id }
     })
 
     return NextResponse.json(
@@ -83,9 +84,9 @@ export const POST = withErrorHandling(
         tokenId: token.id,
         qrPayload: token.qrPayload,
         qrKind: token.qrKind,
-        expiresAt: token.expiresAt,
+        expiresAt: token.expiresAt
       },
-      { status: 201 },
+      { status: 201 }
     )
-  },
+  }
 )

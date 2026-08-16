@@ -7,17 +7,20 @@
  *    offline with its last-known state.
  *  - Static assets (Next `/_next/static`, icons, images): cache-first — these
  *    are content-hashed / immutable so a stale hit is always correct.
- *  - Wallet read APIs (GET only): stale-while-revalidate so the balance and
- *    activity render instantly from cache and refresh in the background. Never
- *    caches non-GET or auth-sensitive mutations.
+ *  - Wallet read APIs (GET only): network-first, falling back to the cached
+ *    copy only when the network is unreachable, so the wallet still renders
+ *    offline without ever replaying a body a mutation has already
+ *    invalidated. Never caches non-GET or auth-sensitive mutations.
  *
  * Bump CACHE_VERSION to invalidate old caches on deploy.
  */
-const CACHE_VERSION = 'v2'
+const CACHE_VERSION = 'v3'
 const STATIC_CACHE = `lawallet-static-${CACHE_VERSION}`
 const PAGE_CACHE = `lawallet-pages-${CACHE_VERSION}`
 const API_CACHE = `lawallet-api-${CACHE_VERSION}`
 const OFFLINE_URL = '/wallet'
+const USER_DATA_CACHE_PREFIXES = ['lawallet-api-', 'lawallet-pages-']
+let userDataEpoch = 0
 
 // Wallet routes precached at install so cold, offline launches render the app
 // shell for whichever tab the user opens.
@@ -56,7 +59,9 @@ self.addEventListener('activate', event => {
   event.waitUntil(
     caches
       .keys()
-      .then(keys => Promise.all(keys.filter(k => !keep.has(k)).map(k => caches.delete(k))))
+      .then(keys =>
+        Promise.all(keys.filter(k => !keep.has(k)).map(k => caches.delete(k)))
+      )
       .then(() => self.clients.claim())
   )
 })
@@ -64,6 +69,26 @@ self.addEventListener('activate', event => {
 // Let the page trigger an immediate activation after an update.
 self.addEventListener('message', event => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
+  if (event.data?.type === 'CLEAR_USER_DATA') {
+    // Any authenticated fetch already in flight belongs to the session that
+    // just ended. Bumping the epoch prevents its eventual response from
+    // recreating a cache after the deletion below.
+    userDataEpoch += 1
+    event.waitUntil(
+      caches
+        .keys()
+        .then(keys =>
+          Promise.all(
+            keys
+              .filter(key =>
+                USER_DATA_CACHE_PREFIXES.some(prefix => key.startsWith(prefix))
+              )
+              .map(key => caches.delete(key))
+          )
+        )
+        .catch(() => {})
+    )
+  }
 })
 
 function isStaticAsset(url) {
@@ -77,6 +102,23 @@ function isStaticAsset(url) {
 
 function isCacheableApi(url) {
   return CACHEABLE_API.some(re => re.test(url.pathname + url.search))
+}
+
+async function apiCacheRequest(request) {
+  const authorization = request.headers.get('authorization') || 'anonymous'
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(authorization)
+  )
+  const fingerprint = Array.from(new Uint8Array(digest).slice(0, 16))
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('')
+  const url = new URL(request.url)
+  // CacheStorage keys do not distinguish Authorization headers. Add an opaque
+  // fingerprint to the internal cache key so two JWTs can never share a
+  // `/api/users/me` (or wallet/activity) response.
+  url.searchParams.set('__lawallet_session', fingerprint)
+  return new Request(url.toString(), { method: 'GET' })
 }
 
 self.addEventListener('fetch', event => {
@@ -119,18 +161,36 @@ self.addEventListener('fetch', event => {
     return
   }
 
-  // Wallet read APIs — stale-while-revalidate.
+  // Wallet read APIs — network-first, cache only as the offline fallback.
+  //
+  // This used to answer from the cache first. Because the service worker
+  // scope is the whole origin, that made every mutation invisible for a
+  // generation: deleting a Lightning Address and returning to
+  // /admin/addresses replayed the cached `/api/wallet/addresses` body that
+  // still listed it, and no amount of client-side invalidation could help —
+  // the staleness lives below `fetch`. `lib/client/hooks/use-api.ts` already
+  // does stale-while-revalidate in memory, with invalidation on mutation, so
+  // the copy here only needs to cover being offline.
   if (isCacheableApi(url)) {
+    const requestEpoch = userDataEpoch
     event.respondWith(
       caches.open(API_CACHE).then(async cache => {
-        const cached = await cache.match(request)
+        const cacheRequest = await apiCacheRequest(request)
+        const cached = await cache.match(cacheRequest)
         const network = fetch(request)
           .then(response => {
-            if (response.ok) cache.put(request, response.clone())
+            const cacheControl = response.headers.get('cache-control') ?? ''
+            if (
+              response.ok &&
+              requestEpoch === userDataEpoch &&
+              !cacheControl.includes('no-store')
+            ) {
+              cache.put(cacheRequest, response.clone()).catch(() => {})
+            }
             return response
           })
           .catch(() => cached || Response.error())
-        return cached || network
+        return network
       })
     )
   }

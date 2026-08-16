@@ -1,6 +1,6 @@
 'use client'
 
-import React from 'react'
+import React, { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ChevronLeft,
@@ -13,9 +13,14 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { NavTabbar } from '@/components/wallet/shared/nav-tabbar'
+import { SecretKeyReveal } from '@/components/shared/secret-key-reveal'
 import { useAuth, type LoginMethod } from '@/components/admin/auth-context'
+import { PasskeysSection } from '@/components/wallet/settings/passkeys-section'
+import { hexToNsec } from '@/lib/nostr'
 import { toNpub, truncateNpub } from '@/lib/client/format'
 import { cn } from '@/lib/utils'
+
+const SIGNER_SECRET_KEY = 'lawallet-signer-secret'
 
 export function SecurityScreen() {
   const router = useRouter()
@@ -29,6 +34,7 @@ export function SecurityScreen() {
     signer,
     status
   } = useAuth()
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null)
 
   async function handleCopyPubkey() {
     if (!pubkey) return
@@ -55,6 +61,19 @@ export function SecurityScreen() {
     if (!confirmed) return
     logout()
     router.replace('/wallet/landing')
+  }
+
+  // nsec and passkey sessions keep the (PRF-derived) secret in localStorage;
+  // read it at click time so we never hold it in state before the user asks.
+  function handleRevealSecret() {
+    const stored = localStorage.getItem(SIGNER_SECRET_KEY)
+    if (!stored) {
+      toast.error('No secret key is stored on this device')
+      return
+    }
+    setRevealedSecret(
+      /^[0-9a-f]{64}$/i.test(stored) ? hexToNsec(stored) : stored
+    )
   }
 
   return (
@@ -88,7 +107,10 @@ export function SecurityScreen() {
               value={role ? role.toLowerCase() : 'Unknown'}
               valueClassName="capitalize"
             />
-            <InfoRow label="Login method" value={loginMethodLabel(loginMethod)} />
+            <InfoRow
+              label="Login method"
+              value={loginMethodLabel(loginMethod)}
+            />
           </RowGroup>
         </Section>
 
@@ -119,6 +141,33 @@ export function SecurityScreen() {
             Verify signer
           </Button>
         </Section>
+
+        <Section title="Passkeys">
+          <PasskeysSection />
+        </Section>
+
+        {(loginMethod === 'nsec' || loginMethod === 'passkey') && (
+          <Section title="Secret key">
+            {revealedSecret ? (
+              <SecretKeyReveal nsec={revealedSecret} />
+            ) : (
+              <Button
+                type="button"
+                variant="secondary"
+                className="h-12 w-full"
+                onClick={handleRevealSecret}
+              >
+                <KeyRound data-icon="inline-start" />
+                Reveal secret key
+              </Button>
+            )}
+            <p className="px-1 text-xs text-muted-foreground">
+              {loginMethod === 'passkey'
+                ? 'Your key is derived from your passkey and stored only on this device. Back it up to use this identity in other Nostr apps.'
+                : 'Your key is stored only on this device. Back it up to keep access if this device is lost.'}
+            </p>
+          </Section>
+        )}
 
         <Section title="Device" className="mt-auto">
           <Button
@@ -251,6 +300,8 @@ function loginMethodLabel(method: LoginMethod | null) {
       return 'Extension'
     case 'nsec':
       return 'Private key'
+    case 'passkey':
+      return 'Passkey'
     default:
       return 'Unknown'
   }

@@ -3,20 +3,21 @@ import { prisma } from '@/lib/prisma'
 import { createNewUser } from '@/lib/user'
 import { getSettings } from '@/lib/settings'
 import { withErrorHandling } from '@/types/server/error-handler'
-import {
-  ConflictError,
-  ValidationError
-} from '@/types/server/errors'
+import { ConflictError, ValidationError } from '@/types/server/errors'
 import { otcParam } from '@/lib/validation/schemas'
 import { validateParams } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { rateLimit, RateLimitPresets } from '@/lib/middleware/rate-limit'
 import { eventBus } from '@/lib/events/event-bus'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
 
 export const POST = withErrorHandling(
-  async (request: Request, { params }: { params: Promise<{ otc: string }> }) => {
+  async (
+    request: Request,
+    { params }: { params: Promise<{ otc: string }> }
+  ) => {
     await checkRequestLimits(request, 'json')
     // Apply strict rate limiting for card activation (sensitive operation)
     await rateLimit(request, RateLimitPresets.sensitive)
@@ -28,15 +29,18 @@ export const POST = withErrorHandling(
       throw new ValidationError('Public key is required')
     }
 
-    // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { pubkey },
-      include: {
-        // Primary address (at most one) — see addresses_nwc_connection migration.
-        lightningAddresses: { where: { isPrimary: true }, take: 1 },
-        albySubAccount: true
-      }
-    })
+    // Check if an account already owns this pubkey (any linked identity).
+    const account = await resolveAccountByPubkey(pubkey)
+    const existingUser = account
+      ? await prisma.user.findUnique({
+          where: { id: account.id },
+          include: {
+            // Primary address (at most one) — see addresses_nwc_connection migration.
+            lightningAddresses: { where: { isPrimary: true }, take: 1 },
+            albySubAccount: true
+          }
+        })
+      : null
 
     const user = existingUser || (await createNewUser(pubkey))
     // If OTC is provided, try to assign a card to this user
@@ -57,16 +61,19 @@ export const POST = withErrorHandling(
             'This card has been blocked and can no longer be activated.'
           )
         }
+        // `kind: 'SIMPLE'` because the MASTER designation never travels with
+        // the card — it's the holder's own decision about their account, so a
+        // card changing hands always lands unpromoted.
         await prisma.card.update({
           where: { id: card.id },
-          data: { userId: user.id }
+          data: { userId: user.id, kind: 'SIMPLE' }
         })
         logActivity.fireAndForget({
           category: 'CARD',
           event: ActivityEvent.CARD_PAIRED,
           message: `Card paired to user`,
           userId: user.id,
-          metadata: { cardId: card.id, pubkey },
+          metadata: { cardId: card.id, pubkey }
         })
       }
     }

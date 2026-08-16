@@ -34,10 +34,16 @@ App Router with REST API + LUD-16 resolution).
 apps/
   web/        Next.js 16 — frontend, REST API, LUD-16 resolution (main app)
   docs/       Fumadocs site
-  listener/   NWC Payment Listener (stub)
+  listener/   NWC Payment Listener — live NWC pool + webhooks
+  cli/        Installer CLI behind the curl|bash bootstrap
 packages/
-  sdk/        TypeScript SDK client (stub)
-  shared/     Shared types & utilities (stub)
+  sdk/        @lawallet-nwc/sdk — typed API client, NIP-98-signed
+  react/      @lawallet-nwc/react — provider + hooks over the SDK
+  shared/     Zod schemas + shared types (source of truth)
+  openapi/    Zod → OpenAPI 3.1 document generation
+examples/
+  onboarding/ Reference webapp built on the SDK
+  admin-provisioning/ Operator-issued reserved addresses (SDK + a backend)
 ```
 
 For deeper architectural context, read [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
@@ -47,12 +53,12 @@ before working on anything non-trivial.
 
 ## Prerequisites
 
-| Tool | Version | Notes |
-|------|---------|-------|
-| Node.js | `v22.14.0` | Pinned in [`.nvmrc`](./.nvmrc); `nvm use` to match |
-| pnpm | `11.20.0` | Pinned via `packageManager` field in [`package.json`](./package.json) |
-| PostgreSQL | 15+ | Use the bundled `docker-compose.yml` if you don't have one running |
-| Git | any recent | Hooks rely on a normal `pre-commit`-friendly setup |
+| Tool       | Version    | Notes                                                                 |
+| ---------- | ---------- | --------------------------------------------------------------------- |
+| Node.js    | `v22.14.0` | Pinned in [`.nvmrc`](./.nvmrc); `nvm use` to match                    |
+| pnpm       | `11.20.0`  | Pinned via `packageManager` field in [`package.json`](./package.json) |
+| PostgreSQL | 15+        | Use the bundled `docker-compose.yml` if you don't have one running    |
+| Git        | any recent | Hooks rely on a normal `pre-commit`-friendly setup                    |
 
 Enable [Corepack](https://nodejs.org/api/corepack.html) once with
 `corepack enable`; it activates the pnpm version pinned by this repository.
@@ -106,7 +112,9 @@ cp apps/web/.env.example apps/web/.env
 #   JWT_SECRET="$(openssl rand -base64 48)"
 
 # 5. Start a local Postgres (skip if you already have one)
-docker compose up -d postgres
+#    The compose file has no default JWT_SECRET (fail-closed on purpose);
+#    a throwaway value is enough for the postgres-only flow.
+JWT_SECRET="$(openssl rand -hex 32)" docker compose up -d postgres
 
 # 6. Apply migrations and seed mock data
 cd apps/web
@@ -168,21 +176,21 @@ with a readable error. Source of truth: [`apps/web/.env.example`](./apps/web/.en
 
 ### Required
 
-| Variable | Notes |
-|----------|-------|
+| Variable       | Notes                                                                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DATABASE_URL` | Prisma connection string. Use `postgresql://lawallet:lawallet_password@localhost:5432/lawallet` if you ran `docker compose up -d postgres` |
-| `JWT_SECRET` | 32+ char random secret. Required for any authenticated route. Generate with `openssl rand -base64 48` |
+| `JWT_SECRET`   | 32+ char random secret. Required for any authenticated route. Generate with `openssl rand -base64 48`                                      |
 
 ### Frequently Used Optional
 
-| Variable | Purpose |
-|----------|---------|
-| `NODE_ENV` | `development` \| `test` \| `production` |
-| `LOG_LEVEL` | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` |
-| `LOG_PRETTY` | `true` for human-readable logs in dev |
-| `MAINTENANCE_MODE` | `true` returns 503 for non-admin requests |
-| `ALBY_API_URL` / `ALBY_BEARER_TOKEN` / `AUTO_GENERATE_ALBY_SUBACCOUNTS` | Enable courtesy NWC subaccount provisioning |
-| `NEXT_PUBLIC_LAWALLET_LANDING_URL` | Where `/` redirects (defaults to `https://lawallet.io`) |
+| Variable                                                                | Purpose                                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `NODE_ENV`                                                              | `development` \| `test` \| `production`                                  |
+| `LOG_LEVEL`                                                             | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` |
+| `LOG_PRETTY`                                                            | `true` for human-readable logs in dev                                    |
+| `MAINTENANCE_MODE`                                                      | `true` returns 503 for non-admin requests                                |
+| `ALBY_API_URL` / `ALBY_BEARER_TOKEN` / `AUTO_GENERATE_ALBY_SUBACCOUNTS` | Enable courtesy NWC subaccount provisioning                              |
+| `NEXT_PUBLIC_LAWALLET_LANDING_URL`                                      | Where `/` redirects (defaults to `https://lawallet.io`)                  |
 
 See [`apps/web/.env.example`](./apps/web/.env.example) for the full list.
 
@@ -244,8 +252,10 @@ SQLite is a different database engine and not a drop-in substitute.
 Instead:
 
 ```bash
-# Start the shared local Postgres once
-docker compose up -d postgres
+# Start the shared local Postgres once. The compose file has no default
+# JWT_SECRET (fail-closed on purpose) and resolves interpolation for the
+# whole file, so pass a throwaway value even for the postgres-only flow.
+JWT_SECRET="$(openssl rand -hex 32)" docker compose up -d postgres
 
 # In each worktree, create or reuse a unique database and export DATABASE_URL
 eval "$(./scripts/worktree-db.sh env)"
@@ -283,20 +293,20 @@ When changing the schema:
 
 ### Workspace-level (from repo root)
 
-| Command | What it does |
-|---------|-------------|
-| `pnpm install` | Install all workspace deps |
-| `pnpm dev` | Run dev servers for every app |
-| `pnpm dev:web` | Run only the web app on `:3000` |
-| `pnpm dev:docs` | Run the docs app |
-| `pnpm build` | Build everything via Turbo |
-| `pnpm lint` | Lint every package |
-| `pnpm typecheck` | Type-check every package |
-| `pnpm test` | Run every package's test suite |
-| `pnpm test:coverage` | Run all tests with coverage |
-| `pnpm format` | Prettier across the whole repo |
-| `pnpm clean` | Clean Turbo + build outputs |
-| `pnpm studio` | Open Prisma Studio for `apps/web` |
+| Command              | What it does                      |
+| -------------------- | --------------------------------- |
+| `pnpm install`       | Install all workspace deps        |
+| `pnpm dev`           | Run dev servers for every app     |
+| `pnpm dev:web`       | Run only the web app on `:3000`   |
+| `pnpm dev:docs`      | Run the docs app                  |
+| `pnpm build`         | Build everything via Turbo        |
+| `pnpm lint`          | Lint every package                |
+| `pnpm typecheck`     | Type-check every package          |
+| `pnpm test`          | Run every package's test suite    |
+| `pnpm test:coverage` | Run all tests with coverage       |
+| `pnpm format`        | Prettier across the whole repo    |
+| `pnpm clean`         | Clean Turbo + build outputs       |
+| `pnpm studio`        | Open Prisma Studio for `apps/web` |
 
 ### Filtered to a single workspace
 
@@ -376,12 +386,12 @@ pnpm --filter @lawallet-nwc/web test:coverage
 
 Enforced by Vitest — CI fails below these:
 
-| Metric | Threshold |
-|--------|----------:|
-| Statements | 60% |
-| Branches | 75% |
-| Functions | 70% |
-| Lines | 60% |
+| Metric     | Threshold |
+| ---------- | --------: |
+| Statements |       60% |
+| Branches   |       75% |
+| Functions  |       70% |
+| Lines      |       60% |
 
 ### What we expect from PRs that touch backend code
 
@@ -406,7 +416,7 @@ Next.js App Router params.
 - **TypeScript** — strict. `pnpm typecheck` is part of CI; keep it green.
 - **No barrel exports for app code** — import from the file that defines the symbol.
 - **Path alias** — `@/*` maps to `apps/web/` root (e.g. `@/lib/jwt`).
-- **Comments** — write them only when the *why* isn't obvious from the code.
+- **Comments** — write them only when the _why_ isn't obvious from the code.
   Don't restate what the code does or reference the current PR / issue.
 
 ### Code patterns to follow
@@ -521,7 +531,7 @@ sure `apps/web/.env` has at least `DATABASE_URL` and `JWT_SECRET`.
 - For config/env-sensitive tests, use `vi.resetModules()` + dynamic
   `import()` to bust the module cache.
 - The logger calls `getConfig()` at import time — `vi.mock('@/lib/config')`
-  must run *before* importing the module under test.
+  must run _before_ importing the module under test.
 
 ---
 

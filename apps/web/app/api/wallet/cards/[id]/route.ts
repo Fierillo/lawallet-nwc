@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import type { Card } from '@/types/card'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { ConflictError, NotFoundError } from '@/types/server/errors'
 import { idParam, updateWalletCardSchema } from '@/lib/validation/schemas'
@@ -9,6 +10,11 @@ import { validateBody, validateParams } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { eventBus } from '@/lib/events/event-bus'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
+import {
+  clearMasterCard,
+  getMasterCardId,
+  setMasterCard
+} from '@/lib/cards/master-card'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -16,8 +22,13 @@ export const revalidate = 0
 /**
  * PATCH /api/wallet/cards/[id]
  *
- * Owner-scoped reversible enable/disable. This deliberately does not touch
- * `blockedAt`, which is the terminal reset/decommission state.
+ * Owner-scoped, exactly one action per request:
+ *   - `enabled` — reversible enable/disable. This deliberately does not touch
+ *     `blockedAt`, which is the terminal reset/decommission state.
+ *   - `linkDefaultWallet` — bind the card to the owner's primary wallet.
+ *   - `kind` — promote this card to the owner's MASTER (account-recovery)
+ *     card, or demote it back to SIMPLE. Promoting demotes whichever card
+ *     held the designation before; at most one MASTER per holder.
  */
 export const PATCH = withErrorHandling(
   async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
@@ -26,17 +37,20 @@ export const PATCH = withErrorHandling(
     const { id } = validateParams(await params, idParam)
     const body = await validateBody(request, updateWalletCardSchema)
 
-    const user = await prisma.user.findUnique({
-      where: { pubkey },
-      select: {
-        id: true,
-        remoteWallets: {
-          where: { isDefault: true, status: 'ACTIVE' },
-          take: 1,
-          select: { id: true }
-        }
-      }
-    })
+    const account = await resolveAccountByPubkey(pubkey)
+    const user = account
+      ? await prisma.user.findUnique({
+          where: { id: account.id },
+          select: {
+            id: true,
+            remoteWallets: {
+              where: { isDefault: true, status: 'ACTIVE' },
+              take: 1,
+              select: { id: true }
+            }
+          }
+        })
+      : null
     if (!user) throw new NotFoundError('User not found')
 
     const defaultRemoteWalletId = user.remoteWallets?.[0]?.id ?? null
@@ -47,6 +61,7 @@ export const PATCH = withErrorHandling(
         id: true,
         userId: true,
         remoteWalletId: true,
+        kind: true,
         disabledAt: true,
         blockedAt: true
       }
@@ -58,23 +73,39 @@ export const PATCH = withErrorHandling(
       throw new ConflictError(
         body.linkDefaultWallet
           ? 'Blocked cards cannot be linked to a wallet'
-          : 'Blocked cards cannot be enabled or disabled'
+          : body.kind !== undefined
+            ? 'Blocked cards cannot be used as the master card'
+            : 'Blocked cards cannot be enabled or disabled'
       )
     }
     if (body.linkDefaultWallet === true && !defaultRemoteWalletId) {
       throw new ConflictError('No primary remote wallet configured')
     }
 
+    // The master designation is a sibling-affecting write, so it runs in its
+    // own transaction (demote-then-promote) before the row is re-read below.
+    let previousMasterCardId: string | null = null
+    if (body.kind !== undefined) {
+      previousMasterCardId = await prisma.$transaction(async tx => {
+        if (body.kind === 'MASTER') {
+          const result = await setMasterCard(user.id, id, tx)
+          return result.previousMasterCardId
+        }
+        await clearMasterCard(id, tx)
+        return null
+      })
+    }
+
     const updated = await prisma.card.update({
       where: { id },
       data:
-        body.linkDefaultWallet === true
-          ? { remoteWalletId: defaultRemoteWalletId }
-          : {
-              disabledAt: body.enabled
-                ? null
-                : (card.disabledAt ?? new Date())
-            },
+        body.kind !== undefined
+          ? {}
+          : body.linkDefaultWallet === true
+            ? { remoteWalletId: defaultRemoteWalletId }
+            : {
+                disabledAt: body.enabled ? null : (card.disabledAt ?? new Date())
+              },
       select: {
         id: true,
         createdAt: true,
@@ -116,7 +147,23 @@ export const PATCH = withErrorHandling(
 
     eventBus.emit({ type: 'cards:updated', timestamp: Date.now() })
 
-    if (body.linkDefaultWallet === true) {
+    if (body.kind !== undefined) {
+      if (body.kind !== card.kind) {
+        logActivity.fireAndForget({
+          category: 'CARD',
+          event:
+            body.kind === 'MASTER'
+              ? ActivityEvent.CARD_MASTER_SET
+              : ActivityEvent.CARD_MASTER_CLEARED,
+          message:
+            body.kind === 'MASTER'
+              ? `Card ${id} set as master card`
+              : `Card ${id} is no longer the master card`,
+          userId: user.id,
+          metadata: { cardId: id, previousMasterCardId }
+        })
+      }
+    } else if (body.linkDefaultWallet === true) {
       if (defaultRemoteWalletId !== card.remoteWalletId) {
         logActivity.fireAndForget({
           category: 'CARD',
@@ -171,6 +218,7 @@ export const PATCH = withErrorHandling(
       remoteWalletId: updated.remoteWalletId ?? null,
       defaultRemoteWalletId,
       kind: updated.kind,
+      masterCardId: await getMasterCardId(user.id),
       blocked: updated.blockedAt !== null,
       disabled: updated.disabledAt !== null
     }

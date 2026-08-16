@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { AtSign, Plus, Star, Wallet } from 'lucide-react'
+import { AtSign, MapPin, Plus, Star, Wallet, Waypoints } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -69,6 +69,13 @@ interface RemoteWalletNodeData {
   type: string
   status: string
   isDefault: boolean
+  isProxy: boolean
+  proxyEnabled: boolean
+}
+
+interface ProxyDestinationNodeData {
+  address: string
+  sourceCount: number
 }
 
 function useDimmed(id: string): boolean {
@@ -76,11 +83,10 @@ function useDimmed(id: string): boolean {
   return !!highlight && !highlight.nodes.has(id)
 }
 
-
 function shellClasses(dimmed: boolean): string {
   return cn(
     'flex w-full items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-sm transition-opacity duration-150',
-    dimmed && 'opacity-30',
+    dimmed && 'opacity-30'
   )
 }
 
@@ -204,7 +210,23 @@ export function RemoteWalletNode({ id, data }: NodeProps) {
         <span className="flex items-center gap-1 truncate text-xs font-medium">
           {d.name}
           {d.isDefault && (
-            <Star className="size-3 shrink-0 fill-amber-400 text-amber-400" aria-label="Primary" />
+            <Star
+              className="size-3 shrink-0 fill-amber-400 text-amber-400"
+              aria-label="Primary"
+            />
+          )}
+          {d.isProxy && (
+            <Waypoints
+              className={cn(
+                'size-3 shrink-0',
+                d.proxyEnabled ? 'text-emerald-400' : 'text-amber-400'
+              )}
+              aria-label={
+                d.proxyEnabled
+                  ? 'Forwarding proxy active'
+                  : 'Forwarding proxy paused'
+              }
+            />
           )}
         </span>
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -227,6 +249,41 @@ export function RemoteWalletNode({ id, data }: NodeProps) {
   )
 }
 
+/** Read-only target shared by address proxies and wallet forwarding plans. */
+export function ProxyDestinationNode({ id, data }: NodeProps) {
+  const d = data as unknown as ProxyDestinationNodeData
+  const { highlight, walletDestinationFocus } = useHover()
+  const dimmed = !!highlight && !highlight.nodes.has(id)
+  const hidden = walletDestinationFocus && dimmed
+  return (
+    <div
+      className={cn(
+        shellClasses(dimmed),
+        'border-orange-500/30 bg-orange-500/[0.04]',
+        hidden && 'pointer-events-none opacity-0'
+      )}
+      style={{ width: NODE_WIDTH }}
+    >
+      <Handle
+        id="in"
+        type="target"
+        position={Position.Left}
+        isConnectable={false}
+        className="!size-2 !bg-orange-400"
+      />
+      <MapPin className="size-4 shrink-0 text-orange-400" aria-hidden />
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate font-mono text-xs font-medium">
+          {d.address}
+        </span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {d.sourceCount} {d.sourceCount === 1 ? 'proxy route' : 'proxy routes'}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 /**
  * Placeholder "ghost" wallet — shown in the middle column when the user has
  * no remote wallets yet AND the operator has enabled LNCurl. It's a pure
@@ -244,7 +301,9 @@ export function GhostWalletNode({ id }: NodeProps) {
       await createLncurlWallet()
       toast.success('LNCurl wallet created')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not create LNCurl wallet')
+      toast.error(
+        err instanceof Error ? err.message : 'Could not create LNCurl wallet'
+      )
     }
   }
 
@@ -252,7 +311,7 @@ export function GhostWalletNode({ id }: NodeProps) {
     <div
       className={cn(
         'flex w-full flex-col items-center gap-2 rounded-lg border border-dashed border-border bg-card/40 px-3 py-4 text-center transition-opacity duration-150',
-        dimmed && 'opacity-30',
+        dimmed && 'opacity-30'
       )}
       style={{ width: NODE_WIDTH }}
     >
@@ -261,7 +320,12 @@ export function GhostWalletNode({ id }: NodeProps) {
         No wallet yet. Spin up a free disposable LNCurl wallet to start
         receiving.
       </p>
-      <Button size="sm" className="gap-2" onClick={handleCreate} disabled={loading}>
+      <Button
+        size="sm"
+        className="gap-2"
+        onClick={handleCreate}
+        disabled={loading}
+      >
         {loading ? <Spinner className="size-4" /> : <Plus className="size-4" />}
         Create LNCurl wallet
       </Button>
@@ -287,8 +351,9 @@ export const nodeTypes = {
   'lightning-address': LightningAddressNode,
   card: CardNode,
   'remote-wallet': RemoteWalletNode,
+  'proxy-destination': ProxyDestinationNode,
   'ghost-wallet': GhostWalletNode,
-  header: ColumnHeaderNode,
+  header: ColumnHeaderNode
 }
 
 /**
@@ -316,5 +381,5 @@ export const NODE_LAYOUT = {
    */
   cardRowGap: 176,
   /** Y of the first header in each column. */
-  topY: 0,
+  topY: 0
 }

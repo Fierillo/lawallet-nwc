@@ -10,7 +10,7 @@ import {
   Eye,
   EyeOff,
   PlugZap,
-  WandSparkles,
+  WandSparkles
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog'
 import { useAuth } from '@/components/admin/auth-context'
 import { useSettings } from '@/lib/client/hooks/use-settings'
@@ -35,9 +35,10 @@ import {
   SettingTextInput,
   useDebouncedCallback,
   useSaveStatus,
-  useSettingSaver,
+  useSettingSaver
 } from '@/components/admin/settings/auto-save-controls'
 import type { ListenerProbeResponse } from '@lawallet-nwc/shared'
+import { ProxyServiceSection } from './proxy-service-section'
 
 /**
  * Setup guide on the documentation site (apps/docs) — same host convention as
@@ -88,10 +89,16 @@ export function NwcServicesTab() {
   const [listenerEnabled, setListenerEnabled] = useState(false)
   const [listenerUrl, setListenerUrl] = useState('')
   const [listenerSecret, setListenerSecret] = useState('')
+  const [secretConfigured, setSecretConfigured] = useState(false)
   const [secretVisible, setSecretVisible] = useState(false)
   const [enabledSaving, setEnabledSaving] = useState(false)
   const [probe, setProbe] = useState<ProbeState>({ status: 'idle' })
   const [deployGuideOpen, setDeployGuideOpen] = useState(false)
+
+  // The API never returns the stored secret — only a presence flag. This ref
+  // tracks whether the field holds a user-entered value; saves omit the key
+  // entirely when untouched so the stored secret is preserved.
+  const secretDirtyRef = useRef(false)
 
   // Hydrate exactly once — re-running on refetches would clobber live edits.
   const hydratedRef = useRef(false)
@@ -100,7 +107,7 @@ export function NwcServicesTab() {
     hydratedRef.current = true
     setListenerEnabled(settings.listener_enabled === 'true')
     setListenerUrl(settings.listener_url ?? '')
-    setListenerSecret(settings.listener_auth_secret ?? '')
+    setSecretConfigured(settings.listener_secret_configured === 'true')
   }, [settings])
 
   const urlFromEnv = settings?.listener_url_source === 'env'
@@ -112,7 +119,7 @@ export function NwcServicesTab() {
     listenerSecret !== '' && listenerSecret.length < SECRET_MIN_LENGTH
   const isConfigured =
     (listenerUrl.trim() !== '' || urlFromEnv) &&
-    (listenerSecret !== '' || secretFromEnv)
+    (listenerSecret !== '' || secretConfigured || secretFromEnv)
   const needsConfig = listenerEnabled && !isConfigured
   const probeUrl = listenerUrl.trim() || settings?.listener_url_effective || ''
 
@@ -123,24 +130,31 @@ export function NwcServicesTab() {
     async (patch: { enabled?: boolean; url?: string; secret?: string }) => {
       const enabled = patch.enabled ?? listenerEnabled
       const url = (patch.url ?? listenerUrl).trim()
-      const secret = patch.secret ?? listenerSecret
-      const configured =
-        (url !== '' || urlFromEnv) && (secret !== '' || secretFromEnv)
+      const secret =
+        patch.secret ?? (secretDirtyRef.current ? listenerSecret : undefined)
+      const hasSecret =
+        (secret ?? '') !== '' || secretConfigured || secretFromEnv
+      const configured = (url !== '' || urlFromEnv) && hasSecret
       await saveSetting({
         // Keep the DB consistent (disabled) until a full config exists —
         // the amber hint below the toggle explains it.
         listener_enabled: enabled && configured ? 'true' : 'false',
         listener_url: url,
-        listener_auth_secret: secret,
+        ...(secret !== undefined ? { listener_auth_secret: secret } : {})
       })
+      if (patch.secret !== undefined) {
+        setSecretConfigured(patch.secret !== '')
+        secretDirtyRef.current = false
+      }
     },
     [
       saveSetting,
       listenerEnabled,
       listenerUrl,
       listenerSecret,
+      secretConfigured,
       urlFromEnv,
-      secretFromEnv,
+      secretFromEnv
     ]
   )
 
@@ -172,6 +186,7 @@ export function NwcServicesTab() {
   function handleGenerateSecret() {
     const secret = generateSecretValue()
     setListenerSecret(secret)
+    secretDirtyRef.current = true
     setSecretVisible(true)
     void secretStatus.run(() => persistListener({ secret }))
   }
@@ -183,7 +198,7 @@ export function NwcServicesTab() {
         '/api/settings/listener-probe',
         {
           url: probeUrl,
-          ...(listenerSecret ? { secret: listenerSecret } : {}),
+          ...(listenerSecret ? { secret: listenerSecret } : {})
         }
       )
       if (result.ok) {
@@ -191,7 +206,7 @@ export function NwcServicesTab() {
           status: 'ok',
           uptimeSeconds: result.uptimeSeconds,
           connections: result.connections,
-          relays: result.relays,
+          relays: result.relays
         })
       } else {
         setProbe({ status: 'error', error: result.error })
@@ -199,7 +214,7 @@ export function NwcServicesTab() {
     } catch (err) {
       setProbe({
         status: 'error',
-        error: err instanceof Error ? err.message : 'Connection test failed',
+        error: err instanceof Error ? err.message : 'Connection test failed'
       })
     }
   }
@@ -338,12 +353,17 @@ export function NwcServicesTab() {
                   type={secretVisible ? 'text' : 'password'}
                   value={listenerSecret}
                   placeholder={
-                    secretFromEnv ? '(set via environment)' : 'Min 32 characters'
+                    secretFromEnv
+                      ? '(set via environment)'
+                      : secretConfigured
+                        ? '(stored — enter a new value to rotate)'
+                        : 'Min 32 characters'
                   }
                   aria-invalid={secretInvalid || undefined}
                   className={secretInvalid ? `${INVALID_CLASSES} pr-9` : 'pr-9'}
                   onChange={e => {
                     setListenerSecret(e.target.value)
+                    secretDirtyRef.current = true
                     debouncedSecretSave(e.target.value)
                   }}
                 />
@@ -377,8 +397,8 @@ export function NwcServicesTab() {
               </p>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Set the same value as LISTENER_AUTH_SECRET on the listener
-                host — it signs webhooks and guards the listener API.
+                Set the same value as LISTENER_AUTH_SECRET on the listener host
+                — it signs webhooks and guards the listener API.
               </p>
             )}
           </div>
@@ -416,10 +436,13 @@ export function NwcServicesTab() {
                 Listener reachable
               </p>
               <p className="mt-1 text-muted-foreground">
-                Up {formatUptime(probe.uptimeSeconds)} · {probe.connections}{' '}
-                NWC connection{probe.connections === 1 ? '' : 's'} ·{' '}
-                {probe.relays} relay{probe.relays === 1 ? '' : 's'} ·{' '}
-                <Link href="/admin/listener" className="underline underline-offset-2">
+                Up {formatUptime(probe.uptimeSeconds)} · {probe.connections} NWC
+                connection{probe.connections === 1 ? '' : 's'} · {probe.relays}{' '}
+                relay{probe.relays === 1 ? '' : 's'} ·{' '}
+                <Link
+                  href="/admin/listener"
+                  className="underline underline-offset-2"
+                >
                   Open listener dashboard
                 </Link>
               </p>
@@ -430,6 +453,10 @@ export function NwcServicesTab() {
           )}
         </div>
       </div>
+
+      <Separator />
+
+      <ProxyServiceSection />
 
       <Separator />
 
@@ -468,13 +495,15 @@ export function NwcServicesTab() {
  */
 function DeployGuideDialog({
   open,
-  onOpenChange,
+  onOpenChange
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const webOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'https://your-instance'
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : 'https://your-instance'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -523,8 +552,7 @@ function DeployGuideDialog({
                 <span className="font-medium text-foreground">
                   Any VPS with Docker
                 </span>{' '}
-                — build the image and run it behind your reverse proxy with
-                TLS.
+                — build the image and run it behind your reverse proxy with TLS.
               </li>
             </ul>
           </section>
@@ -549,8 +577,8 @@ function DeployGuideDialog({
               <li>
                 <code className="text-xs">WEB_ORIGIN</code> — this
                 instance&apos;s public URL (
-                <code className="text-xs">{webOrigin}</code>) — payment
-                webhooks are POSTed back here.
+                <code className="text-xs">{webOrigin}</code>) — payment webhooks
+                are POSTed back here.
               </li>
               <li>
                 <code className="text-xs">LISTENER_PORT</code> — the port the
@@ -563,8 +591,8 @@ function DeployGuideDialog({
             <h4 className="font-semibold">3. Connect it here</h4>
             <p className="text-muted-foreground">
               Paste the service&apos;s public URL into{' '}
-              <span className="font-medium text-foreground">Listener URL</span>
-              , make sure the shared secret matches, click{' '}
+              <span className="font-medium text-foreground">Listener URL</span>,
+              make sure the shared secret matches, click{' '}
               <span className="font-medium text-foreground">
                 Test connection
               </span>{' '}

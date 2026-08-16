@@ -112,8 +112,7 @@ const card: CardPaymentActionCard = {
     type: 'NWC',
     status: 'ACTIVE',
     config: {
-      connectionString:
-        `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
+      connectionString: `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
       mode: 'SEND_RECEIVE'
     }
   },
@@ -131,8 +130,9 @@ function decodedInvoice(overrides?: {
       { name: 'payment_hash', value: PAYMENT_HASH },
       { name: 'timestamp', value: overrides?.timestamp ?? NOW_SECONDS }
     ],
-    // light-bolt11-decoder's getter returns an absolute Unix timestamp.
-    expiry: overrides?.expiry ?? NOW_SECONDS + 3_600
+    // light-bolt11-decoder's getter returns the expiry tag's DURATION in
+    // seconds, relative to the invoice timestamp — not an absolute Unix time.
+    expiry: overrides?.expiry ?? 3_600
   }
 }
 
@@ -178,8 +178,7 @@ describe('card payment callback action', () => {
     mocks.driverForWallet.mockReturnValue({
       driver: { payInvoice: mocks.driverPay },
       config: {
-        connectionString:
-          `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
+        connectionString: `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
         mode: 'SEND_RECEIVE'
       }
     })
@@ -377,8 +376,7 @@ describe('card payment callback action', () => {
     mocks.findWallet.mockResolvedValue({
       type: 'NWC',
       config: {
-        connectionString:
-          `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
+        connectionString: `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
         mode: 'SEND_RECEIVE'
       }
     })
@@ -395,7 +393,7 @@ describe('card payment callback action', () => {
     expect(mocks.getInFlight).toHaveBeenCalledWith(existing.requestId)
     expect(mocks.findWallet).toHaveBeenCalledWith({
       where: { id: existing.walletId },
-      select: { type: true, config: true }
+      select: { id: true, type: true, config: true }
     })
     expect(mocks.reconcileDirect).toHaveBeenCalledWith(
       (card.remoteWallet!.config as { connectionString: string })
@@ -455,8 +453,9 @@ describe('card payment callback action', () => {
     const existing = attempt({ status: 'SUCCEEDED' })
     mocks.decode.mockReturnValueOnce(
       decodedInvoice({
+        // Issued 3601s ago with a 3600s lifetime => expired one second ago.
         timestamp: NOW_SECONDS - 3_601,
-        expiry: NOW_SECONDS - 1
+        expiry: 3_600
       })
     )
     mocks.findAttempt.mockResolvedValue(existing)
@@ -476,8 +475,7 @@ describe('card payment callback action', () => {
     mocks.driverForWallet.mockReturnValueOnce({
       driver: { payInvoice: mocks.driverPay },
       config: {
-        connectionString:
-          `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
+        connectionString: `nostr+walletconnect://${'a'.repeat(64)}?relay=wss%3A%2F%2Frelay.example&secret=${'b'.repeat(64)}`,
         mode: 'RECEIVE'
       }
     })
@@ -555,8 +553,9 @@ describe('card payment callback action', () => {
       arrange: () =>
         mocks.decode.mockReturnValueOnce(
           decodedInvoice({
+            // Issued 3601s ago with a 3600s lifetime => expired one second ago.
             timestamp: NOW_SECONDS - 3_601,
-            expiry: NOW_SECONDS - 1
+            expiry: 3_600
           })
         ),
       reason: 'Lightning invoice has expired'

@@ -11,46 +11,63 @@ import {
   useNodesState,
   type Connection,
   type Edge,
-  type Node,
+  type Node
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 // Co-located admin theme overrides for the Controls panel — imported AFTER
 // the xyflow stylesheet so source-order wins on equal specificity.
 import './connection-map.css'
 import { toast } from 'sonner'
-import { useRemoteWallets, type RemoteWalletData } from '@/lib/client/hooks/use-remote-wallets'
+import {
+  useRemoteWallets,
+  type RemoteWalletData
+} from '@/lib/client/hooks/use-remote-wallets'
 import {
   useMyAddresses,
   useAddressMutations,
-  type WalletAddress,
+  type WalletAddress
 } from '@/lib/client/hooks/use-wallet-addresses'
 import {
   useMyCards,
   useCardMutations,
-  type CardData,
+  type CardData
 } from '@/lib/client/hooks/use-cards'
 import { useSettings } from '@/lib/client/hooks/use-settings'
 import { Spinner } from '@/components/ui/spinner'
 import { truncateHex } from '@/lib/client/format'
+import {
+  useRemoteWalletForwardingMap,
+  type RemoteWalletForwardingMapAction
+} from '@/lib/client/hooks/use-remote-wallet-forwarding'
 import { nodeTypes, NODE_LAYOUT } from './nodes'
 import { HoverProvider, type HighlightSet } from './hover-context'
 import { HighlightEdge } from './highlight-edge'
 import { ConnectionLine } from './connection-line'
 import {
   ConnectionDetailDialog,
-  type ConnectionSelection,
+  type ConnectionSelection
 } from './connection-detail-dialog'
-import { getPrimaryWallet, withDerivedPrimaryWalletFlags } from './primary-wallet'
+import {
+  getPrimaryWallet,
+  withDerivedPrimaryWalletFlags
+} from './primary-wallet'
+import { indexProxyDestinations } from './proxy-destinations'
 
 /** Stable id helpers — used by both nodes and edges so they always agree. */
 const walletNodeId = (id: string) => `wallet:${id}`
 const addressNodeId = (username: string) => `la:${username}`
 const cardNodeId = (id: string) => `card:${id}`
+const destinationNodeId = (address: string) =>
+  `destination:${encodeURIComponent(address)}`
 
 /** Inverse helpers — extract the model id from a node id, or null if the prefix doesn't match. */
-const usernameFromNodeId = (nodeId: string | null | undefined): string | null =>
+const usernameFromNodeId = (
+  nodeId: string | null | undefined
+): string | null =>
   nodeId && nodeId.startsWith('la:') ? nodeId.slice('la:'.length) : null
-const walletIdFromNodeId = (nodeId: string | null | undefined): string | null =>
+const walletIdFromNodeId = (
+  nodeId: string | null | undefined
+): string | null =>
   nodeId && nodeId.startsWith('wallet:') ? nodeId.slice('wallet:'.length) : null
 const cardIdFromNodeId = (nodeId: string | null | undefined): string | null =>
   nodeId && nodeId.startsWith('card:') ? nodeId.slice('card:'.length) : null
@@ -107,15 +124,18 @@ function ConnectionMapInner() {
   // logged-in account, so even an admin sees just their own here (and there's
   // no client-side pubkey matching that could hide a freshly paired card).
   const { data: cards, loading: cardsLoading } = useMyCards()
+  const { data: forwardingMap, loading: forwardingLoading } =
+    useRemoteWalletForwardingMap()
 
-  const loading = walletsLoading || addressesLoading || cardsLoading
+  const loading =
+    walletsLoading || addressesLoading || cardsLoading || forwardingLoading
   const domain = settings?.domain || 'your-domain'
   // When the user has no wallets, offer a one-tap LNCurl wallet (ghost node)
   // — but only if the operator enabled the integration.
   const lncurlEnabled = settings?.lncurl_enabled === 'true'
   const walletList = useMemo(
     () => withDerivedPrimaryWalletFlags(wallets, addresses),
-    [wallets, addresses],
+    [wallets, addresses]
   )
 
   // Hover lives in local state, NOT folded into the nodes/edges arrays.
@@ -123,7 +143,10 @@ function ConnectionMapInner() {
   // hovering an edge highlights its two endpoints. The HoverProvider
   // exposes the resulting set to the node + edge components, which render
   // their own dim state — so the arrays handed to ReactFlow stay stable.
-  const [hovered, setHovered] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
+  const [hovered, setHovered] = useState<{
+    kind: 'node' | 'edge'
+    id: string
+  } | null>(null)
 
   // While the user is panning the canvas OR dragging a handle to create /
   // reconnect an edge, suppress hover updates. Without these gates, every
@@ -148,10 +171,10 @@ function ConnectionMapInner() {
   const { updateAddress } = useAddressMutations()
   const { updateCard } = useCardMutations()
 
-  /** Primary-address wallet drives the implicit binding for DEFAULT_NWC addresses. */
+  /** Primary-address wallet, highlighted in the canvas. */
   const defaultWallet = useMemo(
     () => getPrimaryWallet(walletList, addresses),
-    [walletList, addresses],
+    [walletList, addresses]
   )
 
   const { nodes: computedNodes, edges: computedEdges } = useMemo(
@@ -160,11 +183,20 @@ function ConnectionMapInner() {
         wallets: walletList,
         addresses,
         cards,
+        forwardingActions: forwardingMap?.actions ?? null,
         defaultWallet,
         domain,
-        lncurlEnabled,
+        lncurlEnabled
       }),
-    [walletList, addresses, cards, defaultWallet, domain, lncurlEnabled],
+    [
+      walletList,
+      addresses,
+      cards,
+      forwardingMap?.actions,
+      defaultWallet,
+      domain,
+      lncurlEnabled
+    ]
   )
 
   // ReactFlow needs to OWN the node/edge state (via these hooks) rather than
@@ -186,7 +218,12 @@ function ConnectionMapInner() {
         // Carry xyflow's measured size (+ width/height) forward by id so the
         // replacement nodes can anchor their handles immediately.
         return old?.measured
-          ? { ...n, measured: old.measured, width: old.width, height: old.height }
+          ? {
+              ...n,
+              measured: old.measured,
+              width: old.width,
+              height: old.height
+            }
           : n
       })
     })
@@ -200,26 +237,27 @@ function ConnectionMapInner() {
   // at full opacity (no dimming).
   const highlight = useMemo(
     () => computeHighlight(hovered, edges),
-    [hovered, edges],
+    [hovered, edges]
   )
 
   // The edge directly under the cursor (vs. merely highlighted as part
   // of a hovered node's component) — drives the per-edge tooltip.
   const activeEdgeId = hovered?.kind === 'edge' ? hovered.id : null
+  const walletDestinationFocus =
+    hovered?.kind === 'node' && hovered.id.startsWith('wallet:')
 
   // Memoise the context value so consumers only re-render when `highlight`
   // or `activeEdgeId` actually changes — not on every render of this
   // component (e.g. while `isPanning` flips during a drag).
   const hoverValue = useMemo(
-    () => ({ highlight, activeEdgeId }),
-    [highlight, activeEdgeId],
+    () => ({ highlight, activeEdgeId, walletDestinationFocus }),
+    [highlight, activeEdgeId, walletDestinationFocus]
   )
 
   // ── Lightning Address ↔ Wallet rebinding ─────────────────────────────────
   // Only LA edges are interactive here. Card edges are inert (their handle
   // is `isConnectable={false}` in nodes.tsx). The shape of an LA edge id is
   // `e:la:<username>-><walletId>` (CUSTOM_NWC) or
-  // `e:la:<username>->default:<defaultWalletId>` (DEFAULT_NWC), but we don't
   // parse the edge id — we derive `username` from `edge.source` and the
   // wallet from `edge.target` (or `newConnection.target` on reconnect),
   // which is the same data Prisma sees.
@@ -243,7 +281,10 @@ function ConnectionMapInner() {
   const bindAddressToWallet = useCallback(
     async (username: string, walletId: string) => {
       const current = addresses?.find(addr => addr.username === username)
-      if (current?.mode === 'CUSTOM_NWC' && current.remoteWalletId === walletId) {
+      if (
+        current?.mode === 'CUSTOM_NWC' &&
+        current.remoteWalletId === walletId
+      ) {
         toast.info(`${username} is already bound to that wallet`)
         return
       }
@@ -251,18 +292,22 @@ function ConnectionMapInner() {
       try {
         const updated = await updateAddress(username, {
           mode: 'CUSTOM_NWC',
-          remoteWalletId: walletId,
+          remoteWalletId: walletId
         })
-        if (updated.mode !== 'CUSTOM_NWC' || updated.remoteWalletId !== walletId) {
+        if (
+          updated.mode !== 'CUSTOM_NWC' ||
+          updated.remoteWalletId !== walletId
+        ) {
           throw new Error('Wallet binding did not change')
         }
         toast.success(`${username} bound to wallet`)
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Could not bind address'
+        const msg =
+          err instanceof Error ? err.message : 'Could not bind address'
         toast.error(msg)
       }
     },
-    [addresses, updateAddress],
+    [addresses, updateAddress]
   )
 
   const disconnectAddress = useCallback(
@@ -271,11 +316,12 @@ function ConnectionMapInner() {
         await updateAddress(username, { mode: 'IDLE' })
         toast.success(`${username} disconnected`)
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Could not disconnect address'
+        const msg =
+          err instanceof Error ? err.message : 'Could not disconnect address'
         toast.error(msg)
       }
     },
-    [updateAddress],
+    [updateAddress]
   )
 
   const bindCardToWallet = useCallback(
@@ -288,7 +334,7 @@ function ConnectionMapInner() {
         toast.error(msg)
       }
     },
-    [updateCard],
+    [updateCard]
   )
 
   const disconnectCard = useCallback(
@@ -301,7 +347,7 @@ function ConnectionMapInner() {
         toast.error(msg)
       }
     },
-    [updateCard],
+    [updateCard]
   )
 
   const handleConnectStart = useCallback(() => setIsConnecting(true), [])
@@ -328,7 +374,7 @@ function ConnectionMapInner() {
         if (cardId) bindCardToWallet(cardId, sourceWallet)
       }
     },
-    [bindAddressToWallet, bindCardToWallet],
+    [bindAddressToWallet, bindCardToWallet]
   )
 
   const handleReconnectStart = useCallback(() => {
@@ -376,7 +422,7 @@ function ConnectionMapInner() {
         if (walletId) bindCardToWallet(cardId, walletId)
       }
     },
-    [bindAddressToWallet, disconnectAddress, bindCardToWallet],
+    [bindAddressToWallet, disconnectAddress, bindCardToWallet]
   )
 
   // Edge dropped on empty space: disconnect. The ref pattern means we land
@@ -398,28 +444,31 @@ function ConnectionMapInner() {
       const cardId = cardIdFromNodeId(edge.target)
       if (cardId) disconnectCard(cardId)
     },
-    [disconnectAddress, disconnectCard],
+    [disconnectAddress, disconnectCard]
   )
 
   // Click on a node body (not a handle drag) opens its detail dialog.
   // Header nodes are skipped — they're decorative column labels.
-  const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    const username = usernameFromNodeId(node.id)
-    if (username) {
-      setSelected({ kind: 'la', username })
-      return
-    }
-    const walletId = walletIdFromNodeId(node.id)
-    if (walletId) {
-      setSelected({ kind: 'wallet', id: walletId })
-      return
-    }
-    const cardId = cardIdFromNodeId(node.id)
-    if (cardId) {
-      setSelected({ kind: 'card', id: cardId })
-    }
-    // Header nodes (id="header:*") fall through and do nothing.
-  }, [])
+  const handleNodeClick = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      const username = usernameFromNodeId(node.id)
+      if (username) {
+        setSelected({ kind: 'la', username })
+        return
+      }
+      const walletId = walletIdFromNodeId(node.id)
+      if (walletId) {
+        setSelected({ kind: 'wallet', id: walletId })
+        return
+      }
+      const cardId = cardIdFromNodeId(node.id)
+      if (cardId) {
+        setSelected({ kind: 'card', id: cardId })
+      }
+      // Header nodes (id="header:*") fall through and do nothing.
+    },
+    []
+  )
 
   // Reject invalid drops while the user is dragging — xyflow paints the
   // ghost edge red so the affordance reads as "this won't work" before
@@ -435,11 +484,13 @@ function ConnectionMapInner() {
     const targetCard = !!connection.target?.startsWith('card:')
 
     if (sourceLa && targetWallet) {
-      if (connection.targetHandle && connection.targetHandle !== 'from-la') return false
+      if (connection.targetHandle && connection.targetHandle !== 'from-la')
+        return false
       return true
     }
     if (sourceWallet && targetCard) {
-      if (connection.sourceHandle && connection.sourceHandle !== 'to-card') return false
+      if (connection.sourceHandle && connection.sourceHandle !== 'to-card')
+        return false
       return true
     }
     return false
@@ -497,13 +548,15 @@ function ConnectionMapInner() {
           onMoveStart={() => setIsPanning(true)}
           onMoveEnd={() => setIsPanning(false)}
           onNodeMouseEnter={(_, n) => {
-            if (!isPanning && !isConnecting) setHovered({ kind: 'node', id: n.id })
+            if (!isPanning && !isConnecting)
+              setHovered({ kind: 'node', id: n.id })
           }}
           onNodeMouseLeave={() => {
             if (!isPanning && !isConnecting) setHovered(null)
           }}
           onEdgeMouseEnter={(_, e) => {
-            if (!isPanning && !isConnecting) setHovered({ kind: 'edge', id: e.id })
+            if (!isPanning && !isConnecting)
+              setHovered({ kind: 'edge', id: e.id })
           }}
           onEdgeMouseLeave={() => {
             if (!isPanning && !isConnecting) setHovered(null)
@@ -548,6 +601,7 @@ interface BuildGraphInput {
   wallets: RemoteWalletData[] | null
   addresses: WalletAddress[] | null
   cards: CardData[] | null
+  forwardingActions: RemoteWalletForwardingMapAction[] | null
   defaultWallet: RemoteWalletData | null
   domain: string
   /** When the wallet column is empty, render a ghost LNCurl create-CTA node. */
@@ -573,17 +627,22 @@ interface BuiltGraph {
  *   - LA edge:   LA     `out`    (right) → Wallet `from-la` (left)
  *   - Card edge: Wallet `to-card`(right) → Card   `in`      (left)
  */
-function buildGraph({
+export function buildGraph({
   wallets,
   addresses,
   cards,
+  forwardingActions,
   defaultWallet,
   domain,
-  lncurlEnabled,
+  lncurlEnabled
 }: BuildGraphInput): BuiltGraph {
   const { addressX, walletX, cardX, rowGap, cardRowGap, topY } = NODE_LAYOUT
   const nodes: Node[] = []
   const edges: Edge[] = []
+  const proxyActionByWallet = new Map(
+    (forwardingActions ?? []).map(action => [action.walletId, action])
+  )
+  const proxyDestinations = indexProxyDestinations(addresses, forwardingActions)
 
   // ── Column 1 (left): Lightning Addresses ────────────────────────────────
   let y = topY
@@ -594,7 +653,7 @@ function buildGraph({
       position: { x: addressX, y },
       data: { label: 'Lightning Addresses' },
       draggable: false,
-      selectable: false,
+      selectable: false
     })
     y += rowGap
     for (const addr of addresses) {
@@ -606,8 +665,8 @@ function buildGraph({
           username: addr.username,
           domain,
           mode: addr.mode,
-          isPrimary: addr.isPrimary,
-        },
+          isPrimary: addr.isPrimary
+        }
       })
       y += rowGap
     }
@@ -622,10 +681,11 @@ function buildGraph({
       position: { x: walletX, y },
       data: { label: 'Remote Wallets' },
       draggable: false,
-      selectable: false,
+      selectable: false
     })
     y += rowGap
     for (const w of wallets) {
+      const proxyAction = proxyActionByWallet.get(w.id)
       nodes.push({
         id: walletNodeId(w.id),
         type: 'remote-wallet',
@@ -639,7 +699,9 @@ function buildGraph({
           type: w.type,
           status: w.status,
           isDefault: w.isDefault,
-        },
+          isProxy: Boolean(proxyAction),
+          proxyEnabled: proxyAction?.enabled ?? false
+        }
       })
       y += rowGap
     }
@@ -653,7 +715,7 @@ function buildGraph({
       position: { x: walletX, y },
       data: { label: 'Remote Wallets' },
       draggable: false,
-      selectable: false,
+      selectable: false
     })
     y += rowGap
     nodes.push({
@@ -662,7 +724,7 @@ function buildGraph({
       position: { x: walletX, y },
       data: {},
       draggable: false,
-      selectable: false,
+      selectable: false
     })
   }
 
@@ -679,7 +741,7 @@ function buildGraph({
       position: { x: cardX, y },
       data: { label: 'Cards' },
       draggable: false,
-      selectable: false,
+      selectable: false
     })
     // Header → first card uses the standard `rowGap` so the cards-column
     // header lines up with the other columns. Between cards uses the
@@ -693,16 +755,50 @@ function buildGraph({
         position: { x: cardX, y },
         data: {
           label:
-            card.title ?? card.lightningAddress?.username ?? truncateHex(card.id),
+            card.title ??
+            card.lightningAddress?.username ??
+            truncateHex(card.id),
           designName: card.design?.description ?? null,
           designImage: card.design?.image ?? null,
           // "Paired" === linked to a user (the card has an owner), never
           // "has an NFC chip". Matches the userId-based semantics used by the
           // counts + /api/cards `paired` filter.
-          paired: !!card.lightningAddress,
-        },
+          paired: !!card.lightningAddress
+        }
       })
       y += cardRowGap
+    }
+  }
+
+  // ── Column 3b (below Cards): Proxied destinations ─────────────────────
+  // This section exists only when at least one Lightning Address proxy or
+  // RemoteWallet forwarding plan uses a destination. Addresses are
+  // deduplicated by `indexProxyDestinations`, so shared routes render once.
+  if (proxyDestinations.length > 0) {
+    y = cards && cards.length > 0 ? y + 24 : topY
+    nodes.push({
+      id: 'header:proxy-destinations',
+      type: 'header',
+      position: { x: cardX, y },
+      data: { label: 'Proxied destinations' },
+      draggable: false,
+      selectable: false
+    })
+    y += rowGap
+    for (const destination of proxyDestinations) {
+      nodes.push({
+        id: destinationNodeId(destination.address),
+        type: 'proxy-destination',
+        position: { x: cardX, y },
+        data: {
+          address: destination.address,
+          sourceCount:
+            destination.lightningAddressUsernames.length +
+            destination.walletIds.length
+        },
+        draggable: false
+      })
+      y += rowGap
     }
   }
 
@@ -723,7 +819,6 @@ function buildGraph({
   //
   // Address bindings:
   //   CUSTOM_NWC   → solid edge to the address's bound wallet.
-  //   DEFAULT_NWC  → dashed edge to the primary address's wallet (implicit).
   //   IDLE / ALIAS → no edge (no wallet involved).
   for (const addr of addresses ?? []) {
     if (addr.mode === 'CUSTOM_NWC' && addr.remoteWalletId) {
@@ -737,28 +832,12 @@ function buildGraph({
         reconnectable: 'target',
         data: {
           tooltipTitle: 'CUSTOM_NWC',
-          tooltipHint: 'Bound to this specific wallet',
-        },
-        style: { stroke: 'oklch(0.78 0.18 162)' /* emerald */, strokeWidth: 1.5 },
-      })
-    } else if (addr.mode === 'DEFAULT_NWC' && defaultWallet) {
-      edges.push({
-        id: `e:la:${addr.username}->default:${defaultWallet.id}`,
-        type: 'highlight',
-        source: addressNodeId(addr.username),
-        sourceHandle: 'out',
-        target: walletNodeId(defaultWallet.id),
-        targetHandle: 'from-la',
-        reconnectable: 'target',
-        data: {
-          tooltipTitle: 'DEFAULT_NWC',
-          tooltipHint: 'Routes through the primary address wallet',
+          tooltipHint: 'Bound to this specific wallet'
         },
         style: {
-          stroke: 'oklch(0.78 0.18 162)',
-          strokeWidth: 1.5,
-          strokeDasharray: '4 4',
-        },
+          stroke: 'oklch(0.78 0.18 162)' /* emerald */,
+          strokeWidth: 1.5
+        }
       })
     }
   }
@@ -779,10 +858,49 @@ function buildGraph({
       reconnectable: 'source',
       data: {
         tooltipTitle: 'CARD',
-        tooltipHint: 'Card spends from this wallet',
+        tooltipHint: 'Card spends from this wallet'
       },
-      style: { stroke: 'oklch(0.72 0.16 245)' /* sky */, strokeWidth: 1.5 },
+      style: { stroke: 'oklch(0.72 0.16 245)' /* sky */, strokeWidth: 1.5 }
     })
+  }
+
+  // Proxy routes are read-only graph edges. A global address proxy flows
+  // directly from its Lightning Address; a user-owned forwarding plan flows
+  // from its RemoteWallet. Both converge on the same deduplicated destination.
+  for (const destination of proxyDestinations) {
+    const target = destinationNodeId(destination.address)
+    for (const username of destination.lightningAddressUsernames) {
+      edges.push({
+        id: `e:proxy-address:${username}->${encodeURIComponent(destination.address)}`,
+        type: 'highlight',
+        source: addressNodeId(username),
+        sourceHandle: 'out',
+        target,
+        targetHandle: 'in',
+        reconnectable: false,
+        data: {
+          tooltipTitle: 'DEFERRED PROXY',
+          tooltipHint: `Forwards to ${destination.address}`
+        },
+        style: { stroke: 'oklch(0.75 0.17 65)', strokeWidth: 1.5 }
+      })
+    }
+    for (const walletId of destination.walletIds) {
+      edges.push({
+        id: `e:proxy-wallet:${walletId}->${encodeURIComponent(destination.address)}`,
+        type: 'highlight',
+        source: walletNodeId(walletId),
+        sourceHandle: 'to-card',
+        target,
+        targetHandle: 'in',
+        reconnectable: false,
+        data: {
+          tooltipTitle: 'WALLET FORWARDING',
+          tooltipHint: `Distributes receipts to ${destination.address}`
+        },
+        style: { stroke: 'oklch(0.75 0.17 65)', strokeWidth: 1.5 }
+      })
+    }
   }
 
   return { nodes, edges }
@@ -802,15 +920,35 @@ function buildGraph({
  * we re-scan all edges per frontier pop instead of pre-building an
  * adjacency map — easier to follow and not a perf concern.
  */
-function computeHighlight(
+export function computeHighlight(
   hovered: { kind: 'node' | 'edge'; id: string } | null,
-  edges: Edge[],
+  edges: Edge[]
 ): HighlightSet | null {
   if (!hovered) return null
 
   const keptNodes = new Set<string>()
   const keptEdges = new Set<string>()
   const frontier: string[] = []
+  const walletDestinationFocus =
+    hovered.kind === 'node' && hovered.id.startsWith('wallet:')
+
+  // A destination can be shared by several forwarding plans, while each of
+  // those wallets can also point at other destinations. A generic connected-
+  // component walk would therefore leak through wallet -> other destination
+  // -> other wallet and make unrelated routes look active. For destination
+  // hover, follow only the proxy edges that terminate at the selected node.
+  // This gives the operator the exact reverse route: destination <- every
+  // RemoteWallet / Lightning Address that actually forwards to it.
+  if (hovered.kind === 'node' && hovered.id.startsWith('destination:')) {
+    keptNodes.add(hovered.id)
+    for (const edge of edges) {
+      if (edge.target !== hovered.id || !edge.id.startsWith('e:proxy-'))
+        continue
+      keptEdges.add(edge.id)
+      keptNodes.add(edge.source)
+    }
+    return { nodes: keptNodes, edges: keptEdges }
+  }
 
   // Seed the BFS depending on what's hovered.
   if (hovered.kind === 'node') {
@@ -831,6 +969,10 @@ function computeHighlight(
   // its own expansion. Stops naturally when nothing new is discovered.
   while (frontier.length > 0) {
     const node = frontier.shift() as string
+    // A destination is the end of a wallet forwarding route. Do not traverse
+    // through a shared destination into other wallets while focusing one
+    // RemoteWallet, otherwise unrelated plans become part of the highlight.
+    if (walletDestinationFocus && node.startsWith('destination:')) continue
     for (const e of edges) {
       if (e.source !== node && e.target !== node) continue
       if (keptEdges.has(e.id)) continue

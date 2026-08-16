@@ -21,6 +21,7 @@ export interface Lud16Metadata {
   metadata?: string
   allowsNostr?: boolean
   nostrPubkey?: string
+  commentAllowed?: number
 }
 
 export interface Lud16CallbackResponse {
@@ -30,7 +31,7 @@ export interface Lud16CallbackResponse {
   reason?: string
 }
 
-export type LightningAddressProbeKey = 'lud16' | 'lud21' | 'nip57'
+export type LightningAddressProbeKey = 'lud16' | 'lud21' | 'nip57' | 'lud12'
 
 export interface LightningAddressProbeCheck {
   ok: boolean
@@ -80,7 +81,7 @@ function assertSendableRange(metadata: Lud16Metadata): void {
   }
 }
 
-function isHexPubkey(value: unknown): value is string {
+export function isHexPubkey(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)
 }
 
@@ -111,9 +112,7 @@ export async function fetchLud16Metadata(
   }
 
   if (!res.ok) {
-    throw new ValidationError(
-      `Lightning address returned HTTP ${res.status}`
-    )
+    throw new ValidationError(`Lightning address returned HTTP ${res.status}`)
   }
 
   const metadata = (await res.json()) as Lud16Metadata
@@ -184,9 +183,15 @@ export async function resolveInvoice(
     )
   }
 
-  const data = await callLud16Callback(metadata.callback, amountMsats, description)
+  const data = await callLud16Callback(
+    metadata.callback,
+    amountMsats,
+    description
+  )
   if (!data.pr) {
-    throw new ValidationError('No payment request returned from Lightning Address')
+    throw new ValidationError(
+      'No payment request returned from Lightning Address'
+    )
   }
   return { bolt11: data.pr, verify: data.verify }
 }
@@ -286,11 +291,21 @@ export async function probeLightningAddressCapabilities(
       invalid(probeFailureMessage(err, 'NIP-57 support could not be confirmed'))
     )
 
-  const [lud16Result, lud21Result, nip57Result] = await Promise.all([
-    lud16,
-    lud21,
-    nip57,
-  ])
+  // LUD-12 is advertised directly in the payRequest as a comment budget.
+  const lud12 = metadataPromise
+    .then(metadata => {
+      const allowed = metadata.commentAllowed ?? 0
+      if (!Number.isFinite(allowed) || allowed <= 0) {
+        throw new ValidationError('Payer comments are not accepted')
+      }
+      return ok(`Accepts payer comments up to ${allowed} characters.`)
+    })
+    .catch(err =>
+      invalid(probeFailureMessage(err, 'LUD-12 support could not be confirmed'))
+    )
+
+  const [lud16Result, lud21Result, nip57Result, lud12Result] =
+    await Promise.all([lud16, lud21, nip57, lud12])
 
   return {
     address,
@@ -299,6 +314,7 @@ export async function probeLightningAddressCapabilities(
       lud16: lud16Result,
       lud21: lud21Result,
       nip57: nip57Result,
-    },
+      lud12: lud12Result
+    }
   }
 }

@@ -12,7 +12,7 @@ import {
   Receipt,
   Settings,
   Ticket,
-  Trash2,
+  Trash2
 } from 'lucide-react'
 import { AdminTopbar } from '@/components/admin/admin-topbar'
 import { Card3D } from '@/components/activate/card-3d'
@@ -31,14 +31,14 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogTitle,
+  DialogTitle
 } from '@/components/ui/dialog'
 import {
   AlertDialog,
@@ -48,30 +48,31 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialogTitle
 } from '@/components/ui/alert-dialog'
 import { Permission } from '@/lib/auth/permissions'
 import {
   useCard,
   useCardMutations,
   useCardTransactions,
-  type CardTransaction,
+  type CardTransaction
 } from '@/lib/client/hooks/use-cards'
 import { invalidateApiPath } from '@/lib/client/hooks/use-api'
 import { truncateNpub, formatRelativeTime } from '@/lib/client/format'
 import { cn } from '@/lib/utils'
 import { trackEvent } from '@/lib/analytics/gtag'
 import { AnalyticsEvent } from '@/lib/analytics/events'
+import { MasterCardToggle } from '@/components/admin/master-card-toggle'
 
 export default function CardDetailPage({
-  params,
+  params
 }: {
   params: Promise<{ id: string }>
 }) {
   const { id } = use(params)
   const router = useRouter()
   const { data: card, loading } = useCard(id)
-  const { deleteCard, loading: deleteLoading } = useCardMutations()
+  const { deleteCard, setCardKind, loading: deleteLoading } = useCardMutations()
   const [qrOpen, setQrOpen] = useState(false)
   const [activationOpen, setActivationOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -89,7 +90,9 @@ export default function CardDetailPage({
       invalidateApiPath('/api/cards/counts')
       router.push('/admin/cards')
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to delete card')
+      toast.error(
+        error instanceof Error ? error.message : 'Failed to delete card'
+      )
     }
   }
 
@@ -209,6 +212,9 @@ export default function CardDetailPage({
                               : 'Unpaired'}
                         </Badge>
                         {isUsed && <Badge variant="outline">Used</Badge>}
+                        {card.kind === 'MASTER' && (
+                          <Badge variant="outline">Master</Badge>
+                        )}
                       </div>
                     }
                   />
@@ -272,6 +278,30 @@ export default function CardDetailPage({
                   </Card>
                 </PermissionGuard>
 
+                {/* Master card. The holder's account-recovery card — exactly
+                    one per user, so promoting this card demotes whichever
+                    sibling held the designation (confirmed in the toggle). */}
+                <PermissionGuard permission={Permission.CARDS_WRITE}>
+                  <Card>
+                    <CardHeader className="flex flex-row items-center justify-between gap-2">
+                      <CardTitle className="text-base">Master card</CardTitle>
+                      <MasterCardToggle
+                        card={card}
+                        onSetKind={kind => setCardKind(card.id, kind)}
+                      />
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-xs text-muted-foreground">
+                        {card.blocked
+                          ? 'This card is blocked and cannot be the master card.'
+                          : !isPaired
+                            ? 'Pair this card to a user before making it their master card.'
+                            : 'The master card is the one that can recover this user’s whole account. Each user has at most one — turning this on takes the designation away from any other card they hold.'}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </PermissionGuard>
+
                 {/* Card chip (NTAG424). Keys are never shown here — they only
                     ever leave the server when the card is (re)programmed or
                     reset, via the BoltCard QR (`/write`) or Delete → Reset
@@ -301,13 +331,17 @@ export default function CardDetailPage({
                           value={String(card.ntag424.ctr)}
                         />
                         {card.ntag424.otc && (
-                          <InfoField label="OTC" value={card.ntag424.otc} mono />
+                          <InfoField
+                            label="OTC"
+                            value={card.ntag424.otc}
+                            mono
+                          />
                         )}
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Keys are never displayed. Programming the card (BoltCard
-                        QR) or resetting it (Delete → Reset) exports the keys and
-                        unpairs the card from its user.
+                        QR) or resetting it (Delete → Reset) exports the keys
+                        and unpairs the card from its user.
                       </p>
                     </CardContent>
                   </Card>
@@ -426,7 +460,7 @@ function CardTransactions({ id }: { id: string }) {
                     className={cn(
                       (tx.paymentStatus === 'SUCCEEDED' ||
                         (!tx.paymentStatus && tx.status === 'success')) &&
-                        'border-green-500/30 bg-green-500/15 text-green-600 hover:bg-green-500/20 dark:text-green-400',
+                        'border-green-500/30 bg-green-500/15 text-green-600 hover:bg-green-500/20 dark:text-green-400'
                     )}
                     title={tx.error ?? undefined}
                   >
@@ -471,7 +505,7 @@ function CardTransactions({ id }: { id: string }) {
                   className={cn(
                     (detail.paymentStatus === 'SUCCEEDED' ||
                       (!detail.paymentStatus && detail.status === 'success')) &&
-                      'border-green-500/30 bg-green-500/15 text-green-600 dark:text-green-400',
+                      'border-green-500/30 bg-green-500/15 text-green-600 dark:text-green-400'
                   )}
                 >
                   {transactionStatusLabel(detail)}
@@ -507,11 +541,7 @@ function CardTransactions({ id }: { id: string }) {
                   />
                 )}
                 {detail.error && (
-                  <DetailRow
-                    label="Error"
-                    value={detail.error}
-                    destructive
-                  />
+                  <DetailRow label="Error" value={detail.error} destructive />
                 )}
               </dl>
             </div>
@@ -557,7 +587,7 @@ function DetailRow({
   mono,
   copyable,
   multiline,
-  destructive,
+  destructive
 }: {
   label: string
   value: string
@@ -577,7 +607,7 @@ function DetailRow({
             'min-w-0 flex-1 text-sm',
             mono && 'font-mono text-xs',
             multiline ? 'break-all' : 'truncate',
-            destructive && 'text-destructive',
+            destructive && 'text-destructive'
           )}
         >
           {value}
@@ -617,7 +647,7 @@ function CopyBtn({ value }: { value: string }) {
 function InfoField({
   label,
   value,
-  mono,
+  mono
 }: {
   label: string
   value: React.ReactNode

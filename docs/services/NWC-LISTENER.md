@@ -33,7 +33,7 @@ NWC relays ─┤ one live NWCClient per wallet — subscribeNotifications      
             │        ▼                                                             │
 apps/web ◄──┤ POST /api/webhooks/nwc   (HMAC-signed, retried, swept)               │
             │                                                                      │
-apps/web ──►┤ POST /v1/nwc/payments    (idempotent card payment over warm NWC)     │
+apps/web ──►┤ POST /v1/nwc/payments    (idempotent card/proxy payment over warm NWC)│
             │ GET  /v1/nwc/payments/:id (late-result reconciliation)               │
             │ POST /nwc/request        (legacy/general NWC proxy)                  │
             │ GET  /status             (dashboard: relays, connections, events)    │
@@ -41,6 +41,15 @@ apps/web ──►┤ POST /v1/nwc/payments    (idempotent card payment over war
             │ GET  /health             (compose healthcheck)                       │
             └──────────────────────────────────────────────────────────────────────┘
 ```
+
+The pool decrypts each encrypted `RemoteWallet.config.connectionString` with
+the same `NWC_VAULT_SECRET` used by web. When deferred LUD-16 settlement is
+enabled, it also loads the encrypted system wallet from `ProxyServiceConfig`.
+The listener never receives the zap-receipt signer. A
+startup/10-minute scheduler HMAC-signs
+`POST /api/internal/lud16-proxy/reconcile`, while ordinary
+`payment_received`/`payment_sent` notifications continue through the existing
+webhook.
 
 A Prisma migration in `apps/web` installs a trigger on `"RemoteWallet"`:
 every INSERT/UPDATE/DELETE fires `pg_notify('remote_wallet_changed',
@@ -93,7 +102,12 @@ republishing the same notification as different Nostr events.
 ### Outgoing-payment journal
 
 Card payments use a separate `listener.nwc_requests` journal keyed by the
-deterministic `requestId = sha256(walletId|paymentHash)`. It stores the wallet,
+deterministic `requestId = sha256(walletId|paymentHash)`. Deferred proxy
+forward attempts add their persisted attempt number and use
+`requestId = sha256(walletId|paymentHash|proxyPaymentId|attemptNo)`, allowing
+an explicitly rejected payment to retry the same unexpired invoice without
+reusing an ambiguous operation or joining a different source payment. The
+journal stores the wallet,
 BOLT-11, payment hash, payload hash, dispatch boundary, outcome, preimage,
 fees and errors. The journal is claimed before `pay_invoice`, so concurrent
 copies of the same callback join one operation instead of publishing twice.
@@ -107,6 +121,13 @@ On restart, an interrupted row before the dispatch boundary becomes
 read-only `lookup_invoice` calls can move `pending`/`unknown` to `succeeded`
 after verifying `sha256(preimage) === paymentHash`. Terminal rows are pruned
 after `EVENT_RETENTION_DAYS`; unresolved `unknown` rows are retained.
+
+RemoteWallet receive actions use the same journal and safety boundary with
+`requestId = sha256(walletId|paymentHash|legId|attemptNo)`. The webhook
+durably records the source receipt before acknowledging the listener event,
+and both the immediate webhook wake-up and the existing startup/10-minute
+reconciler call the RemoteWallet forwarding worker. See
+[RemoteWallet receive forwarding](./REMOTE-WALLET-FORWARDING.md).
 
 ## Connection readiness
 
@@ -233,10 +254,12 @@ unready.
 
 ```ts
 {
-  requestId: string   // 64-hex sha256(walletId|paymentHash)
+  requestId: string   // 64-hex deterministic operation id
   walletId: string    // RemoteWallet.id; no credential-bearing NWC URI
   invoice: string     // BOLT-11, max 8192 characters
   paymentHash: string // 64-hex
+  idempotencyScope?: string // proxy payment ID
+  attemptNo?: number  // proxy retry sequence within that scope
   waitMs?: number     // 100–8000; default 8000
 }
 ```
@@ -420,8 +443,14 @@ listener container elsewhere and paste its URL + shared secret into
   env vars above → generate a public domain. Healthcheck: `/health`.
 - **Render** — Web Service from the repo, environment _Docker_, same
   Dockerfile path + env vars.
-- **Fly.io** — `fly launch --dockerfile apps/listener/Dockerfile`, set env
-  via `fly secrets set`, expose port 4100.
+- **Fly.io** (recommended) — a committed `apps/listener/fly.toml` describes the
+  service and `pnpm deploy:fly` (`scripts/deploy-listener-fly.sh`) stages the
+  four required secrets and deploys in one step, adopting `NWC_VAULT_SECRET`
+  and `LISTENER_AUTH_SECRET` from a Vercel project via
+  `--from-vercel scope/project` so the two hosts cannot drift. Under the hood
+  it is `fly deploy --config apps/listener/fly.toml --ha=false` **from the repo
+  root**. Full walkthrough, verification and troubleshooting:
+  `apps/docs/content/docs/deploy/fly.mdx` (docs site `/docs/deploy/fly`).
 - **Any VPS** — `docker build -f apps/listener/Dockerfile .` and run with
   the env vars; put TLS in front if web connects over the public internet.
 
@@ -430,6 +459,30 @@ Postgres like Neon/Supabase/Railway works) and the Nostr relays; web must
 reach the listener URL; the listener must reach `WEB_ORIGIN`. Operator-facing
 walkthrough: `apps/docs/content/docs/deploy/listener-setup.mdx` (docs site
 `/docs/deploy/listener-setup`).
+
+Three constraints bite on managed platforms:
+
+- **`DATABASE_URL` must be a DIRECT connection, not a pooled one.** The
+  wallet-change listener holds a dedicated `LISTEN` client, and transaction-
+  mode poolers (PgBouncer, Neon's `-pooler` host, Supabase's `:6543`) silently
+  drop `LISTEN/NOTIFY`. Use the unpooled host — Neon exposes it as
+  `DATABASE_URL_UNPOOLED`. Symptom: wallets only reconcile on the 5-minute
+  `RECONCILE_INTERVAL_MS` safety net instead of instantly.
+- **On Vercel, add the shared secrets with `--no-sensitive`.** `vercel env add`
+  defaults Production variables to sensitive/write-only: `vercel env pull`
+  returns them empty and the value is unrecoverable. `NWC_VAULT_SECRET` added
+  that way encrypts every RemoteWallet under a key the listener can never be
+  given, and the only recovery is re-encrypting from a deployment that still
+  holds the outgoing key. `pnpm deploy:fly --from-vercel` relies on the value
+  being readable.
+- **Disable scale-to-zero and stay at one machine.** The process is a daemon
+  holding a relay websocket per ACTIVE wallet; suspending it on HTTP idleness
+  drops every subscription while `/health` still looks fine. Two instances
+  double-subscribe — the DB dedup absorbs duplicate webhooks, but catch-up
+  runs and the dead-wallet prober race on the shared cursors. On Fly this
+  needs `fly deploy --ha=false`: `min_machines_running = 1` does not cap the
+  count, and a plain deploy silently adds a spare (`fly scale count 1` to
+  recover).
 
 ## Operations
 

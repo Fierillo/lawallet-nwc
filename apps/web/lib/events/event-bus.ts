@@ -23,6 +23,10 @@ const EVENT_PERMISSION_MAP: Record<SSEEventType, Permission | null> = {
   'users:updated': Permission.USERS_READ,
   'activity:new': Permission.ACTIVITY_READ,
   'listener:updated': Permission.SETTINGS_READ, // infra telemetry, same gate as Settings
+  // Payload-free invalidation. APIs remain owner-scoped, so every signed-in
+  // user may safely refetch without learning another account's wallet ids.
+  'remote-wallet-forwarding:updated': null,
+  'remote-wallet-notifications:updated': null
 }
 
 // ─── Event Bus ────────────────────────────────────────────────────────────
@@ -64,7 +68,10 @@ class EventBus {
 
     for (const [id, client] of this.clients) {
       // Check permission — null means any authenticated user
-      if (requiredPermission && !client.permissions.includes(requiredPermission)) {
+      if (
+        requiredPermission &&
+        !client.permissions.includes(requiredPermission)
+      ) {
         continue
       }
 

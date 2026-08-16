@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { NotFoundError, ValidationError } from '@/types/server/errors'
 import { idParam } from '@/lib/validation/schemas'
 import { validateParams } from '@/lib/validation/middleware'
+import { decryptRemoteWalletConfig } from '@/lib/wallet/remote-wallet-vault'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -33,10 +35,7 @@ export const revalidate = 0
 export const GET = withErrorHandling(
   async (request: Request, { params }: { params: Promise<{ id: string }> }) => {
     const auth = await authenticate(request)
-    const user = await prisma.user.findUnique({
-      where: { pubkey: auth.pubkey },
-      select: { id: true },
-    })
+    const user = await resolveAccountByPubkey(auth.pubkey)
     if (!user) throw new NotFoundError('User not found')
 
     const { id } = validateParams(await params, idParam)
@@ -48,7 +47,7 @@ export const GET = withErrorHandling(
 
     if (wallet.type !== 'NWC') {
       throw new ValidationError(
-        `Connection strings are not exposed for ${wallet.type} wallets yet`,
+        `Connection strings are not exposed for ${wallet.type} wallets yet`
       )
     }
 
@@ -56,7 +55,11 @@ export const GET = withErrorHandling(
     // enough to read the field. The strict shape is enforced upstream by
     // `nwcConfigSchema` in nwc-driver.ts on write, so we can trust the
     // type at read time.
-    const config = wallet.config as { connectionString?: string } | null
+    const config = decryptRemoteWalletConfig(
+      wallet.id,
+      wallet.type,
+      wallet.config
+    )
     const connectionString = config?.connectionString ?? null
 
     if (!connectionString) {
@@ -67,5 +70,5 @@ export const GET = withErrorHandling(
     }
 
     return NextResponse.json({ connectionString })
-  },
+  }
 )

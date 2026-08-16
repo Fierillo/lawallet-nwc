@@ -2,6 +2,8 @@
 // resource group. Keep this file a flat list; ordering doesn't matter because
 // path registration is independent across files.
 import './auth'
+import './passkeys'
+import './account'
 import './cards'
 import './card-activation'
 import './card-designs'
@@ -19,4 +21,5 @@ import './remote-wallets'
 import './activity'
 import './events'
 import './listener'
+import './lud16-proxy'
 import './nostr'

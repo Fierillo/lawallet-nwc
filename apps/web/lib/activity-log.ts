@@ -1,4 +1,8 @@
-import type { ActivityCategory, ActivityLevel, ActivityLog } from '@/lib/generated/prisma'
+import type {
+  ActivityCategory,
+  ActivityLevel,
+  ActivityLog
+} from '@/lib/generated/prisma'
 import { prisma } from '@/lib/prisma'
 import { getCurrentReqId, logger } from '@/lib/logger'
 import { eventBus } from '@/lib/events/event-bus'
@@ -20,6 +24,26 @@ export const ActivityEvent = {
   USER_ROLE_CHANGED: 'user.role_changed',
   USER_RELAYS_UPDATED: 'user.relays_updated',
   USER_ERROR: 'user.error',
+  // Passkey (WebAuthn) lifecycle
+  PASSKEY_REGISTERED: 'user.passkey_registered',
+  PASSKEY_LINKED: 'user.passkey_linked',
+  PASSKEY_RENAMED: 'user.passkey_renamed',
+  PASSKEY_DELETED: 'user.passkey_deleted',
+  // A previously nonzero signature counter failed to increase — possible
+  // cloned authenticator. Logged at WARN; operators should investigate.
+  PASSKEY_COUNTER_REGRESSION: 'user.passkey_counter_regression',
+  PASSKEY_SESSION_REFRESHED: 'user.passkey_session_refreshed',
+  // Custodied-key release events. NSEC_EXPORTED is the most sensitive event
+  // in the system and always logs at WARN; SIGNER_KEY_FETCHED fires on every
+  // session restore and stays at INFO.
+  NSEC_EXPORTED: 'user.nsec_exported',
+  SIGNER_KEY_FETCHED: 'user.signer_key_fetched',
+  // Multi-pubkey account events. ACCOUNT_MERGED is destructive (the absorbed
+  // User row is deleted) and always logs at WARN.
+  ACCOUNT_PUBKEY_LINKED: 'user.account_pubkey_linked',
+  ACCOUNT_PUBKEY_UNLINKED: 'user.account_pubkey_unlinked',
+  ACCOUNT_PRIMARY_CHANGED: 'user.account_primary_changed',
+  ACCOUNT_MERGED: 'user.account_merged',
   // ADDRESS
   ADDRESS_CREATED: 'address.created',
   ADDRESS_UPDATED: 'address.updated',
@@ -37,6 +61,8 @@ export const ActivityEvent = {
   NWC_PAYMENT_SENT: 'nwc.payment_sent',
   NWC_LISTENER_ERROR: 'nwc.listener_error',
   NWC_WALLET_DEAD: 'nwc.wallet_dead',
+  PROXY_DESTINATION_CHANGED: 'proxy.destination_changed',
+  PROXY_FORWARD_RETRY_REQUESTED: 'proxy.forward_retry_requested',
   // INVOICE
   INVOICE_GENERATED: 'invoice.generated',
   INVOICE_PAID: 'invoice.paid',
@@ -48,6 +74,10 @@ export const ActivityEvent = {
   CARD_CREATED: 'card.created',
   CARD_PAIRED: 'card.paired',
   CARD_STATUS_UPDATED: 'card.status_updated',
+  // The holder's account-recovery card designation moved to / off this card.
+  // `previousMasterCardId` in the metadata names the card it displaced.
+  CARD_MASTER_SET: 'card.master_set',
+  CARD_MASTER_CLEARED: 'card.master_cleared',
   CARD_WALLET_BOUND: 'card.wallet_bound',
   CARD_WALLET_UNBOUND: 'card.wallet_unbound',
   CARD_DELETED: 'card.deleted',
@@ -66,10 +96,11 @@ export const ActivityEvent = {
   SERVER_MAINTENANCE_TOGGLED: 'server.maintenance_toggled',
   SERVER_SETTINGS_UPDATED: 'server.settings_updated',
   SERVER_BACKUP_EXPORTED: 'server.backup_exported',
-  SERVER_BACKUP_IMPORTED: 'server.backup_imported',
+  SERVER_BACKUP_IMPORTED: 'server.backup_imported'
 } as const
 
-export type ActivityEventCode = (typeof ActivityEvent)[keyof typeof ActivityEvent]
+export type ActivityEventCode =
+  (typeof ActivityEvent)[keyof typeof ActivityEvent]
 
 /**
  * Snapshot of an Invoice row suitable for attaching to an INVOICE activity log
@@ -106,7 +137,7 @@ export function invoiceLogMetadata(invoice: {
     userId: invoice.userId,
     expiresAt: toIso(invoice.expiresAt),
     paidAt: toIso(invoice.paidAt),
-    createdAt: toIso(invoice.createdAt),
+    createdAt: toIso(invoice.createdAt)
   }
 }
 
@@ -152,8 +183,8 @@ async function logActivityImpl(input: LogActivityInput): Promise<ActivityLog> {
       message: input.message,
       reqId,
       userId: input.userId ?? null,
-      metadata: (input.metadata ?? undefined) as never,
-    },
+      metadata: (input.metadata ?? undefined) as never
+    }
   })
 
   // Mirror into Pino so log aggregators see the same event line, tagged so
@@ -163,7 +194,7 @@ async function logActivityImpl(input: LogActivityInput): Promise<ActivityLog> {
     category: input.category,
     event: input.event,
     level,
-    userId: input.userId ?? undefined,
+    userId: input.userId ?? undefined
   })
   const method = levelToPinoMethod(level)
   pino[method]({ metadata: input.metadata ?? undefined }, input.message)
@@ -173,7 +204,7 @@ async function logActivityImpl(input: LogActivityInput): Promise<ActivityLog> {
     eventBus.emit({
       type: 'activity:new',
       timestamp: row.createdAt.getTime(),
-      log: row,
+      log: row
     })
   } catch {
     // Best-effort; a broken SSE client must not fail the write.
@@ -186,7 +217,9 @@ async function logActivityImpl(input: LogActivityInput): Promise<ActivityLog> {
  * Persists an `ActivityLog` row, mirrors the line into Pino, and broadcasts an
  * `activity:new` SSE event. Awaitable when the caller needs the row id.
  */
-export async function logActivity(input: LogActivityInput): Promise<ActivityLog> {
+export async function logActivity(
+  input: LogActivityInput
+): Promise<ActivityLog> {
   return logActivityImpl(input)
 }
 

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { authenticateWithPermission } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { Permission } from '@/lib/auth/permissions'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { validateBody } from '@/lib/validation/middleware'
@@ -24,36 +25,33 @@ export const POST = withErrorHandling(async (request: Request) => {
   await checkRequestLimits(request, 'json')
   const auth = await authenticateWithPermission(
     request,
-    Permission.CARD_DESIGNS_WRITE,
+    Permission.CARD_DESIGNS_WRITE
   )
 
   const { description, imageUrl } = await validateBody(
     request,
-    createCardDesignSchema,
+    createCardDesignSchema
   )
 
-  // Resolve the caller's user record so the design is attributed. When the
+  // Resolve the caller's account so the design is attributed. When the
   // authenticated pubkey isn't mapped to a user (shouldn't happen for an
   // ADMIN, but guard anyway), we leave `userId` null — the column is
   // optional for global/community designs.
-  const user = await prisma.user.findUnique({
-    where: { pubkey: auth.pubkey },
-    select: { id: true },
-  })
+  const user = await resolveAccountByPubkey(auth.pubkey)
 
   const design = await prisma.cardDesign.create({
     data: {
       imageUrl,
       description,
-      userId: user?.id ?? null,
+      userId: user?.id ?? null
     },
     select: {
       id: true,
       imageUrl: true,
       description: true,
       createdAt: true,
-      archivedAt: true,
-    },
+      archivedAt: true
+    }
   })
 
   eventBus.emit({ type: 'designs:updated', timestamp: Date.now() })
@@ -63,7 +61,7 @@ export const POST = withErrorHandling(async (request: Request) => {
     event: ActivityEvent.CARD_DESIGN_CREATED,
     message: `Card design created: ${design.description}`,
     userId: user?.id ?? null,
-    metadata: { designId: design.id, description: design.description },
+    metadata: { designId: design.id, description: design.description }
   })
 
   return NextResponse.json(design)

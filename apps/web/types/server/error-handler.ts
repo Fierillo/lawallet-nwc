@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server'
 
 import { buildErrorResponse } from './api-response'
-import { ApiError, InternalServerError, TooManyRequestsError } from './errors'
-import { withRequestLogging } from '@/lib/logger'
+import {
+  ApiError,
+  ConflictError,
+  InternalServerError,
+  NotFoundError,
+  ServiceUnavailableError,
+  TooManyRequestsError
+} from './errors'
+import { getCurrentReqId, withRequestLogging } from '@/lib/logger'
 import { logger } from '@/lib/logger'
 import { checkMaintenance } from '@/lib/middleware/maintenance'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
@@ -14,8 +21,31 @@ export const toApiError = (error: unknown): ApiError => {
     return error
   }
 
+  // Prisma error messages embed schema and query details — never serialize
+  // them to clients. Map the well-known codes to proper status codes and keep
+  // the original error as `cause` for logs/Sentry.
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === 'P2002') {
+      return new ConflictError('A record with this value already exists')
+    }
+    if (error.code === 'P2025') {
+      return new NotFoundError('Record not found')
+    }
+    return new InternalServerError('Database error', { cause: error })
+  }
+  if (
+    error instanceof Prisma.PrismaClientValidationError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  ) {
+    return new InternalServerError('Database error', { cause: error })
+  }
+
   if (error instanceof Error) {
-    return new InternalServerError(error.message, { cause: error })
+    // Fixed message: a plain Error's text describes internals (library
+    // messages, file paths, SQL) and must not reach the client.
+    return new InternalServerError('Internal server error', { cause: error })
   }
 
   return new InternalServerError('Unexpected error')
@@ -23,34 +53,59 @@ export const toApiError = (error: unknown): ApiError => {
 
 // Skip these 4xx codes in the activity log — they're normal client behavior
 // (expired tokens, 404s on poll endpoints, rate limits) and would swamp the
-// admin UI with noise.
-const QUIET_CLIENT_ERRORS = new Set([401, 403, 404, 429])
+// admin UI with noise. 413 is here because oversized bodies are rejected
+// BEFORE authentication on the webhook path: logging them would turn the
+// memory-exhaustion fix into a DB-write amplification vector.
+const QUIET_CLIENT_ERRORS = new Set([401, 403, 404, 413, 429])
 
 function inferCategoryFromPath(pathname: string | undefined): ActivityCategory {
   if (!pathname) return 'SERVER'
   if (pathname.startsWith('/api/invoices')) return 'INVOICE'
-  if (pathname.startsWith('/api/cards') || pathname.startsWith('/api/card-designs')) return 'CARD'
-  if (pathname.startsWith('/api/wallet/addresses') || pathname.includes('/lightning-address')) return 'ADDRESS'
-  if (pathname.startsWith('/api/wallet/nwc-connections') || pathname.includes('/nwc')) return 'NWC'
+  if (
+    pathname.startsWith('/api/cards') ||
+    pathname.startsWith('/api/card-designs')
+  )
+    return 'CARD'
+  if (
+    pathname.startsWith('/api/wallet/addresses') ||
+    pathname.includes('/lightning-address')
+  )
+    return 'ADDRESS'
+  if (
+    pathname.startsWith('/api/wallet/nwc-connections') ||
+    pathname.includes('/nwc')
+  )
+    return 'NWC'
   if (
     pathname.startsWith('/api/users') ||
     pathname.startsWith('/api/jwt') ||
     pathname.startsWith('/api/admin') ||
     pathname.startsWith('/api/root')
-  ) return 'USER'
+  )
+    return 'USER'
   return 'SERVER'
 }
 
-function eventCodeForError(category: ActivityCategory, isServerError: boolean, isDbError: boolean): string {
+function eventCodeForError(
+  category: ActivityCategory,
+  isServerError: boolean,
+  isDbError: boolean
+): string {
   if (isDbError) return ActivityEvent.SERVER_DATABASE_ERROR
   if (isServerError) return ActivityEvent.SERVER_UNHANDLED_ERROR
   switch (category) {
-    case 'USER': return ActivityEvent.USER_ERROR
-    case 'ADDRESS': return ActivityEvent.ADDRESS_ERROR
-    case 'CARD': return ActivityEvent.CARD_ERROR
-    case 'NWC': return ActivityEvent.NWC_CONNECTION_ERROR
-    case 'INVOICE': return ActivityEvent.INVOICE_GENERATION_FAILED
-    default: return ActivityEvent.SERVER_UNHANDLED_ERROR
+    case 'USER':
+      return ActivityEvent.USER_ERROR
+    case 'ADDRESS':
+      return ActivityEvent.ADDRESS_ERROR
+    case 'CARD':
+      return ActivityEvent.CARD_ERROR
+    case 'NWC':
+      return ActivityEvent.NWC_CONNECTION_ERROR
+    case 'INVOICE':
+      return ActivityEvent.INVOICE_GENERATION_FAILED
+    default:
+      return ActivityEvent.SERVER_UNHANDLED_ERROR
   }
 }
 
@@ -66,10 +121,16 @@ export const handleApiError = (
     apiError.details
   )
 
-  // Log errors with context
+  // Log errors with context. When the original error was mapped to a
+  // sanitized ApiError (e.g. Prisma P2002 → 409), keep its name/message for
+  // server-side debugging — the client only ever sees the sanitized shape.
   logger.error(
     {
       err: apiError,
+      originalError:
+        error instanceof Error && !(error instanceof ApiError)
+          ? { name: error.name, message: error.message }
+          : undefined,
       statusCode: apiError.statusCode,
       code: apiError.code,
       details: apiError.details
@@ -77,9 +138,41 @@ export const handleApiError = (
     'api.error'
   )
 
+  // Forward 5xx to Sentry when configured. withErrorHandling swallows the
+  // throw (Next's onRequestError never fires for these routes), so this is
+  // THE server capture seam. Fire-and-forget: a Sentry failure must never
+  // change the response. Maintenance 503s are expected, not errors.
+  if (
+    apiError.statusCode >= 500 &&
+    process.env.SENTRY_DSN &&
+    !(apiError instanceof ServiceUnavailableError)
+  ) {
+    try {
+      import('@sentry/nextjs')
+        .then(Sentry =>
+          // Capture the original error when available for better grouping.
+          Sentry.captureException(apiError.cause ?? apiError, {
+            tags: {
+              reqId: getCurrentReqId(),
+              code: apiError.code,
+              path:
+                request instanceof Request
+                  ? safePathname(request.url)
+                  : undefined
+            }
+          })
+        )
+        .catch(() => {})
+    } catch {
+      // ignore — observability must not affect the request path
+    }
+  }
+
   // Mirror qualifying errors into the ActivityLog audit trail.
   const statusCode = apiError.statusCode
-  const shouldLog = statusCode >= 500 || (statusCode >= 400 && !QUIET_CLIENT_ERRORS.has(statusCode))
+  const shouldLog =
+    statusCode >= 500 ||
+    (statusCode >= 400 && !QUIET_CLIENT_ERRORS.has(statusCode))
   if (shouldLog) {
     const isServerError = statusCode >= 500
     const isDbError =
@@ -94,7 +187,8 @@ export const handleApiError = (
         )
     const level: ActivityLevel = isServerError ? 'ERROR' : 'WARN'
     const method = request instanceof Request ? request.method : undefined
-    const pathname = request instanceof Request ? safePathname(request.url) : undefined
+    const pathname =
+      request instanceof Request ? safePathname(request.url) : undefined
     logActivity.fireAndForget({
       category,
       event: eventCodeForError(category, isServerError, isDbError),
@@ -104,8 +198,8 @@ export const handleApiError = (
         statusCode,
         code: apiError.code,
         method,
-        pathname,
-      },
+        pathname
+      }
     })
   }
 

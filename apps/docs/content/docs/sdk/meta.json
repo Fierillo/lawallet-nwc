@@ -1,0 +1,12 @@
+{
+  "title": "SDK",
+  "pages": [
+    "index",
+    "usage-example",
+    "authentication",
+    "react",
+    "registration-flow",
+    "admin-provisioning",
+    "nwc"
+  ]
+}

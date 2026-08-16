@@ -8,7 +8,8 @@
 //   1. Resolves the base version: the HIGHER of the root package.json
 //      version and the latest v* git tag (they have drifted before — e.g.
 //      tag v0.10.1 vs package.json 0.10.0).
-//   2. Bumps the lockstep packages: root, @lawallet-nwc/web, @lawallet-nwc/cli.
+//   2. Bumps the lockstep packages: root, @lawallet-nwc/web, @lawallet-nwc/cli,
+//      @lawallet-nwc/listener.
 //      (shared/openapi/sdk are versioned independently and untouched.)
 //   3. Scaffolds docs/changelogs/v<new>.md in the house format, pre-filled
 //      with the merged PRs since the last tag as raw material for the
@@ -31,16 +32,27 @@ const bumpIndex = args.indexOf('--bump')
 const bump = bumpIndex >= 0 ? args[bumpIndex + 1] : null
 
 if (!['patch', 'minor', 'major'].includes(bump)) {
-  console.error('Usage: node scripts/release.mjs --bump patch|minor|major [--dry]')
+  console.error(
+    'Usage: node scripts/release.mjs --bump patch|minor|major [--dry]'
+  )
   process.exit(1)
 }
 
-const LOCKSTEP_PACKAGES = ['package.json', 'apps/web/package.json', 'apps/cli/package.json']
+const LOCKSTEP_PACKAGES = [
+  'package.json',
+  'apps/web/package.json',
+  'apps/cli/package.json',
+  // Ships in the same image tag as web and reports its version over /status.
+  'apps/listener/package.json'
+]
 
-const git = cmd => execSync(`git ${cmd}`, { cwd: root, encoding: 'utf8' }).trim()
+const git = cmd =>
+  execSync(`git ${cmd}`, { cwd: root, encoding: 'utf8' }).trim()
 
 function parseSemver(v) {
-  const m = String(v).replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)$/)
+  const m = String(v)
+    .replace(/^v/, '')
+    .match(/^(\d+)\.(\d+)\.(\d+)$/)
   if (!m) return null
   return [Number(m[1]), Number(m[2]), Number(m[3])]
 }
@@ -52,7 +64,9 @@ function compareSemver(a, b) {
 
 // ── 1. Resolve base version (max of package.json and latest tag) ──────────
 
-const pkgVersion = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const pkgVersion = JSON.parse(
+  readFileSync(path.join(root, 'package.json'), 'utf8')
+).version
 
 const tags = git('tag -l "v*"')
   .split('\n')
@@ -120,9 +134,14 @@ if (lastTagName) {
 // ── 3. Report / apply ──────────────────────────────────────────────────────
 
 console.log(`Release: ${bump} bump → v${nextVersion}`)
-console.log(`Base: package.json ${pkgVersion}` + (lastTagName ? `, latest tag ${lastTagName}` : ''))
+console.log(
+  `Base: package.json ${pkgVersion}` +
+    (lastTagName ? `, latest tag ${lastTagName}` : '')
+)
 console.log(`Lockstep bumps: ${LOCKSTEP_PACKAGES.join(', ')}`)
-console.log(`Merged PRs since ${lastTagName ?? 'the beginning'}: ${prLines.length}`)
+console.log(
+  `Merged PRs since ${lastTagName ?? 'the beginning'}: ${prLines.length}`
+)
 
 if (dry) {
   console.log('\n--dry: no files written. Changelog preview:\n')
@@ -138,7 +157,12 @@ for (const rel of LOCKSTEP_PACKAGES) {
   console.log(`bumped ${rel}`)
 }
 
-const changelogPath = path.join(root, 'docs', 'changelogs', `v${nextVersion}.md`)
+const changelogPath = path.join(
+  root,
+  'docs',
+  'changelogs',
+  `v${nextVersion}.md`
+)
 if (!existsSync(changelogPath)) {
   const today = new Date().toISOString().slice(0, 10)
   writeFileSync(
@@ -163,7 +187,14 @@ ${prLines.join('\n') || '- (no merged PRs found since the last tag)'}
   console.log(`scaffolded docs/changelogs/v${nextVersion}.md`)
 }
 
-// Machine-readable output for the workflow.
+// Machine-readable output for the workflow. `files` is emitted so the commit
+// step stages exactly what was bumped: it used to hardcode its own list, which
+// silently dropped apps/listener/package.json when this list grew — the bump
+// was written, never staged, and the image shipped reporting the old version.
 if (process.env.GITHUB_OUTPUT) {
-  writeFileSync(process.env.GITHUB_OUTPUT, `version=${nextVersion}\n`, { flag: 'a' })
+  writeFileSync(
+    process.env.GITHUB_OUTPUT,
+    `version=${nextVersion}\nfiles=${LOCKSTEP_PACKAGES.join(' ')}\n`,
+    { flag: 'a' }
+  )
 }

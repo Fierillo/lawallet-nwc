@@ -51,7 +51,9 @@ export function npubInitials(pubkey: string | null | undefined): string {
  * Formats a date string or Date as relative time.
  * Example: "2 hours ago", "3 days ago", "just now"
  */
-export function formatRelativeTime(date: Date | string | null | undefined): string {
+export function formatRelativeTime(
+  date: Date | string | null | undefined
+): string {
   if (!date) return '—'
   const now = new Date()
   const d = typeof date === 'string' ? new Date(date) : date
@@ -75,6 +77,53 @@ export function formatRelativeTime(date: Date | string | null | undefined): stri
 
   const diffYears = Math.floor(diffDays / 365)
   return `${diffYears}y ago`
+}
+
+/**
+ * Formats a millisatoshi integer string without losing sub-sat precision.
+ * BigInt arithmetic stays server-side; string slicing keeps this safe in
+ * browsers whose JavaScript target does not include BigInt literals.
+ */
+export function formatMsats(value: string): string {
+  const negative = value.startsWith('-')
+  const digits = (negative ? value.slice(1) : value).replace(/^0+(?=\d)/, '')
+  if (!/^\d+$/.test(digits)) return `${value} msats`
+
+  const padded = digits.padStart(4, '0')
+  const whole = padded
+    .slice(0, -3)
+    .replace(/^0+(?=\d)/, '')
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const fraction = padded.slice(-3).replace(/0+$/, '')
+
+  return `${negative ? '−' : ''}${whole}${fraction ? `.${fraction}` : ''} sats`
+}
+
+/**
+ * Absolute date+time in the viewer's locale. Accepts anything the platform
+ * hands us — an ISO string, epoch millis, or a Date — and returns `fallback`
+ * for a missing or unparseable value instead of rendering "Invalid Date".
+ */
+export function formatDateTime(
+  value: string | number | Date | null | undefined,
+  fallback = 'Unknown time'
+): string {
+  if (value === null || value === undefined) return fallback
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return fallback
+  return date.toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  })
+}
+
+/**
+ * Turns a SCREAMING_SNAKE status into sentence case for display:
+ * `PARTIALLY_SENT` → `Partially sent`.
+ */
+export function humanizeStatus(status: string): string {
+  const words = status.toLowerCase().replaceAll('_', ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
 /**

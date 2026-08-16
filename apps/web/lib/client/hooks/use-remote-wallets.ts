@@ -1,7 +1,11 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
-import { invalidateApiPath, useApi, useMutation } from '@/lib/client/hooks/use-api'
+import {
+  invalidateApiPath,
+  useApi,
+  useMutation
+} from '@/lib/client/hooks/use-api'
 
 /**
  * Wire shape returned by `GET /api/remote-wallets` — kept in lock-step with
@@ -23,6 +27,21 @@ export interface RemoteWalletData {
   provider: 'lncurl' | null
   /** For LNCurl wallets, the server that minted it (the tag links here); null otherwise. */
   lncurlServerUrl: string | null
+  /** Present on the wallet detail endpoint; no secrets are included. */
+  receiveCapabilities?: {
+    lud21: true
+    nip57: boolean
+    receiptPubkey: string | null
+    reason: string | null
+  }
+  /**
+   * Detail endpoint only. `false` when an admin is viewing somebody else's
+   * wallet — the page must then render read-only. Absent on older responses,
+   * so callers treat `undefined` as owned.
+   */
+  isOwner?: boolean
+  /** Owner's pubkey, only sent when `isOwner` is false. */
+  ownerPubkey?: string | null
 }
 
 /** Optional filters. Mirrors `remoteWalletListQuerySchema`. */
@@ -52,7 +71,7 @@ export interface RemoteWalletConnectionString {
  */
 export function useRemoteWalletConnectionString(id: string | null) {
   return useApi<RemoteWalletConnectionString>(
-    id ? `/api/remote-wallets/${id}/connection-string` : null,
+    id ? `/api/remote-wallets/${id}/connection-string` : null
   )
 }
 
@@ -66,7 +85,9 @@ export function useRemoteWalletConnectionString(id: string | null) {
  * table on N sequential relay round-trips.
  */
 export function useRemoteWalletBalance(id: string | null) {
-  return useApi<RemoteWalletBalance>(id ? `/api/remote-wallets/${id}/balance` : null)
+  return useApi<RemoteWalletBalance>(
+    id ? `/api/remote-wallets/${id}/balance` : null
+  )
 }
 
 /**
@@ -85,7 +106,7 @@ export function useRemoteWalletBalance(id: string | null) {
  */
 export function useLiveRemoteWalletBalance(
   id: string | null,
-  opts?: { pollMs?: number },
+  opts?: { pollMs?: number }
 ) {
   const pollMs = opts?.pollMs ?? 15_000
   const result = useRemoteWalletBalance(id)
@@ -182,11 +203,14 @@ export function useRemoteWalletMutations() {
      * pass `isDefault=true` to bind the primary Lightning Address to it.
      * Available only when the operator has enabled LNCurl in Settings → Wallet.
      */
-    createLncurlWallet: async (input?: { name?: string; isDefault?: boolean }) => {
+    createLncurlWallet: async (input?: {
+      name?: string
+      isDefault?: boolean
+    }) => {
       const created = await createLncurl.mutate(
         'post',
         '/api/remote-wallets/lncurl',
-        input ?? {},
+        input ?? {}
       )
       invalidateApiPath('/api/remote-wallets')
       invalidateApiPath('/api/wallet/addresses')
@@ -203,7 +227,7 @@ export function useRemoteWalletMutations() {
       const updated = await update.mutate(
         'patch',
         `/api/remote-wallets/${id}`,
-        { isDefault: true },
+        { isDefault: true }
       )
       invalidateApiPath('/api/remote-wallets')
       invalidateApiPath('/api/wallet/addresses')
@@ -216,7 +240,7 @@ export function useRemoteWalletMutations() {
       const updated = await update.mutate(
         'patch',
         `/api/remote-wallets/${id}`,
-        { name },
+        { name }
       )
       invalidateApiPath('/api/remote-wallets')
       invalidateApiPath('/api/wallet/addresses')
@@ -234,7 +258,7 @@ export function useRemoteWalletMutations() {
       const updated = await update.mutate(
         'patch',
         `/api/remote-wallets/${id}`,
-        { status },
+        { status }
       )
       invalidateApiPath('/api/remote-wallets')
       return updated
@@ -259,7 +283,10 @@ export function useRemoteWalletMutations() {
      * wallets.
      */
     permanentlyDeleteWallet: async (id: string) => {
-      await removePermanent.mutate('del', `/api/remote-wallets/${id}?permanent=true`)
+      await removePermanent.mutate(
+        'del',
+        `/api/remote-wallets/${id}?permanent=true`
+      )
       invalidateApiPath('/api/remote-wallets')
       invalidateApiPath('/api/wallet/addresses')
       invalidateApiPath('/api/users/me')
@@ -277,6 +304,6 @@ export function useRemoteWalletMutations() {
       createLncurl.error ||
       update.error ||
       remove.error ||
-      removePermanent.error,
+      removePermanent.error
   }
 }

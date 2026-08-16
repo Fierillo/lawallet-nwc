@@ -1,6 +1,10 @@
 import type { LightningAddress, RemoteWallet } from '@/lib/generated/prisma'
 
-export type WalletAddressMode = 'IDLE' | 'ALIAS' | 'CUSTOM_NWC' | 'DEFAULT_NWC'
+export type WalletAddressMode =
+  | 'IDLE'
+  | 'ALIAS'
+  | 'PROXY_ALIAS'
+  | 'CUSTOM_NWC'
 export type EffectiveNwcMode = 'NONE' | 'RECEIVE' | 'SEND_RECEIVE'
 
 export interface WalletAddressDto {
@@ -9,6 +13,8 @@ export interface WalletAddressDto {
   redirect: string | null
   /** The RemoteWallet this address is bound to (CUSTOM_NWC), or null. */
   remoteWalletId: string | null
+  /** Name of the bound RemoteWallet, for display without a second fetch. */
+  remoteWalletName: string | null
   isPrimary: boolean
   /** Server-derived effective capability for this address. */
   nwcMode: EffectiveNwcMode
@@ -38,38 +44,37 @@ function walletCapability(wallet: RemoteWallet | null): EffectiveNwcMode {
  *
  *   IDLE / ALIAS   → NONE  (the address never produces invoices via a wallet)
  *   CUSTOM_NWC     → the bound RemoteWallet's capability, or NONE if absent
- *   DEFAULT_NWC    → the user's primary-address RemoteWallet capability, or NONE
  *
  * Centralised here so list, detail and create routes stay consistent and the
  * client never has to guess.
  */
 export function deriveEffectiveNwcMode(
   address: AddressWithWallet,
-  defaultWallet: RemoteWallet | null,
+  defaultWallet: RemoteWallet | null
 ): EffectiveNwcMode {
   switch (address.mode) {
     case 'IDLE':
     case 'ALIAS':
+    case 'PROXY_ALIAS':
       return 'NONE'
     case 'CUSTOM_NWC':
       return walletCapability(address.remoteWallet)
-    case 'DEFAULT_NWC':
-      return walletCapability(defaultWallet)
   }
 }
 
 export function toWalletAddressDto(
   address: AddressWithWallet,
-  defaultWallet: RemoteWallet | null,
+  defaultWallet: RemoteWallet | null
 ): WalletAddressDto {
   return {
     username: address.username,
     mode: address.mode,
     redirect: address.redirect ?? null,
     remoteWalletId: address.remoteWalletId ?? null,
+    remoteWalletName: address.remoteWallet?.name ?? null,
     isPrimary: address.isPrimary,
     nwcMode: deriveEffectiveNwcMode(address, defaultWallet),
     createdAt: address.createdAt.toISOString(),
-    updatedAt: address.updatedAt.toISOString(),
+    updatedAt: address.updatedAt.toISOString()
   }
 }

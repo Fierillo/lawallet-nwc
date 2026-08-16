@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { Input } from '@/components/ui/input'
+import { LightningAddressInput } from '@/components/wallet/shared/lightning-address-input'
 import { Switch } from '@/components/ui/switch'
 import { Spinner } from '@/components/ui/spinner'
 import { InputGroup, InputGroupText } from '@/components/ui/input-group'
@@ -44,7 +45,7 @@ export function useSettingSaver() {
       await mutate('post', '/api/settings', patch)
       invalidateApiPath('/api/settings')
       trackEvent(AnalyticsEvent.SETTINGS_UPDATED, {
-        keys: Object.keys(patch).join(','),
+        keys: Object.keys(patch).join(',')
       })
     },
     [mutate]
@@ -54,13 +55,15 @@ export function useSettingSaver() {
 /** Trailing spinner / check shown while a field is saving. */
 export function SaveStatusIcon({
   status,
-  className,
+  className
 }: {
   status: SaveStatus
   className?: string
 }) {
   if (status === 'saving') {
-    return <Spinner size={16} className={cn('text-muted-foreground', className)} />
+    return (
+      <Spinner size={16} className={cn('text-muted-foreground', className)} />
+    )
   }
   if (status === 'saved') {
     return <Check className={cn('size-4 text-emerald-500', className)} />
@@ -79,7 +82,7 @@ function useDebouncedSave(
   {
     save,
     debounceMs = SETTING_DEBOUNCE_MS,
-    isInvalid,
+    isInvalid
   }: {
     save: (value: string) => Promise<void>
     debounceMs?: number
@@ -158,8 +161,10 @@ function useDebouncedSave(
   return { status, handleChange, flush }
 }
 
-interface SettingTextInputProps
-  extends Omit<React.ComponentProps<typeof Input>, 'onChange' | 'value'> {
+interface SettingTextInputProps extends Omit<
+  React.ComponentProps<typeof Input>,
+  'onChange' | 'value'
+> {
   value: string
   /** Update the owning component's local state (keeps typing responsive). */
   onValueChange: (value: string) => void
@@ -170,6 +175,13 @@ interface SettingTextInputProps
   /** When this returns true the debounced save is skipped (value left local). */
   isInvalidValue?: (value: string) => boolean
   debounceMs?: number
+  /**
+   * Render the shared Lightning-address field instead of a plain input, so a
+   * setting that holds an address gets the same suggestions as everywhere
+   * else. Selecting a suggestion goes through the same debounced save path as
+   * typing, so the picked value is persisted rather than left local.
+   */
+  suggestLightningAddress?: boolean
 }
 
 /** A plain text input that auto-saves on a debounce with a status indicator. */
@@ -182,29 +194,57 @@ export function SettingTextInput({
   debounceMs,
   className,
   onBlur,
+  suggestLightningAddress,
   ...inputProps
 }: SettingTextInputProps) {
   const { status, handleChange, flush } = useDebouncedSave(value, {
     save,
     debounceMs,
-    isInvalid: isInvalidValue,
+    isInvalid: isInvalidValue
   })
+  function applyValue(next: string) {
+    onValueChange(next)
+    handleChange(next)
+  }
   return (
     <div className="relative">
-      <Input
-        {...inputProps}
-        value={value}
-        aria-invalid={invalid || undefined}
-        className={cn(invalid && INVALID_CLASSES, status !== 'idle' && 'pr-9', className)}
-        onChange={e => {
-          onValueChange(e.target.value)
-          handleChange(e.target.value)
-        }}
-        onBlur={e => {
-          flush()
-          onBlur?.(e)
-        }}
-      />
+      {suggestLightningAddress ? (
+        <LightningAddressInput
+          id={inputProps.id}
+          name={inputProps.name}
+          placeholder={inputProps.placeholder}
+          disabled={inputProps.disabled}
+          invalid={invalid}
+          value={value}
+          onChange={applyValue}
+          // A picked suggestion must persist like typed text does.
+          onSelect={next => {
+            applyValue(next)
+            flush()
+          }}
+          onBlur={flush}
+          className={cn(status !== 'idle' && 'pr-9', className)}
+        />
+      ) : (
+        <Input
+          {...inputProps}
+          value={value}
+          aria-invalid={invalid || undefined}
+          className={cn(
+            invalid && INVALID_CLASSES,
+            status !== 'idle' && 'pr-9',
+            className
+          )}
+          onChange={e => {
+            onValueChange(e.target.value)
+            handleChange(e.target.value)
+          }}
+          onBlur={e => {
+            flush()
+            onBlur?.(e)
+          }}
+        />
+      )}
       {status !== 'idle' && (
         <SaveStatusIcon
           status={status}
@@ -215,8 +255,10 @@ export function SettingTextInput({
   )
 }
 
-interface SettingInputGroupProps
-  extends Omit<React.ComponentProps<typeof Input>, 'onChange' | 'value' | 'prefix'> {
+interface SettingInputGroupProps extends Omit<
+  React.ComponentProps<typeof Input>,
+  'onChange' | 'value' | 'prefix'
+> {
   value: string
   onValueChange: (value: string) => void
   save: (value: string) => Promise<void>
@@ -249,7 +291,7 @@ export function SettingInputGroup({
   const { status, handleChange, flush } = useDebouncedSave(value, {
     save,
     debounceMs,
-    isInvalid: isInvalidValue,
+    isInvalid: isInvalidValue
   })
   return (
     <InputGroup className={cn(invalid && INVALID_CLASSES, groupClassName)}>
@@ -276,16 +318,17 @@ export function SettingInputGroup({
           <SaveStatusIcon status={status} />
         </span>
       )}
-      {suffix != null && <InputGroupText position="suffix">{suffix}</InputGroupText>}
+      {suffix != null && (
+        <InputGroupText position="suffix">{suffix}</InputGroupText>
+      )}
     </InputGroup>
   )
 }
 
-interface SettingSwitchProps
-  extends Omit<
-    React.ComponentProps<typeof Switch>,
-    'checked' | 'onCheckedChange' | 'disabled'
-  > {
+interface SettingSwitchProps extends Omit<
+  React.ComponentProps<typeof Switch>,
+  'checked' | 'onCheckedChange' | 'disabled'
+> {
   checked: boolean
   /** Update the owning component's local state (optimistic). */
   onCheckedChange: (checked: boolean) => void
@@ -315,7 +358,9 @@ export function SettingSwitch({
       await save(next)
     } catch (err) {
       onCheckedChange(prev)
-      toast.error(err instanceof Error ? err.message : 'Failed to update setting')
+      toast.error(
+        err instanceof Error ? err.message : 'Failed to update setting'
+      )
     } finally {
       setSaving(false)
     }

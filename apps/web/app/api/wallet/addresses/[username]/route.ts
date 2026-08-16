@@ -4,25 +4,42 @@ import { withErrorHandling } from '@/types/server/error-handler'
 import {
   AuthenticationError,
   NotFoundError,
-  ValidationError,
+  ValidationError
 } from '@/types/server/errors'
-import { authenticate } from '@/lib/auth/unified-auth'
-import { Permission, hasPermission } from '@/lib/auth/permissions'
+import { authenticate, authHasPermission } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
+import { Permission } from '@/lib/auth/permissions'
 import { validateBody, validateParams } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import {
   walletAddressUsernameParam,
-  updateWalletAddressSchema,
+  updateWalletAddressSchema
 } from '@/lib/validation/schemas'
 import { eventBus } from '@/lib/events/event-bus'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
 import { toWalletAddressDto } from '@/lib/wallet/wallet-address-dto'
-import { resolveWalletRoute } from '@/lib/wallet/resolve-payment-route'
-import type { RemoteWallet } from '@/lib/generated/prisma'
+import {
+  parseLightningAddress,
+  resolveWalletRoute
+} from '@/lib/wallet/resolve-payment-route'
+import { Prisma, type RemoteWallet } from '@/lib/generated/prisma'
 import {
   getPrimaryRemoteWalletForUser,
-  syncPrimaryRemoteWalletFlag,
+  syncPrimaryRemoteWalletFlag
 } from '@/lib/wallet/primary-wallet'
+import { getActiveProxyConfig, isProxyEnabled } from '@/lib/proxy/config'
+import { getListenerConfig } from '@/lib/listener-config'
+import {
+  assertNoForwardingCycle,
+  forwardingGraphNodes
+} from '@/lib/proxy/forwarding-graph'
+import { getZapReceiptCapability } from '@/lib/nostr/zap-receipts'
+import {
+  aliasProtocolsFromProbe,
+  resolveAddressProtocols,
+  type StoredAliasProtocols
+} from '@/lib/wallet/address-protocols'
+import { probeLightningAddressCapabilities } from '@/lib/lnurl-probe'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -35,7 +52,7 @@ export const revalidate = 0
 function selectableWallets(userId: string): Promise<RemoteWallet[]> {
   return prisma.remoteWallet.findMany({
     where: { userId, status: { notIn: ['REVOKED', 'DEAD'] } },
-    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }]
   })
 }
 
@@ -46,13 +63,13 @@ function toWalletSummary(w: RemoteWallet) {
     name: w.name,
     type: w.type,
     status: w.status,
-    isDefault: w.isDefault,
+    isDefault: w.isDefault
   }
 }
 
 function sortWalletsWithPrimary(
   wallets: RemoteWallet[],
-  primaryWallet: RemoteWallet | null,
+  primaryWallet: RemoteWallet | null
 ): RemoteWallet[] {
   return [...wallets].sort((a, b) => {
     if (a.id === primaryWallet?.id) return -1
@@ -63,11 +80,11 @@ function sortWalletsWithPrimary(
 
 function toWalletSummaryWithPrimary(
   w: RemoteWallet,
-  primaryWallet: RemoteWallet | null,
+  primaryWallet: RemoteWallet | null
 ) {
   return {
     ...toWalletSummary(w),
-    isDefault: w.id === primaryWallet?.id,
+    isDefault: w.id === primaryWallet?.id
   }
 }
 
@@ -87,38 +104,61 @@ function toWalletSummaryWithPrimary(
  * owner-only path returns, so a plain user can't probe which usernames exist.
  */
 export const GET = withErrorHandling(
-  async (request: Request, { params }: { params: Promise<{ username: string }> }) => {
+  async (
+    request: Request,
+    { params }: { params: Promise<{ username: string }> }
+  ) => {
     const auth = await authenticate(request)
-    const { username } = validateParams(await params, walletAddressUsernameParam)
+    const { username } = validateParams(
+      await params,
+      walletAddressUsernameParam
+    )
 
     const address = await prisma.lightningAddress.findUnique({
       where: { username },
-      include: { remoteWallet: true, user: { select: { pubkey: true } } },
+      include: {
+        remoteWallet: true,
+        user: {
+          select: {
+            id: true,
+            pubkey: true,
+            nostrIdentities: {
+              where: { isPrimary: true },
+              select: { pubkey: true },
+              take: 1
+            }
+          }
+        }
+      }
     })
     if (!address) {
       throw new NotFoundError('Address not found')
     }
 
-    const caller = await prisma.user.findUnique({
-      where: { pubkey: auth.pubkey },
-      select: { id: true },
-    })
+    const caller = await resolveAccountByPubkey(auth.pubkey)
     const isOwner = !!caller && caller.id === address.userId
 
     if (!isOwner) {
-      // A device token's `scopes` are authoritative; everyone else derives
-      // permissions from their role. Mirror `authenticateWithPermission`.
-      const canRead = auth.scopes
-        ? auth.scopes.includes(Permission.ADDRESSES_READ)
-        : hasPermission(auth.role, Permission.ADDRESSES_READ)
+      // Scope-aware check (device tokens included) via the shared helper.
       // Same 404 as a genuine miss so non-admins can't enumerate usernames.
-      if (!canRead) throw new NotFoundError('Address not found')
+      if (!authHasPermission(auth, Permission.ADDRESSES_READ)) {
+        throw new NotFoundError('Address not found')
+      }
 
-      const primaryWallet = await getPrimaryRemoteWalletForUser(address.userId)
-      const wallets = sortWalletsWithPrimary(
-        await selectableWallets(address.userId),
-        primaryWallet,
-      )
+      const [primaryWallet, selectable, deferredProxyEnabled, protocols] =
+        await Promise.all([
+          getPrimaryRemoteWalletForUser(address.userId),
+          selectableWallets(address.userId),
+          isProxyEnabled(),
+          resolveAddressProtocols({
+            mode: address.mode,
+            redirect: address.redirect,
+            aliasProtocols: address.aliasProtocols,
+            routable: address.remoteWallet?.status === 'ACTIVE',
+            user: address.user
+          })
+        ])
+      const wallets = sortWalletsWithPrimary(selectable, primaryWallet)
 
       return NextResponse.json({
         address: toWalletAddressDto(address, primaryWallet),
@@ -126,16 +166,27 @@ export const GET = withErrorHandling(
         // The connection URI is the owner's wallet secret — never surfaced to
         // an admin viewing someone else's address.
         effectiveConnectionString: null,
+        deferredProxyEnabled,
+        protocols,
         isOwner: false,
-        ownerPubkey: address.user.pubkey,
+        ownerPubkey: address.user.pubkey
       })
     }
 
-    const primaryWallet = await getPrimaryRemoteWalletForUser(caller.id)
-    const wallets = sortWalletsWithPrimary(
-      await selectableWallets(caller.id),
-      primaryWallet,
-    )
+    const [primaryWallet, selectable, deferredProxyEnabled, protocols] =
+      await Promise.all([
+        getPrimaryRemoteWalletForUser(caller.id),
+        selectableWallets(caller.id),
+        isProxyEnabled(),
+        resolveAddressProtocols({
+          mode: address.mode,
+          redirect: address.redirect,
+          aliasProtocols: address.aliasProtocols,
+          routable: address.remoteWallet?.status === 'ACTIVE',
+          user: address.user
+        })
+      ])
+    const wallets = sortWalletsWithPrimary(selectable, primaryWallet)
 
     // Ship the already-resolved connection URI so the balance / transactions
     // widgets don't duplicate the server's resolution. Null for IDLE / ALIAS
@@ -144,22 +195,24 @@ export const GET = withErrorHandling(
     const route = resolveWalletRoute({
       mode: address.mode,
       redirect: address.redirect,
-      remoteWallet: address.remoteWallet,
-      defaultRemoteWallet: primaryWallet,
+      remoteWallet: address.remoteWallet
     })
     const effectiveConnectionString =
       route.kind === 'wallet'
-        ? ((route.config as { connectionString?: string } | null)?.connectionString ?? null)
+        ? ((route.config as { connectionString?: string } | null)
+            ?.connectionString ?? null)
         : null
 
     return NextResponse.json({
       address: toWalletAddressDto(address, primaryWallet),
       wallets: wallets.map(w => toWalletSummaryWithPrimary(w, primaryWallet)),
       effectiveConnectionString,
+      deferredProxyEnabled,
+      protocols,
       isOwner: true,
-      ownerPubkey: auth.pubkey,
+      ownerPubkey: auth.pubkey
     })
-  },
+  }
 )
 
 /**
@@ -172,25 +225,30 @@ export const GET = withErrorHandling(
  * shape compatible with `validateBody`):
  *   - ALIAS       → `redirect` must be present.
  *   - CUSTOM_NWC  → `remoteWalletId` must be present AND owned by caller.
- *   - IDLE / DEFAULT_NWC → both fields are cleared (set NULL) regardless of
- *                          what the client sent. DEFAULT_NWC is normalized
+ *   - IDLE → both fields are cleared (set NULL) regardless of
+ *            what the client sent. Normalized
  *                          for primary addresses so primary wallet state
  *                          always comes from a CUSTOM_NWC binding.
  */
 export const PUT = withErrorHandling(
-  async (request: Request, { params }: { params: Promise<{ username: string }> }) => {
+  async (
+    request: Request,
+    { params }: { params: Promise<{ username: string }> }
+  ) => {
     await checkRequestLimits(request, 'json')
     const { pubkey } = await authenticate(request)
-    const { username } = validateParams(await params, walletAddressUsernameParam)
+    const { username } = validateParams(
+      await params,
+      walletAddressUsernameParam
+    )
     const body = await validateBody(request, updateWalletAddressSchema)
 
-    const user = await prisma.user.findUnique({
-      where: { pubkey },
-      select: { id: true },
-    })
+    const user = await resolveAccountByPubkey(pubkey)
     if (!user) throw new AuthenticationError('User not found')
 
-    const existing = await prisma.lightningAddress.findUnique({ where: { username } })
+    const existing = await prisma.lightningAddress.findUnique({
+      where: { username }
+    })
     if (!existing || existing.userId !== user.id) {
       throw new NotFoundError('Address not found')
     }
@@ -198,18 +256,62 @@ export const PUT = withErrorHandling(
     let mode = body.mode
     let redirect: string | null = null
     let remoteWalletId: string | null = null
+    // Cleared for every non-ALIAS mode: a stale probe would describe a
+    // destination this address no longer forwards to.
+    let aliasProtocols: StoredAliasProtocols | null = null
 
-    if (body.mode === 'ALIAS') {
+    if (body.mode === 'ALIAS' || body.mode === 'PROXY_ALIAS') {
       if (!body.redirect) {
-        throw new ValidationError('redirect is required when mode is ALIAS')
+        throw new ValidationError(
+          `redirect is required when mode is ${body.mode}`
+        )
+      }
+      if (body.mode === 'PROXY_ALIAS') {
+        const [proxy, listener] = await Promise.all([
+          getActiveProxyConfig(),
+          getListenerConfig()
+        ])
+        if (!proxy || !listener.enabled) {
+          throw new ValidationError(
+            'Deferred proxy mode requires an enabled listener and configured proxy wallet'
+          )
+        }
+        // A malformed address used to skip the check entirely and get stored.
+        if (!parseLightningAddress(body.redirect)) {
+          throw new ValidationError(
+            `Invalid Lightning Address: ${body.redirect}`
+          )
+        }
+        // Forwarding to an address on this instance is supported; forwarding
+        // into a ring that comes back here is not.
+        await assertNoForwardingCycle(
+          forwardingGraphNodes.address(username),
+          body.redirect
+        )
       }
       redirect = body.redirect
+      // Probe here rather than trusting the client's pre-save preview: a direct
+      // API call skips that dialog entirely, and the stored result is what the
+      // address list reports without re-fetching every target.
+      if (body.mode === 'ALIAS') {
+        try {
+          aliasProtocols = aliasProtocolsFromProbe(
+            await probeLightningAddressCapabilities(body.redirect)
+          )
+        } catch {
+          // A probe failure must not block saving a valid alias; the address
+          // simply reports "unknown" until the next save.
+          aliasProtocols = null
+        }
+      }
     } else if (body.mode === 'CUSTOM_NWC') {
       if (!body.remoteWalletId) {
-        throw new ValidationError('remoteWalletId is required when mode is CUSTOM_NWC')
+        throw new ValidationError(
+          'remoteWalletId is required when mode is CUSTOM_NWC'
+        )
       }
       const wallet = await prisma.remoteWallet.findUnique({
-        where: { id: body.remoteWalletId },
+        where: { id: body.remoteWalletId }
       })
       if (
         !wallet ||
@@ -220,21 +322,20 @@ export const PUT = withErrorHandling(
         throw new ValidationError('Unknown wallet')
       }
       remoteWalletId = wallet.id
-    } else if (body.mode === 'DEFAULT_NWC' && existing.isPrimary) {
-      const primaryWallet = await getPrimaryRemoteWalletForUser(user.id)
-      if (primaryWallet) {
-        mode = 'CUSTOM_NWC'
-        remoteWalletId = primaryWallet.id
-      } else {
-        mode = 'IDLE'
-      }
     }
 
     const updated = await prisma.$transaction(async tx => {
       const address = await tx.lightningAddress.update({
         where: { username },
-        data: { mode, redirect, remoteWalletId },
-        include: { remoteWallet: true },
+        data: {
+          mode,
+          redirect,
+          remoteWalletId,
+          aliasProtocols: aliasProtocols
+            ? (aliasProtocols as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull
+        },
+        include: { remoteWallet: true }
       })
       if (existing.isPrimary) {
         await syncPrimaryRemoteWalletFlag(user.id, tx)
@@ -258,8 +359,8 @@ export const PUT = withErrorHandling(
         username: updated.username,
         previousMode: existing.mode,
         mode: updated.mode,
-        remoteWalletId: updated.remoteWalletId ?? null,
-      },
+        remoteWalletId: updated.remoteWalletId ?? null
+      }
     })
 
     // If the update bound a custom wallet to this address, emit a dedicated
@@ -277,13 +378,13 @@ export const PUT = withErrorHandling(
         userId: user.id,
         metadata: {
           username: updated.username,
-          remoteWalletId: updated.remoteWalletId,
-        },
+          remoteWalletId: updated.remoteWalletId
+        }
       })
     }
 
     return NextResponse.json(toWalletAddressDto(updated, defaultWallet))
-  },
+  }
 )
 
 /**
@@ -299,17 +400,22 @@ export const PUT = withErrorHandling(
  * then promoting respects the partial-unique index (one primary per userId).
  */
 export const DELETE = withErrorHandling(
-  async (request: Request, { params }: { params: Promise<{ username: string }> }) => {
+  async (
+    request: Request,
+    { params }: { params: Promise<{ username: string }> }
+  ) => {
     const { pubkey } = await authenticate(request)
-    const { username } = validateParams(await params, walletAddressUsernameParam)
+    const { username } = validateParams(
+      await params,
+      walletAddressUsernameParam
+    )
 
-    const user = await prisma.user.findUnique({
-      where: { pubkey },
-      select: { id: true },
-    })
+    const user = await resolveAccountByPubkey(pubkey)
     if (!user) throw new AuthenticationError('User not found')
 
-    const existing = await prisma.lightningAddress.findUnique({ where: { username } })
+    const existing = await prisma.lightningAddress.findUnique({
+      where: { username }
+    })
     if (!existing || existing.userId !== user.id) {
       throw new NotFoundError('Address not found')
     }
@@ -318,7 +424,7 @@ export const DELETE = withErrorHandling(
       ? await prisma.lightningAddress.findFirst({
           where: { userId: user.id, username: { not: username } },
           orderBy: { createdAt: 'asc' },
-          select: { username: true },
+          select: { username: true }
         })
       : null
 
@@ -330,28 +436,9 @@ export const DELETE = withErrorHandling(
       await tx.lightningAddress.delete({ where: { username } })
 
       if (nextPrimary) {
-        const promoted = await tx.lightningAddress.findUnique({
-          where: { username: nextPrimary.username },
-          select: { mode: true },
-        })
         await tx.lightningAddress.update({
           where: { username: nextPrimary.username },
-          data:
-            promoted?.mode === 'DEFAULT_NWC'
-              ? fallbackWallet
-                ? {
-                    isPrimary: true,
-                    mode: 'CUSTOM_NWC',
-                    redirect: null,
-                    remoteWalletId: fallbackWallet.id,
-                  }
-                : {
-                    isPrimary: true,
-                    mode: 'IDLE',
-                    redirect: null,
-                    remoteWalletId: null,
-                  }
-              : { isPrimary: true },
+          data: { isPrimary: true }
         })
       }
 
@@ -373,10 +460,10 @@ export const DELETE = withErrorHandling(
       metadata: {
         username,
         wasPrimary: existing.isPrimary,
-        promotedPrimary: nextPrimary?.username ?? null,
-      },
+        promotedPrimary: nextPrimary?.username ?? null
+      }
     })
 
     return NextResponse.json({ success: true, username })
-  },
+  }
 )

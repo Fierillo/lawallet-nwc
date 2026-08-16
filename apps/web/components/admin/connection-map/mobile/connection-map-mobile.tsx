@@ -7,14 +7,17 @@ import { useRemoteWallets } from '@/lib/client/hooks/use-remote-wallets'
 import { useMyAddresses } from '@/lib/client/hooks/use-wallet-addresses'
 import { useMyCards } from '@/lib/client/hooks/use-cards'
 import { useSettings } from '@/lib/client/hooks/use-settings'
+import { useRemoteWalletForwardingMap } from '@/lib/client/hooks/use-remote-wallet-forwarding'
 import {
   ConnectionDetailDialog,
-  type ConnectionSelection,
+  type ConnectionSelection
 } from '../connection-detail-dialog'
 import { AddressTab } from './address-tab'
 import { CardTab } from './card-tab'
 import { WalletTab } from './wallet-tab'
+import { DestinationTab } from './destination-tab'
 import { withDerivedPrimaryWalletFlags } from '../primary-wallet'
+import { indexProxyDestinations } from '../proxy-destinations'
 
 /**
  * Mobile / tablet (<1024 px) Connection Map — three tabs (Addresses ·
@@ -31,9 +34,12 @@ export function ConnectionMapMobile() {
   // `/api/wallet/cards` is per-caller — every authenticated user gets the
   // cards paired to themselves (an admin included). Mirrors the desktop map.
   const { data: cards, loading: cardsLoading } = useMyCards()
+  const { data: forwardingMap, loading: forwardingLoading } =
+    useRemoteWalletForwardingMap()
 
   const domain = settings?.domain || 'your-domain'
-  const loading = walletsLoading || addressesLoading || cardsLoading
+  const loading =
+    walletsLoading || addressesLoading || cardsLoading || forwardingLoading
 
   // Row tap → shared detail dialog (Address / Wallet / Card bodies).
   const [selected, setSelected] = useState<ConnectionSelection>(null)
@@ -41,11 +47,21 @@ export function ConnectionMapMobile() {
   const addressList = addresses ?? []
   const walletList = useMemo(
     () => withDerivedPrimaryWalletFlags(wallets, addresses),
-    [wallets, addresses],
+    [wallets, addresses]
   )
   const cardList = cards ?? []
+  const proxyDestinations = useMemo(
+    () => indexProxyDestinations(addresses, forwardingMap?.actions ?? null),
+    [addresses, forwardingMap?.actions]
+  )
+  const tabCount = proxyDestinations.length > 0 ? 4 : 3
 
-  if (loading && !walletList.length && !addressList.length && !cardList.length) {
+  if (
+    loading &&
+    !walletList.length &&
+    !addressList.length &&
+    !cardList.length
+  ) {
     return (
       <div className="flex h-full items-center justify-center">
         <Spinner size={24} className="text-muted-foreground" />
@@ -57,7 +73,12 @@ export function ConnectionMapMobile() {
     <div className="flex h-full flex-col">
       <Tabs defaultValue="addresses" className="flex min-h-0 flex-1 flex-col">
         <div className="px-4 pt-3">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList
+            className="grid w-full"
+            style={{
+              gridTemplateColumns: `repeat(${tabCount}, minmax(0, 1fr))`
+            }}
+          >
             <TabsTrigger value="addresses">
               Addresses
               {addressList.length > 0 && (
@@ -82,6 +103,14 @@ export function ConnectionMapMobile() {
                 </span>
               )}
             </TabsTrigger>
+            {proxyDestinations.length > 0 ? (
+              <TabsTrigger value="destinations">
+                Destinations
+                <span className="ml-1.5 text-xs text-muted-foreground">
+                  {proxyDestinations.length}
+                </span>
+              </TabsTrigger>
+            ) : null}
           </TabsList>
         </div>
 
@@ -110,6 +139,15 @@ export function ConnectionMapMobile() {
               onOpenDetail={id => setSelected({ kind: 'card', id })}
             />
           </TabsContent>
+          {proxyDestinations.length > 0 ? (
+            <TabsContent value="destinations" className="mt-0">
+              <DestinationTab
+                destinations={proxyDestinations}
+                wallets={walletList}
+                domain={domain}
+              />
+            </TabsContent>
+          ) : null}
         </div>
       </Tabs>
 

@@ -4,6 +4,7 @@ import type { Card } from '@/types/card'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { NotFoundError } from '@/types/server/errors'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -24,17 +25,20 @@ export const revalidate = 0
 export const GET = withErrorHandling(async (request: Request) => {
   const { pubkey } = await authenticate(request)
 
-  const user = await prisma.user.findUnique({
-    where: { pubkey },
-    select: {
-      id: true,
-      remoteWallets: {
-        where: { isDefault: true, status: 'ACTIVE' },
-        take: 1,
-        select: { id: true }
-      }
-    }
-  })
+  const account = await resolveAccountByPubkey(pubkey)
+  const user = account
+    ? await prisma.user.findUnique({
+        where: { id: account.id },
+        select: {
+          id: true,
+          remoteWallets: {
+            where: { isDefault: true, status: 'ACTIVE' },
+            take: 1,
+            select: { id: true }
+          }
+        }
+      })
+    : null
   if (!user) throw new NotFoundError('User not found')
 
   const defaultRemoteWalletId = user.remoteWallets?.[0]?.id ?? null
@@ -86,6 +90,9 @@ export const GET = withErrorHandling(async (request: Request) => {
     }
   })
 
+  // One designation per holder, so a single value covers the whole list.
+  const masterCardId = cards.find(card => card.kind === 'MASTER')?.id ?? null
+
   const transformed: Card[] = cards.map(card => ({
     id: card.id,
     design: card.design,
@@ -104,6 +111,7 @@ export const GET = withErrorHandling(async (request: Request) => {
     remoteWalletId: card.remoteWalletId ?? null,
     defaultRemoteWalletId,
     kind: card.kind,
+    masterCardId,
     blocked: card.blockedAt !== null,
     disabled: card.disabledAt !== null
   }))

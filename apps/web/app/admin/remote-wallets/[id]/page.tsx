@@ -3,26 +3,28 @@
 import React, { useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft, ExternalLink, RefreshCw, Star, Wallet, Zap } from 'lucide-react'
+import { ArrowLeft, ExternalLink, Star, Wallet, Zap } from 'lucide-react'
 import { AdminTopbar } from '@/components/admin/admin-topbar'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { cn } from '@/lib/utils'
 import {
   useRemoteWallet,
   useLiveRemoteWalletBalance,
   useRemoteWalletConnectionString,
-  type RemoteWalletData,
+  type RemoteWalletData
 } from '@/lib/client/hooks/use-remote-wallets'
 import { useNwcTransactions } from '@/lib/client/hooks/use-nwc-transactions'
 import { useAnimatedNumber } from '@/lib/client/hooks/use-animated-number'
 import { DEFAULT_LNCURL_SERVER } from '@/lib/lncurl'
+import { truncateNpub } from '@/lib/client/format'
 import { RemoteWalletRowActions } from '@/components/admin/remote-wallet-row-actions'
 import { WalletActions } from '@/components/admin/connection-map/wallet-detail-dialog'
 import { LncurlCountdown } from '@/components/admin/remote-wallet/lncurl-countdown'
 import { WalletBalanceChart } from '@/components/admin/remote-wallet/balance-chart'
-import { WalletTransactionsList } from '@/components/admin/remote-wallet/transactions-list'
+import { RemoteWalletForwardingPanel } from '@/components/wallet/remote-wallet-forwarding-panel'
+import { RemoteWalletReceiveProtocols } from '@/components/wallet/remote-wallet-receive-protocols'
+import { RemoteWalletNotificationsPanel } from '@/components/wallet/remote-wallet-notifications-panel'
 
 const STATUS_VARIANT: Record<
   RemoteWalletData['status'],
@@ -31,7 +33,7 @@ const STATUS_VARIANT: Record<
   ACTIVE: 'default',
   DISABLED: 'secondary',
   REVOKED: 'outline',
-  DEAD: 'destructive',
+  DEAD: 'destructive'
 }
 
 export default function RemoteWalletDetailPage() {
@@ -40,11 +42,19 @@ export default function RemoteWalletDetailPage() {
 
   const { data: wallet, loading, error, refetch } = useRemoteWallet(id)
 
+  // An admin holding REMOTE_WALLETS_READ can open somebody else's wallet.
+  // That view is strictly read-only, and the owner-only endpoints below are
+  // never even called: balance and the NWC connection string stay private, and
+  // holding the connection string would BE the ability to spend.
+  // (Older responses omit the field → treat as owned.)
+  const isOwner = wallet?.isOwner !== false
+
   // Only ACTIVE wallets have a live connection: skip the balance/transaction
   // round-trips (and the secret connection-string fetch) for the rest.
   const isActive = wallet?.status === 'ACTIVE'
-  const balance = useLiveRemoteWalletBalance(isActive ? id : null)
-  const connection = useRemoteWalletConnectionString(isActive ? id : null)
+  const canConnect = isActive && isOwner
+  const balance = useLiveRemoteWalletBalance(canConnect ? id : null)
+  const connection = useRemoteWalletConnectionString(canConnect ? id : null)
   const txs = useNwcTransactions(connection.data?.connectionString ?? null, 100)
 
   const balanceSats = balance.data?.balanceSats ?? null
@@ -84,12 +94,17 @@ export default function RemoteWalletDetailPage() {
                   <Wallet className="size-5 shrink-0 text-amber-400" />
                   <span className="break-all">{wallet.name}</span>
                   {wallet.isDefault && (
-                    <Star className="size-4 shrink-0 fill-amber-400 text-amber-400" aria-label="Primary" />
+                    <Star
+                      className="size-4 shrink-0 fill-amber-400 text-amber-400"
+                      aria-label="Primary"
+                    />
                   )}
                 </h1>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{wallet.type}</Badge>
-                  <Badge variant={STATUS_VARIANT[wallet.status]}>{wallet.status}</Badge>
+                  <Badge variant={STATUS_VARIANT[wallet.status]}>
+                    {wallet.status}
+                  </Badge>
                   {isLncurl && (
                     <a
                       href={wallet.lncurlServerUrl ?? DEFAULT_LNCURL_SERVER}
@@ -112,17 +127,44 @@ export default function RemoteWalletDetailPage() {
                   )}
                 </div>
               </div>
-              <RemoteWalletRowActions wallet={wallet} onChanged={refetch} />
+              {isOwner && (
+                <RemoteWalletRowActions wallet={wallet} onChanged={refetch} />
+              )}
             </div>
 
-            {!isActive && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-400">
-                This wallet is {wallet.status.toLowerCase()} — its live balance and
-                activity aren’t available.
+            {!isOwner && (
+              <div className="rounded-md border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                Viewing another user’s wallet (read-only). Its balance and
+                connection are private to the owner
+                {wallet.ownerPubkey ? (
+                  <>
+                    {' '}
+                    <Link
+                      href={`/admin/users/${wallet.ownerPubkey}`}
+                      className="underline underline-offset-2"
+                    >
+                      {truncateNpub(wallet.ownerPubkey)}
+                    </Link>
+                  </>
+                ) : null}
+                .
               </div>
             )}
 
-            {/* Balance + chart */}
+            {!isActive && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-400">
+                This wallet is {wallet.status.toLowerCase()} — its live balance
+                and activity aren’t available.
+              </div>
+            )}
+
+            <RemoteWalletReceiveProtocols
+              active={isActive}
+              capabilities={wallet.receiveCapabilities}
+            />
+
+            {/* Balance + chart — owner only; both need the wallet's secret */}
+            {isOwner && (
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="flex flex-col gap-4">
                 <BalanceHero
@@ -160,34 +202,18 @@ export default function RemoteWalletDetailPage() {
                 />
               </div>
             </div>
+            )}
 
-            {/* Transactions */}
-            <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold">Transactions</h2>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  onClick={() => txs.refetch()}
-                  disabled={txs.loading || !isActive}
-                  aria-label="Refresh transactions"
-                >
-                  <RefreshCw className={cn('size-4', txs.loading && 'animate-spin')} />
-                </Button>
-              </div>
-              {isActive ? (
-                <WalletTransactionsList
-                  transactions={txs.data ?? []}
-                  loading={txs.loading || connection.loading}
-                  error={txs.error}
-                />
-              ) : (
-                <p className="py-10 text-center text-sm text-muted-foreground">
-                  Activity is only available for active wallets.
-                </p>
-              )}
-            </div>
+            <RemoteWalletForwardingPanel
+              walletId={wallet.id}
+              transactions={txs.data ?? []}
+              transactionsLoading={txs.loading || connection.loading}
+              transactionsError={txs.error}
+              walletActive={isActive}
+              readOnly={!isOwner}
+            />
+
+            {isOwner && <RemoteWalletNotificationsPanel walletId={wallet.id} />}
           </>
         )}
       </div>
@@ -204,7 +230,7 @@ function BalanceHero({
   state,
   onPaid,
   receiving,
-  onReceivingChange,
+  onReceivingChange
 }: {
   wallet: RemoteWalletData
   animatedSats: number
@@ -218,7 +244,7 @@ function BalanceHero({
     connected: 'Connected',
     searching: 'Searching…',
     error: 'Unavailable',
-    disabled: 'Disabled',
+    disabled: 'Disabled'
   }[state]
 
   return (
@@ -235,7 +261,7 @@ function BalanceHero({
             state === 'connected' && 'bg-emerald-400',
             state === 'searching' && 'animate-pulse bg-amber-400',
             state === 'error' && 'bg-destructive',
-            state === 'disabled' && 'bg-muted-foreground',
+            state === 'disabled' && 'bg-muted-foreground'
           )}
         />
         {stateLabel}
@@ -249,7 +275,7 @@ function BalanceHero({
           <span
             className={cn(
               'text-4xl font-semibold leading-none transition-colors',
-              receiving && 'animate-pulse text-emerald-500',
+              receiving && 'animate-pulse text-emerald-500'
             )}
           >
             {hasBalance ? animatedSats.toLocaleString() : '—'}

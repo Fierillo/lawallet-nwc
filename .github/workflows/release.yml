@@ -50,6 +50,13 @@ jobs:
           DATABASE_URL: 'postgresql://ci:ci@localhost:5432/ci'
           JWT_SECRET: 'ci-build-secret-minimum-32-characters-long'
       - run: pnpm docs:check
+      # Strict here, advisory in CI: this is the last point before images are
+      # published and the Umbrel/Start9 packages are dispatched, so a package
+      # missing a required runtime secret must stop the release rather than
+      # ship a crash-looping app (as v2.1.0 did on Umbrel).
+      - run: pnpm deploy:check
+        env:
+          STRICT_EXTERNAL_PACKAGES: '1'
 
       - name: Bump versions + scaffold changelog
         id: bump
@@ -62,7 +69,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json apps/web/package.json apps/cli/package.json docs/changelogs/
+          # Staged from the bump step's own list — see scripts/release.mjs.
+          git add ${{ steps.bump.outputs.files }} docs/changelogs/
           git commit -m "chore(release): v${VERSION}"
           # Annotated tag, pushed explicitly — `--follow-tags` skips
           # lightweight tags, which silently dropped the tag in v0.11.0.
@@ -94,5 +102,17 @@ jobs:
     uses: ./.github/workflows/docker-publish.yml
     with:
       tag: ${{ needs.release.outputs.version }}
+      ref: ${{ needs.release.outputs.sha }}
+    secrets: inherit
+
+  # Same reason the docker job is called directly: the bump commit is pushed
+  # with GITHUB_TOKEN, and GitHub does not fire `push`-triggered workflows for
+  # it. Without this the hosted listener silently stays on whatever commit last
+  # touched apps/listener — it sat on 2.5.0 while 2.5.1 was live everywhere else.
+  fly:
+    name: Deploy listener to Fly.io
+    needs: release
+    uses: ./.github/workflows/fly-listener.yml
+    with:
       ref: ${{ needs.release.outputs.sha }}
     secrets: inherit

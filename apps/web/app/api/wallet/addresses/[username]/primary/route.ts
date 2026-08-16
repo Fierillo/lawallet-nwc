@@ -3,12 +3,13 @@ import { prisma } from '@/lib/prisma'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { AuthenticationError, NotFoundError } from '@/types/server/errors'
 import { authenticate } from '@/lib/auth/unified-auth'
+import { resolveAccountByPubkey } from '@/lib/auth/account'
 import { validateParams } from '@/lib/validation/middleware'
 import { walletAddressUsernameParam } from '@/lib/validation/schemas'
 import { eventBus } from '@/lib/events/event-bus'
 import {
   getPrimaryRemoteWalletIdForUser,
-  syncPrimaryRemoteWalletFlag,
+  syncPrimaryRemoteWalletFlag
 } from '@/lib/wallet/primary-wallet'
 
 export const dynamic = 'force-dynamic'
@@ -27,47 +28,38 @@ export const revalidate = 0
  * Postgres. Clearing first then promoting respects that constraint.
  */
 export const POST = withErrorHandling(
-  async (request: Request, { params }: { params: Promise<{ username: string }> }) => {
+  async (
+    request: Request,
+    { params }: { params: Promise<{ username: string }> }
+  ) => {
     const { pubkey } = await authenticate(request)
-    const { username } = validateParams(await params, walletAddressUsernameParam)
+    const { username } = validateParams(
+      await params,
+      walletAddressUsernameParam
+    )
 
-    const user = await prisma.user.findUnique({
-      where: { pubkey },
-      select: { id: true },
-    })
+    const user = await resolveAccountByPubkey(pubkey)
     if (!user) throw new AuthenticationError('User not found')
 
-    const target = await prisma.lightningAddress.findUnique({ where: { username } })
+    const target = await prisma.lightningAddress.findUnique({
+      where: { username }
+    })
     if (!target || target.userId !== user.id) {
       throw new NotFoundError('Address not found')
     }
 
     await prisma.$transaction(async tx => {
-      const fallbackWalletId = await getPrimaryRemoteWalletIdForUser(user.id, tx)
-      const nextData =
-        target.mode === 'DEFAULT_NWC'
-          ? fallbackWalletId
-            ? {
-                isPrimary: true,
-                mode: 'CUSTOM_NWC' as const,
-                redirect: null,
-                remoteWalletId: fallbackWalletId,
-              }
-            : {
-                isPrimary: true,
-                mode: 'IDLE' as const,
-                redirect: null,
-                remoteWalletId: null,
-              }
-          : { isPrimary: true }
+      // Promotion only moves the primary flag now — an address already names
+      // its own wallet, so there is no implicit routing left to rewrite.
+      const nextData = { isPrimary: true }
 
       await tx.lightningAddress.updateMany({
         where: { userId: user.id, isPrimary: true },
-        data: { isPrimary: false },
+        data: { isPrimary: false }
       })
       await tx.lightningAddress.update({
         where: { username },
-        data: nextData,
+        data: nextData
       })
       await syncPrimaryRemoteWalletFlag(user.id, tx)
     })
@@ -75,5 +67,5 @@ export const POST = withErrorHandling(
     eventBus.emit({ type: 'addresses:updated', timestamp: Date.now() })
     eventBus.emit({ type: 'users:updated', timestamp: Date.now() })
     return NextResponse.json({ success: true, username })
-  },
+  }
 )
