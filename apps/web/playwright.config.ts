@@ -11,6 +11,8 @@ const allBrowsers = !!process.env.PW_ALL_BROWSERS
 
 export default defineConfig({
   testDir: './e2e',
+  // Compile the API surface before the workers race for it — see the file.
+  globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
@@ -53,7 +55,6 @@ export default defineConfig({
       NWC_VAULT_SECRET: E2E_NWC_VAULT_SECRET,
       NODE_ENV: 'development',
       RATE_LIMIT_ENABLED: 'false',
-      AUTO_GENERATE_ALBY_SUBACCOUNTS: 'false',
       MAINTENANCE_MODE: 'false',
       NEXT_PUBLIC_LAWALLET_LANDING_URL: '/admin',
       LOG_LEVEL: 'warn'

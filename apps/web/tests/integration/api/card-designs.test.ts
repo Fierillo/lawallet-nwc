@@ -40,10 +40,6 @@ vi.mock('@/lib/settings', () => ({
   getSettings: vi.fn()
 }))
 
-vi.mock('@/mocks/card-design', () => ({
-  mockCardDesignData: [{ id: 'existing-1' }, { id: 'existing-2' }]
-}))
-
 vi.mock('@/lib/auth/account', () => ({
   resolveAccountByPubkey: vi.fn()
 }))
@@ -74,6 +70,7 @@ import { authenticateWithPermission } from '@/lib/auth/unified-auth'
 import { validateAdminAuth } from '@/lib/admin-auth'
 import { getSettings } from '@/lib/settings'
 import { resolveAccountByPubkey } from '@/lib/auth/account'
+import { logActivity } from '@/lib/activity-log'
 
 const mockAdmin = () =>
   vi.mocked(authenticateWithPermission).mockResolvedValue({
@@ -249,6 +246,107 @@ describe('PUT /api/card-designs/[id]', () => {
   })
 })
 
+describe('PUT /api/card-designs/[id] — audit attribution', () => {
+  it('attributes the update to the acting admin in the audit log', async () => {
+    mockAdmin()
+    vi.mocked(resolveAccountByPubkey).mockResolvedValue({
+      id: 'admin-user-1'
+    } as any)
+    vi.mocked(prismaMock.cardDesign.findUnique).mockResolvedValue({
+      id: 'd1'
+    } as any)
+    vi.mocked(prismaMock.cardDesign.update).mockResolvedValue({
+      id: 'd1',
+      imageUrl: 'https://blossom.example.com/a.png',
+      description: 'Renamed',
+      createdAt: new Date(),
+      archivedAt: null
+    } as any)
+
+    const req = createNextRequest('/api/card-designs/d1', {
+      method: 'PUT',
+      body: { description: 'Renamed' }
+    })
+    await assertResponse(
+      await UpdatePut(req, createParamsPromise({ id: 'd1' })),
+      200
+    )
+
+    // Guards against a "fake fix" that hardcodes a userId without actually
+    // resolving the caller: the audit row must carry the id returned by
+    // resolveAccountByPubkey(auth.pubkey), not an arbitrary string.
+    expect(resolveAccountByPubkey).toHaveBeenCalledWith('admin')
+    expect(logActivity.fireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        category: 'CARD',
+        event: 'card.card_design_updated',
+        message: 'Card design updated: Renamed',
+        userId: 'admin-user-1',
+        metadata: expect.objectContaining({
+          designId: 'd1',
+          archived: false,
+          changedBy: 'admin'
+        })
+      })
+    )
+  })
+
+  it('records the actor pubkey in metadata even when account resolution fails', async () => {
+    mockAdmin()
+    vi.mocked(resolveAccountByPubkey).mockResolvedValue(null)
+    vi.mocked(prismaMock.cardDesign.findUnique).mockResolvedValue({
+      id: 'd1'
+    } as any)
+    vi.mocked(prismaMock.cardDesign.update).mockResolvedValue({
+      id: 'd1',
+      imageUrl: 'https://blossom.example.com/a.png',
+      description: 'Renamed',
+      createdAt: new Date(),
+      archivedAt: null
+    } as any)
+
+    const req = createNextRequest('/api/card-designs/d1', {
+      method: 'PUT',
+      body: { description: 'Renamed' }
+    })
+    await assertResponse(
+      await UpdatePut(req, createParamsPromise({ id: 'd1' })),
+      200
+    )
+
+    // `changedBy` is the resilience fallback: when the pubkey isn't linked to
+    // a User row the audit row must still record the actor somewhere.
+    expect(logActivity.fireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: null,
+        metadata: expect.objectContaining({
+          changedBy: 'admin'
+        })
+      })
+    )
+  })
+
+  it('returns 404 and writes no audit row when the design does not exist', async () => {
+    mockAdmin()
+    vi.mocked(prismaMock.cardDesign.findUnique).mockResolvedValue(null)
+
+    const req = createNextRequest('/api/card-designs/missing', {
+      method: 'PUT',
+      body: { description: 'Renamed' }
+    })
+    const res = await UpdatePut(req, createParamsPromise({ id: 'missing' }))
+
+    expect(res.status).toBe(404)
+    // Actor resolution runs only after the existence check, so a 404 neither
+    // wastes the lookup nor logs a spurious CARD_DESIGN_UPDATED row.
+    expect(resolveAccountByPubkey).not.toHaveBeenCalled()
+    expect(prismaMock.cardDesign.update).not.toHaveBeenCalled()
+    expect(logActivity.fireAndForget).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'card.card_design_updated' })
+    )
+  })
+})
+
 describe('POST /api/card-designs/import', () => {
   it('imports new designs from veintiuno.lat', async () => {
     mockAdmin()
@@ -338,6 +436,9 @@ describe('POST /api/card-designs/import', () => {
     const body: any = await assertResponse(res, 200)
 
     expect(body.imported).toBe(0)
+    // `skipped` reports the count of fetched designs that were already in the
+    // DB, not the size of an unrelated local mock array.
+    expect(body.skipped).toBe(1)
     expect(prismaMock.cardDesign.create).not.toHaveBeenCalled()
   })
 
@@ -446,6 +547,128 @@ describe('POST /api/card-designs/import', () => {
     const res = await ImportPost(req)
 
     expect(res.status).toBeGreaterThanOrEqual(400)
+  })
+
+  it('dedups against the fetched catalog IDs, not the static mock array', async () => {
+    mockAdmin()
+    vi.mocked(getSettings).mockResolvedValue({
+      is_community: 'true',
+      community_id: 'btc-isla'
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: 'veintiuno-1',
+            communityId: 'btc-isla',
+            imageUrl: 'https://img.com/1.png',
+            description: 'Design 1'
+          },
+          {
+            id: 'veintiuno-2',
+            communityId: 'btc-isla',
+            imageUrl: 'https://img.com/2.png',
+            description: 'Design 2'
+          }
+        ]),
+        { status: 200 }
+      )
+    )
+
+    vi.mocked(prismaMock.cardDesign.findMany).mockResolvedValue([])
+    vi.mocked(prismaMock.cardDesign.create).mockImplementation((async ({
+      data
+    }: any) => ({ ...data, createdAt: new Date() })) as any)
+
+    const req = createNextRequest('/api/card-designs/import', {
+      method: 'POST'
+    })
+    await assertResponse(await ImportPost(req), 200)
+
+    // The dedup query must probe the IDs actually being inserted (the fetched
+    // `veintiuno-N` ids), not the static local `mockCardDesignData` ids
+    // (`design-001`…). Those namespaces are disjoint, so probing the mock ids
+    // would never protect against re-inserting fetched rows.
+    expect(prismaMock.cardDesign.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ['veintiuno-1', 'veintiuno-2'] } },
+        select: { id: true }
+      })
+    )
+  })
+
+  it('is idempotent: a re-sync returns 200 with imported: 0 (not a 500)', async () => {
+    mockAdmin()
+    vi.mocked(getSettings).mockResolvedValue({
+      is_community: 'true',
+      community_id: 'btc-isla'
+    })
+
+    const catalog = [
+      {
+        id: 'veintiuno-1',
+        communityId: 'btc-isla',
+        imageUrl: 'https://img.com/1.png',
+        description: 'Design 1'
+      },
+      {
+        id: 'veintiuno-2',
+        communityId: 'btc-isla',
+        imageUrl: 'https://img.com/2.png',
+        description: 'Design 2'
+      }
+    ]
+    // A fresh Response per call: the route consumes the body via `res.json()`,
+    // and a Response body can only be read once, so a single shared instance
+    // would throw "body already consumed" on the second sync.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => new Response(JSON.stringify(catalog), { status: 200 })
+    )
+
+    // Stateful Prisma mock backed by a Set. The `id` primary-key constraint is
+    // enforced (a second `create` of the same id throws Prisma P2002, like the
+    // real DB) and `findMany` returns the ids from the `in:` list that are
+    // already stored — mirroring how a real dedup query behaves against rows
+    // the first sync inserted.
+    const store = new Set<string>()
+    vi.mocked(prismaMock.cardDesign.findMany).mockImplementation((async (
+      args: any
+    ) => {
+      const ids: string[] = args?.where?.id?.in ?? []
+      return ids.filter(id => store.has(id)).map(id => ({ id }))
+    }) as any)
+    vi.mocked(prismaMock.cardDesign.create).mockImplementation((async ({
+      data
+    }: any) => {
+      if (store.has(data.id)) {
+        throw Object.assign(
+          new Error('Unique constraint failed on the primary key'),
+          { code: 'P2002', clientVersion: '6.0.0' }
+        )
+      }
+      store.add(data.id)
+      return { ...data, createdAt: new Date() }
+    }) as any)
+
+    const req = () =>
+      createNextRequest('/api/card-designs/import', { method: 'POST' })
+
+    // First sync: nothing exists yet, both designs are inserted.
+    const firstBody: any = await assertResponse(await ImportPost(req()), 200)
+    expect(firstBody.imported).toBe(2)
+    expect(firstBody.skipped).toBe(0)
+
+    // Second sync: the dedup query now sees the inserted `veintiuno-N` ids,
+    // filters them out, and the route returns the "already up to date" 200
+    // instead of trying to re-insert and colliding on the primary key.
+    const secondBody: any = await assertResponse(await ImportPost(req()), 200)
+    expect(secondBody.imported).toBe(0)
+    expect(secondBody.skipped).toBe(2)
+
+    // `create` ran exactly twice (the first sync's two inserts); the second
+    // sync attempted no re-inserts.
+    expect(prismaMock.cardDesign.create).toHaveBeenCalledTimes(2)
   })
 })
 

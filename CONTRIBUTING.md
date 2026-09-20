@@ -41,9 +41,6 @@ packages/
   react/      @lawallet-nwc/react — provider + hooks over the SDK
   shared/     Zod schemas + shared types (source of truth)
   openapi/    Zod → OpenAPI 3.1 document generation
-examples/
-  onboarding/ Reference webapp built on the SDK
-  admin-provisioning/ Operator-issued reserved addresses (SDK + a backend)
 ```
 
 For deeper architectural context, read [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
@@ -55,13 +52,14 @@ before working on anything non-trivial.
 
 | Tool       | Version    | Notes                                                                 |
 | ---------- | ---------- | --------------------------------------------------------------------- |
-| Node.js    | `v22.14.0` | Pinned in [`.nvmrc`](./.nvmrc); `nvm use` to match                    |
-| pnpm       | `11.20.0`  | Pinned via `packageManager` field in [`package.json`](./package.json) |
+| Node.js    | `v24.21.0` | Pinned in [`.nvmrc`](./.nvmrc); `nvm use` to match                    |
+| pnpm       | `11.26.0`  | Pinned via `packageManager` field in [`package.json`](./package.json) |
 | PostgreSQL | 15+        | Use the bundled `docker-compose.yml` if you don't have one running    |
 | Git        | any recent | Hooks rely on a normal `pre-commit`-friendly setup                    |
 
-Enable [Corepack](https://nodejs.org/api/corepack.html) once with
-`corepack enable`; it activates the pnpm version pinned by this repository.
+If you have [Corepack](https://nodejs.org/api/corepack.html) enabled, pnpm
+will be activated automatically. Otherwise install it with
+`npm install -g pnpm@11.26.0`.
 
 ---
 
@@ -189,7 +187,6 @@ with a readable error. Source of truth: [`apps/web/.env.example`](./apps/web/.en
 | `LOG_LEVEL`                                                             | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` |
 | `LOG_PRETTY`                                                            | `true` for human-readable logs in dev                                    |
 | `MAINTENANCE_MODE`                                                      | `true` returns 503 for non-admin requests                                |
-| `ALBY_API_URL` / `ALBY_BEARER_TOKEN` / `AUTO_GENERATE_ALBY_SUBACCOUNTS` | Enable courtesy NWC subaccount provisioning                              |
 | `NEXT_PUBLIC_LAWALLET_LANDING_URL`                                      | Where `/` redirects (defaults to `https://lawallet.io`)                  |
 
 See [`apps/web/.env.example`](./apps/web/.env.example) for the full list.
@@ -334,8 +331,8 @@ machines can share one cache via Vercel Remote Cache. CI picks it up from the
 secrets; locally, opt in with:
 
 ```bash
-pnpm exec turbo login    # authenticate against Vercel
-pnpm exec turbo link     # link this repo to the team's remote cache
+npx turbo login    # authenticate against Vercel
+npx turbo link     # link this repo to the team's remote cache
 ```
 
 Forks and contributors without these secrets are unaffected — Turbo silently
@@ -355,7 +352,7 @@ rm -rf .turbo/cache
 
 ## Running Tests
 
-The backend uses [Vitest 3.2](https://vitest.dev/) + [MSW](https://mswjs.io/) +
+The backend uses [Vitest 5](https://vitest.dev/) + [MSW](https://mswjs.io/) +
 `happy-dom`. Config: [`apps/web/vitest.config.ts`](./apps/web/vitest.config.ts).
 
 ```bash
@@ -389,7 +386,7 @@ Enforced by Vitest — CI fails below these:
 | Metric     | Threshold |
 | ---------- | --------: |
 | Statements |       60% |
-| Branches   |       75% |
+| Branches   |       70% |
 | Functions  |       70% |
 | Lines      |       60% |
 

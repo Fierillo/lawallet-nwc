@@ -2,9 +2,14 @@ import { createHash, createHmac } from 'node:crypto'
 import type pg from 'pg'
 import type { Logger } from 'pino'
 import {
+  NWC_WALLET_DEAD_APPLIED_OUTCOMES,
   NWC_WEBHOOK_SIGNATURE_HEADER,
   NWC_WEBHOOK_SIGNATURE_PREFIX,
   NWC_WEBHOOK_TIMESTAMP_HEADER,
+  nwcWebhookAckSchema,
+  type ListenerConnection,
+  type NwcWalletDeadOutcome,
+  type NwcWalletDeadReason,
   type NwcWebhookPayload
 } from '@lawallet-nwc/shared'
 import type { ListenerEnv } from './env'
@@ -15,6 +20,8 @@ import {
   undeliveredEvents,
   type StoredEvent
 } from './store'
+
+type ListenerWalletState = ListenerConnection['state']
 
 /** HMAC-SHA256 over `${timestamp}.${body}` — web verifies the same recipe. */
 export function signWebhook(
@@ -29,12 +36,38 @@ export function signWebhook(
 
 /** Backoff between inline attempts; sweep picks up whatever outlives these. */
 const RETRY_DELAYS_MS = [1000, 5000, 25000, 60000, 120000]
+/** Per-attempt fetch timeout. Must stay in lockstep with the sweep gate. */
+export const WEBHOOK_POST_TIMEOUT_MS = 10_000
+/** Slack after the last inline attempt so `markDelivery` can commit first. */
+const SWEEP_GATE_BUFFER_MS = 15_000
 /** Sweep-retry backoff: doubles each failed round, capped — but NEVER caps out
  *  the retries themselves. A payment webhook keeps retrying until it lands. */
 const SWEEP_BACKOFF_BASE_MS = 120_000
 const SWEEP_BACKOFF_MAX_MS = 60 * 60_000
 /** Warn once the oldest undelivered webhook has been stuck this long. */
 const BACKLOG_WARN_AFTER_MS = 10 * 60_000
+
+/**
+ * Worst-case wall clock of `dispatch()`: every attempt times out, then we
+ * sleep the configured backoff between them (N attempts → N-1 sleeps).
+ * Default 5 attempts: 5×10s + (1+5+25+60)s = 141s.
+ */
+export function inlineDispatchMaxDurationMs(maxAttempts: number): number {
+  const attempts = Math.max(1, maxAttempts)
+  let sleeps = 0
+  for (let i = 0; i < attempts - 1; i++) {
+    sleeps += RETRY_DELAYS_MS[Math.min(i, RETRY_DELAYS_MS.length - 1)]
+  }
+  return attempts * WEBHOOK_POST_TIMEOUT_MS + sleeps
+}
+
+/**
+ * Sweep eligibility age. MUST exceed `inlineDispatchMaxDurationMs` so the
+ * sweep cannot POST while the inline retry loop is still running (#186).
+ */
+export function sweepOlderThanMs(maxAttempts: number): number {
+  return inlineDispatchMaxDurationMs(maxAttempts) + SWEEP_GATE_BUFFER_MS
+}
 
 interface Transactionish {
   type?: string
@@ -110,11 +143,15 @@ export class WebhookDispatcher {
       const outcome = await this.post(body)
 
       if (outcome.delivered) {
-        metrics.webhooksDelivered++
-        if (event.webhookAttempts > 0) {
-          log.info({ eventKey: event.eventKey, attempts }, 'webhook.recovered')
+        if (await markDelivery(pool, event.eventKey, 'delivered', attempts)) {
+          metrics.webhooksDelivered++
+          if (event.webhookAttempts > 0) {
+            log.info(
+              { eventKey: event.eventKey, attempts },
+              'webhook.recovered'
+            )
+          }
         }
-        await markDelivery(pool, event.eventKey, 'delivered', attempts)
         return
       }
 
@@ -124,16 +161,19 @@ export class WebhookDispatcher {
       )
 
       if (!outcome.retryable || i === env.WEBHOOK_MAX_ATTEMPTS - 1) {
-        metrics.webhooksFailed++
         // Defer, don't drop — the sweep keeps retrying until it lands.
-        await markDelivery(
-          pool,
-          event.eventKey,
-          'failed',
-          attempts,
-          outcome.error,
-          this.nextAttemptAt(attempts)
-        )
+        if (
+          await markDelivery(
+            pool,
+            event.eventKey,
+            'failed',
+            attempts,
+            outcome.error,
+            this.nextAttemptAt(attempts)
+          )
+        ) {
+          metrics.webhooksFailed++
+        }
         return
       }
 
@@ -170,36 +210,64 @@ export class WebhookDispatcher {
   }
 
   /**
-   * One-shot `wallet_dead` webhook: the listener saw a wallet go silent past
-   * the threshold while its relays stayed connected. Web decides whether to
-   * archive it (only LNCurl-provider wallets become DEAD). Not persisted and
-   * not retried here — the prober re-detects on its next sweep if this failed.
-   * Returns whether web accepted it (2xx) so the prober only marks reported on
-   * success.
+   * One-shot `wallet_dead` webhook: either a probe-confirmed silent wallet
+   * (`reason: 'unresponsive'`, relays up) or one idle past the 48h archive
+   * window — including a wallet that never completed warmup, which has no
+   * client left to probe. Web decides whether to archive and owns the write.
+   * Not persisted and not retried here — the prober re-reports on a later sweep
+   * if this failed.
+   *
+   * A 2xx only means web ACCEPTED the report; web re-checks the product rules
+   * and refuses reports that don't meet them. `applied` is the answer that
+   * matters — the prober only records the report and parks the wallet when web
+   * actually archived it.
    */
   async sendWalletDead(
     walletId: string,
-    unresponsiveSeconds: number
-  ): Promise<boolean> {
+    unresponsiveSeconds: number,
+    opts: {
+      reason: NwcWalletDeadReason
+      relaysConnected: boolean
+      lastState?: ListenerWalletState
+      everReady?: boolean
+    } = { reason: 'unresponsive', relaysConnected: true }
+  ): Promise<WalletDeadAck> {
     const now = Date.now()
     const payload: NwcWebhookPayload = {
       type: 'wallet_dead',
       eventKey: createHash('sha256')
-        .update(`${walletId}|wallet_dead`)
+        .update(`${walletId}|wallet_dead|${opts.reason}`)
         .digest('hex'),
       walletId,
       receivedAt: now,
       unresponsiveSeconds,
-      relaysConnected: true
+      relaysConnected: opts.relaysConnected,
+      reason: opts.reason,
+      ...(opts.lastState ? { lastState: opts.lastState } : {}),
+      ...(opts.everReady === undefined ? {} : { everReady: opts.everReady })
     }
-    const outcome = await this.post(JSON.stringify(payload))
-    if (!outcome.delivered) {
+    const result = await this.post(JSON.stringify(payload), true)
+    if (!result.delivered) {
       this.deps.log.warn(
-        { walletId, error: outcome.error },
+        { walletId, reason: opts.reason, error: result.error },
         'webhook.wallet_dead_not_delivered'
       )
+      return { delivered: false, applied: false, outcome: null }
     }
-    return outcome.delivered
+
+    const outcome = parseWalletDeadOutcome(result.body)
+    // No field at all: a web build that predates the outcome contract, which
+    // archived unconditionally on a 200. Preserve that meaning rather than
+    // looping forever against it.
+    const applied =
+      outcome === null || NWC_WALLET_DEAD_APPLIED_OUTCOMES.includes(outcome)
+    if (!applied) {
+      this.deps.log.warn(
+        { walletId, reason: opts.reason, outcome },
+        'webhook.wallet_dead_not_archived'
+      )
+    }
+    return { delivered: true, applied, outcome }
   }
 
   /**
@@ -213,7 +281,7 @@ export class WebhookDispatcher {
     this.sweeping = true
     try {
       const events = await undeliveredEvents(this.deps.pool, {
-        olderThanMs: 2 * 60 * 1000,
+        olderThanMs: sweepOlderThanMs(this.deps.env.WEBHOOK_MAX_ATTEMPTS),
         limit: 50
       })
       for (const event of events) {
@@ -241,20 +309,24 @@ export class WebhookDispatcher {
     const attempts = event.webhookAttempts + 1
     const outcome = await this.post(JSON.stringify(this.buildPayload(event)))
     if (outcome.delivered) {
-      metrics.webhooksDelivered++
-      log.info({ eventKey: event.eventKey, attempts }, 'webhook.recovered')
-      await markDelivery(pool, event.eventKey, 'delivered', attempts)
+      if (await markDelivery(pool, event.eventKey, 'delivered', attempts)) {
+        metrics.webhooksDelivered++
+        log.info({ eventKey: event.eventKey, attempts }, 'webhook.recovered')
+      }
       return
     }
-    metrics.webhooksFailed++
-    await markDelivery(
-      pool,
-      event.eventKey,
-      'failed',
-      attempts,
-      outcome.error,
-      this.nextAttemptAt(attempts)
-    )
+    if (
+      await markDelivery(
+        pool,
+        event.eventKey,
+        'failed',
+        attempts,
+        outcome.error,
+        this.nextAttemptAt(attempts)
+      )
+    ) {
+      metrics.webhooksFailed++
+    }
   }
 
   /** Refresh the pending gauge and warn loudly on a persistent backlog. */
@@ -282,8 +354,15 @@ export class WebhookDispatcher {
   }
 
   private async post(
-    body: string
-  ): Promise<{ delivered: boolean; retryable: boolean; error?: string }> {
+    body: string,
+    /** Read the ack body — only `wallet_dead` needs it (web's decision). */
+    wantBody = false
+  ): Promise<{
+    delivered: boolean
+    retryable: boolean
+    error?: string
+    body?: unknown
+  }> {
     const timestamp = String(Date.now())
     try {
       const res = await fetch(this.webhookUrl, {
@@ -296,9 +375,16 @@ export class WebhookDispatcher {
             signWebhook(this.deps.env.LISTENER_AUTH_SECRET, timestamp, body)
         },
         body,
-        signal: AbortSignal.timeout(10000)
+        signal: AbortSignal.timeout(WEBHOOK_POST_TIMEOUT_MS)
       })
-      if (res.ok) return { delivered: true, retryable: false }
+      if (res.ok) {
+        // A body we can't read must never turn a delivered webhook into a
+        // failure — the caller falls back to the legacy "2xx means applied".
+        const ack = wantBody
+          ? await res.json().catch(() => undefined)
+          : undefined
+        return { delivered: true, retryable: false, body: ack }
+      }
       const retryable = res.status >= 500 || res.status === 429
       return { delivered: false, retryable, error: `HTTP ${res.status}` }
     } catch (err) {
@@ -309,6 +395,24 @@ export class WebhookDispatcher {
       }
     }
   }
+}
+
+/** What web did with a `wallet_dead` report — see {@link WebhookDispatcher.sendWalletDead}. */
+export interface WalletDeadAck {
+  /** Web accepted the HTTP request (2xx). */
+  delivered: boolean
+  /**
+   * Web archived the wallet, or confirmed it was already archived. The only
+   * case in which the prober may record the report and park the wallet.
+   */
+  applied: boolean
+  /** Web's explicit outcome; null when it sent none (pre-contract build). */
+  outcome: NwcWalletDeadOutcome | null
+}
+
+function parseWalletDeadOutcome(body: unknown): NwcWalletDeadOutcome | null {
+  const parsed = nwcWebhookAckSchema.safeParse(body)
+  return parsed.success ? (parsed.data.walletDeadOutcome ?? null) : null
 }
 
 function nonnegativeSafeInteger(value: unknown): number | undefined {

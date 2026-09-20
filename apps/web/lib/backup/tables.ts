@@ -13,7 +13,6 @@ export const BACKUP_TABLE_ORDER: BackupTableName[] = [
   'lightningAddresses',
   'cards',
   'cardActivationTokens',
-  'albySubAccounts',
   'invoices',
   'activityLogs',
   'settings',
@@ -31,8 +30,7 @@ export const CATEGORY_TABLES: Record<BackupCategory, BackupTableName[]> = {
     'remoteWallets',
     'lightningAddresses',
     'cards',
-    'cardActivationTokens',
-    'albySubAccounts'
+    'cardActivationTokens'
   ],
   settings: ['settings'],
   plugins: ['pluginRecords'],
@@ -88,6 +86,16 @@ export interface PartialUnique {
   scope: string[]
   flag?: string
   where?: { field: string; equals: unknown }
+  /**
+   * True when a `skip`-resolved conflict for this partial-unique still inserts
+   * the backup row (the flag is demoted so the existing row keeps the slot).
+   * Flag-based partial-uniques set this (the row itself is new; only the
+   * `isPrimary`/`isDefault` flag clashes). Predicate-based ones leave it unset
+   * (`skip` genuinely drops the row, e.g. a second pending activation token).
+   * Mirrors `reconcilePartialUniques` in import.ts: the flag path falls
+   * through to `insertNewRow`, the `where` path returns `{ skip: true }`.
+   */
+  importsEvenOnSkip?: boolean
 }
 
 export interface TableDescriptor {
@@ -96,8 +104,6 @@ export interface TableDescriptor {
   model: string
   /** Primary-key field(s). */
   pk: string[]
-  /** True when the sole PK is numeric (AlbySubAccount.appId). */
-  numericPk?: boolean
   secondaryUniques: SecondaryUnique[]
   fks: FkDescriptor[]
   softRefs: SoftRef[]
@@ -149,7 +155,12 @@ export const TABLE_DESCRIPTORS: Record<BackupTableName, TableDescriptor> = {
     fks: [{ field: 'userId', target: 'users', required: true }],
     softRefs: [],
     partialUniques: [
-      { label: 'default wallet', scope: ['userId'], flag: 'isDefault' }
+      {
+        label: 'default wallet',
+        scope: ['userId'],
+        flag: 'isDefault',
+        importsEvenOnSkip: true
+      }
     ],
     jsonNullableFields: [],
     renameField: 'name',
@@ -166,7 +177,12 @@ export const TABLE_DESCRIPTORS: Record<BackupTableName, TableDescriptor> = {
     ],
     softRefs: [],
     partialUniques: [
-      { label: 'primary address', scope: ['userId'], flag: 'isPrimary' }
+      {
+        label: 'primary address',
+        scope: ['userId'],
+        flag: 'isPrimary',
+        importsEvenOnSkip: true
+      }
     ],
     jsonNullableFields: [],
     renameField: 'username',
@@ -204,19 +220,6 @@ export const TABLE_DESCRIPTORS: Record<BackupTableName, TableDescriptor> = {
         where: { field: 'status', equals: 'PENDING' }
       }
     ],
-    jsonNullableFields: []
-  },
-  albySubAccounts: {
-    name: 'albySubAccounts',
-    model: 'albySubAccount',
-    pk: ['appId'],
-    numericPk: true,
-    secondaryUniques: [
-      { fields: ['userId'], label: 'Alby account (one per user)' }
-    ],
-    fks: [{ field: 'userId', target: 'users', required: true }],
-    softRefs: [],
-    partialUniques: [],
     jsonNullableFields: []
   },
   invoices: {

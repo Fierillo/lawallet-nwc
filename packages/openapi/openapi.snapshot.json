@@ -84,6 +84,10 @@
       "description": "External device pairing for cards."
     },
     {
+      "name": "Vouchers",
+      "description": "Coupons issued to a member’s npub by external coupon-manager services (lacrypta/coupons protocol)."
+    },
+    {
       "name": "Activity",
       "description": "Activity log access."
     },
@@ -527,6 +531,20 @@
           "address"
         ]
       },
+      "VerifyAddressProtocolsRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16,
+            "pattern": "^[a-z0-9]+$"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
       "ProxyForwardingCommandParams": {
         "type": "object",
         "properties": {
@@ -756,8 +774,7 @@
           },
           "baseFeeSats": {
             "type": "integer",
-            "minimum": -9007199254740991,
-            "maximum": 9007199254740991
+            "minimum": 0
           },
           "enabled": {
             "type": "boolean"
@@ -1179,7 +1196,8 @@
                 "required": [
                   "clientDataJSON",
                   "attestationObject"
-                ]
+                ],
+                "additionalProperties": {}
               },
               "clientExtensionResults": {
                 "type": "object",
@@ -1195,7 +1213,8 @@
               "rawId",
               "type",
               "response"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "pubkey": {
             "type": "string",
@@ -1241,7 +1260,8 @@
               "tags",
               "content",
               "sig"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "label": {
             "type": "string",
@@ -1339,7 +1359,8 @@
               "tags",
               "content",
               "sig"
-            ]
+            ],
+            "additionalProperties": {}
           },
           "label": {
             "type": "string",
@@ -1993,9 +2014,6 @@
                   }
                 }
               },
-              "hasAlbySubAccount": {
-                "type": "boolean"
-              },
               "hasManagedKey": {
                 "type": "boolean"
               },
@@ -2017,7 +2035,6 @@
               "invoices",
               "relays",
               "profile",
-              "hasAlbySubAccount",
               "hasManagedKey",
               "managedKeyExported"
             ]
@@ -2139,9 +2156,6 @@
                   }
                 }
               },
-              "hasAlbySubAccount": {
-                "type": "boolean"
-              },
               "hasManagedKey": {
                 "type": "boolean"
               },
@@ -2163,7 +2177,6 @@
               "invoices",
               "relays",
               "profile",
-              "hasAlbySubAccount",
               "hasManagedKey",
               "managedKeyExported"
             ]
@@ -2276,9 +2289,6 @@
                   }
                 }
               },
-              "hasAlbySubAccount": {
-                "type": "boolean"
-              },
               "hasManagedKey": {
                 "type": "boolean"
               },
@@ -2300,7 +2310,6 @@
               "invoices",
               "relays",
               "profile",
-              "hasAlbySubAccount",
               "hasManagedKey",
               "managedKeyExported"
             ]
@@ -2315,7 +2324,6 @@
                   "enum": [
                     "managed-key-unexported",
                     "managed-key-dropped",
-                    "alby-subaccount-dropped",
                     "wallet-name-renamed",
                     "primary-address-kept",
                     "default-wallet-kept"
@@ -2410,6 +2418,137 @@
           "status"
         ],
         "description": "LUD-21 payment verification response."
+      },
+      "DepositVoucher": {
+        "type": "object",
+        "properties": {
+          "npub": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "nonce": {
+            "type": "string",
+            "minLength": 22,
+            "maxLength": 22
+          },
+          "couponId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "image": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "merchantPubkey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "servicePubkey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "claimUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "mintUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "refreshUrl": {
+            "type": "string",
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "expiresAt": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "voucherEvent": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "npub",
+          "nonce",
+          "name",
+          "merchantPubkey",
+          "claimUrl"
+        ],
+        "description": "A coupon minted by an external coupon-manager service and assigned to a member’s npub. Compatible with the lacrypta/coupons protocol: when `voucherEvent` carries the service-signed kind-20402 event, its values take precedence over the plain fields."
+      },
+      "UpdateVoucherSettings": {
+        "type": "object",
+        "properties": {
+          "policy": {
+            "type": "string",
+            "enum": [
+              "ANYONE",
+              "ALLOWLIST"
+            ]
+          },
+          "allowVouchers": {
+            "type": "boolean"
+          },
+          "allowlist": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "policy",
+          "allowVouchers",
+          "allowlist"
+        ],
+        "description": "Who may deposit vouchers to the caller. Allowlist entries accept hex, npub, or NIP-05 and are resolved to hex on save."
+      },
+      "SendVoucher": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 320
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "description": "Recipient lightning address for a voucher transfer, plus an optional message. Irreversible once the recipient accepts."
       }
     },
     "parameters": {}
@@ -3833,6 +3972,7 @@
               "description": "The linked identity’s Nostr pubkey (64-char lowercase hex)."
             },
             "required": true,
+            "description": "The linked identity’s Nostr pubkey (64-char lowercase hex).",
             "name": "pubkey",
             "in": "path"
           }
@@ -3943,6 +4083,7 @@
               "description": "The linked identity’s Nostr pubkey (64-char lowercase hex)."
             },
             "required": true,
+            "description": "The linked identity’s Nostr pubkey (64-char lowercase hex).",
             "name": "pubkey",
             "in": "path"
           }
@@ -4818,6 +4959,7 @@
               "description": "Single-use programming token from /write-token."
             },
             "required": true,
+            "description": "Single-use programming token from /write-token.",
             "name": "token",
             "in": "query"
           }
@@ -5385,7 +5527,8 @@
                         "minWithdrawable",
                         "defaultDescription",
                         "tag"
-                      ]
+                      ],
+                      "additionalProperties": {}
                     },
                     {
                       "type": "object",
@@ -5675,7 +5818,8 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {}
+                  "properties": {},
+                  "additionalProperties": {}
                 }
               }
             }
@@ -5757,7 +5901,8 @@
                   },
                   "required": [
                     "success"
-                  ]
+                  ],
+                  "additionalProperties": {}
                 }
               }
             }
@@ -6366,7 +6511,7 @@
           "Card Activation"
         ],
         "summary": "Claim a card via its activation token.",
-        "description": "Any authenticated wallet user (NIP-98 or JWT). A ONE_TIME claim transfers the card to the claimer, binds a Remote Wallet, and burns the token. A second claim returns 409.",
+        "description": "Any authenticated wallet user (NIP-98 or JWT). A ONE_TIME claim transfers the card to the claimer, binds a Remote Wallet (creating an LNCurl wallet when the claimer has none), reserves first-activation bonuses, and burns the token. A second claim returns 409.",
         "operationId": "activationTokens.claim",
         "security": [
           {
@@ -6434,14 +6579,46 @@
                         "id",
                         "kind",
                         "remoteWalletId"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "bonuses": {
+                      "type": "object",
+                      "properties": {
+                        "freeLightningAddress": {
+                          "type": "boolean"
+                        },
+                        "sats": {
+                          "type": "object",
+                          "properties": {
+                            "granted": {
+                              "type": "boolean"
+                            },
+                            "amountSats": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "granted"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "freeLightningAddress",
+                        "sats"
                       ]
+                    },
+                    "needsLightningAddress": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
                     "qrKind",
-                    "card"
+                    "card",
+                    "bonuses",
+                    "needsLightningAddress"
                   ],
-                  "description": "Result of a ONE_TIME claim — ownership transferred, token burned."
+                  "description": "Result of a ONE_TIME claim — ownership transferred, token burned, first-activation bonuses reserved."
                 }
               }
             }
@@ -7210,6 +7387,7 @@
                         "required": [
                           "username"
                         ],
+                        "additionalProperties": {},
                         "description": "Lightning address record."
                       }
                     }
@@ -7312,6 +7490,7 @@
                   "required": [
                     "username"
                   ],
+                  "additionalProperties": {},
                   "description": "Lightning address record."
                 }
               }
@@ -7388,6 +7567,7 @@
               "description": "Username candidate to check."
             },
             "required": true,
+            "description": "Username candidate to check.",
             "name": "username",
             "in": "query"
           }
@@ -7518,6 +7698,215 @@
         }
       }
     },
+    "/api/lightning-addresses/verify-protocols": {
+      "post": {
+        "x-required-role": "ADMIN",
+        "tags": [
+          "Lightning Addresses"
+        ],
+        "summary": "Re-verify one address’s protocols.",
+        "description": "Admin maintenance: re-resolve the protocols a lightning address currently speaks. Alias targets are probed over the network and the result is persisted, which repairs addresses created before LUD-16 verification existed. Requires ADMIN.",
+        "operationId": "lightningAddresses.verifyProtocols",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyAddressProtocolsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "username": {
+                      "type": "string"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "redirect": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "probed": {
+                      "type": "boolean"
+                    },
+                    "persisted": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "previous": {
+                      "type": "object",
+                      "properties": {
+                        "protocols": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          }
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "proxy",
+                            "wallet",
+                            "alias",
+                            "unavailable"
+                          ]
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "provider": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "protocols",
+                        "source",
+                        "reason",
+                        "provider"
+                      ]
+                    },
+                    "protocols": {
+                      "type": "object",
+                      "properties": {
+                        "protocols": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          }
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "proxy",
+                            "wallet",
+                            "alias",
+                            "unavailable"
+                          ]
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "provider": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "protocols",
+                        "source",
+                        "reason",
+                        "provider"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "username",
+                    "mode",
+                    "redirect",
+                    "probed",
+                    "persisted",
+                    "error",
+                    "previous",
+                    "protocols"
+                  ],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/lightning-addresses/relays": {
       "get": {
         "x-required-role": "PUBLIC",
@@ -7580,7 +7969,7 @@
           "LUD-16"
         ],
         "summary": "LUD-16 / LUD-06 pay request lookup.",
-        "description": "Public lookup that resolves a lightning address to a LUD-06 pay request response. Supports LUD-12 (commentAllowed) and LUD-21 (verify field).",
+        "description": "Public lookup that resolves a lightning address to a LUD-06 pay request response. Supports LUD-12 (commentAllowed) and LUD-21 (verify field).\n\nEmits `allowVouchers: true` when the owner has opted in to receiving coupon transfers on the callback. Absent means do not send one.",
         "operationId": "lud16.payRequest",
         "security": [],
         "parameters": [
@@ -7601,7 +7990,8 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {}
+                  "properties": {},
+                  "additionalProperties": {}
                 }
               }
             }
@@ -7700,7 +8090,8 @@
                   },
                   "required": [
                     "pr"
-                  ]
+                  ],
+                  "additionalProperties": {}
                 }
               }
             }
@@ -7717,6 +8108,137 @@
           },
           "404": {
             "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-required-role": "PUBLIC",
+        "tags": [
+          "LUD-16"
+        ],
+        "summary": "LUD-16 callback actions (voucher transfer).",
+        "description": "The same callback URL as LNURL-pay, dispatched by action. `GET` is ordinary LNURL-pay; `POST` carries actions, keyed on `action` in the body.\n\nToday the only action is `voucher`: take delivery of a lacrypta/coupons voucher. The receiver verifies the signed kind-20402, resolves the signing service against services it already knows — never against a URL from the request — and swaps the nonce before answering.\n\nRefusals are `200` with an LNURL `ERROR` body, and are deliberately uniform: distinguishing \"no such user\" from \"not accepting\" would let a caller enumerate the community.",
+        "operationId": "lud16.callbackAction",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "username",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "voucher"
+                    ]
+                  },
+                  "nonce": {
+                    "type": "string",
+                    "minLength": 22,
+                    "maxLength": 22
+                  },
+                  "voucher": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "comment": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "action",
+                  "nonce",
+                  "voucher"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted, or an LNURL-shaped refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ACCEPTED"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "status"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ERROR"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; check the Retry-After header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7755,6 +8277,7 @@
               "description": "Lightning address username."
             },
             "required": true,
+            "description": "Lightning address username.",
             "name": "username",
             "in": "path"
           },
@@ -7765,6 +8288,7 @@
               "description": "BOLT11 payment hash returned by /cb."
             },
             "required": true,
+            "description": "BOLT11 payment hash returned by /cb.",
             "name": "paymentHash",
             "in": "path"
           }
@@ -7787,7 +8311,8 @@
                   },
                   "required": [
                     "status"
-                  ]
+                  ],
+                  "additionalProperties": {}
                 }
               }
             }
@@ -7885,6 +8410,7 @@
                           "username",
                           "mode"
                         ],
+                        "additionalProperties": {},
                         "description": "Per-user wallet lightning address record."
                       }
                     }
@@ -8001,6 +8527,7 @@
                     "username",
                     "mode"
                   ],
+                  "additionalProperties": {},
                   "description": "Per-user wallet lightning address record."
                 }
               }
@@ -8399,6 +8926,7 @@
                     "required": [
                       "id"
                     ],
+                    "additionalProperties": {},
                     "description": "A card paired to the caller. Never includes NTAG424 keys (only the public `cid`/`ctr` on `ntag424`)."
                   }
                 }
@@ -8746,6 +9274,7 @@
                   "required": [
                     "id"
                   ],
+                  "additionalProperties": {},
                   "description": "A card paired to the caller. Never includes NTAG424 keys (only the public `cid`/`ctr` on `ntag424`)."
                 }
               }
@@ -9030,6 +9559,7 @@
                     "username",
                     "mode"
                   ],
+                  "additionalProperties": {},
                   "description": "Per-user wallet lightning address record."
                 }
               }
@@ -9163,6 +9693,7 @@
                     "username",
                     "mode"
                   ],
+                  "additionalProperties": {},
                   "description": "Per-user wallet lightning address record."
                 }
               }
@@ -9472,7 +10003,8 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "properties": {}
+                        "properties": {},
+                        "additionalProperties": {}
                       }
                     }
                   },
@@ -9591,6 +10123,7 @@
                           "role",
                           "createdAt"
                         ],
+                        "additionalProperties": {},
                         "description": "User record."
                       }
                     }
@@ -9695,6 +10228,7 @@
                     "role",
                     "createdAt"
                   ],
+                  "additionalProperties": {},
                   "description": "User record."
                 }
               }
@@ -9804,6 +10338,7 @@
                     "role",
                     "createdAt"
                   ],
+                  "additionalProperties": {},
                   "description": "User record."
                 }
               }
@@ -9901,7 +10436,8 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "properties": {}
+                        "properties": {},
+                        "additionalProperties": {}
                       }
                     }
                   },
@@ -10035,6 +10571,7 @@
                     "role",
                     "createdAt"
                   ],
+                  "additionalProperties": {},
                   "description": "User record."
                 }
               }
@@ -10190,16 +10727,6 @@
           },
           "403": {
             "description": "Caller is authenticated but lacks the required role or permission.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Resource not found.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10404,6 +10931,7 @@
                     "settled",
                     "createdAt"
                   ],
+                  "additionalProperties": {},
                   "description": "Pay-then-act invoice for registration flows."
                 }
               }
@@ -10441,6 +10969,16 @@
           },
           "500": {
             "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Upstream service unavailable or maintenance mode active.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10528,6 +11066,7 @@
                     "settled",
                     "createdAt"
                   ],
+                  "additionalProperties": {},
                   "description": "Pay-then-act invoice for registration flows."
                 }
               }
@@ -10777,7 +11316,8 @@
                         "null"
                       ]
                     }
-                  }
+                  },
+                  "additionalProperties": {}
                 }
               }
             }
@@ -11153,7 +11693,8 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "properties": {}
+                  "properties": {},
+                  "additionalProperties": {}
                 }
               }
             }
@@ -11234,7 +11775,8 @@
                   },
                   "required": [
                     "id"
-                  ]
+                  ],
+                  "additionalProperties": {}
                 }
               }
             }
@@ -11379,7 +11921,20 @@
                           "null"
                         ],
                         "format": "date-time",
-                        "description": "When an archived (DEAD) disposable wallet was detected dead; null otherwise."
+                        "description": "When an archived (DEAD) wallet was detected dead; null otherwise."
+                      },
+                      "diedReason": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "enum": [
+                          "unresponsive",
+                          "idle",
+                          "warmup_failed",
+                          null
+                        ],
+                        "description": "Why the wallet was archived: 'unresponsive' (probe-confirmed silence with relays up), 'idle' (more than 48h with no sign of life) or 'warmup_failed' (more than 48h and NWC warm-up never succeeded). Null unless DEAD."
                       },
                       "provider": {
                         "type": [
@@ -11387,7 +11942,8 @@
                           "null"
                         ],
                         "enum": [
-                          "lncurl"
+                          "lncurl",
+                          null
                         ],
                         "description": "'lncurl' for a disposable LNCurl wallet; null for a user-supplied connection."
                       },
@@ -11408,6 +11964,7 @@
                       "createdAt",
                       "updatedAt",
                       "diedAt",
+                      "diedReason",
                       "provider",
                       "lncurlServerUrl"
                     ],
@@ -11542,7 +12099,20 @@
                         "null"
                       ],
                       "format": "date-time",
-                      "description": "When an archived (DEAD) disposable wallet was detected dead; null otherwise."
+                      "description": "When an archived (DEAD) wallet was detected dead; null otherwise."
+                    },
+                    "diedReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "unresponsive",
+                        "idle",
+                        "warmup_failed",
+                        null
+                      ],
+                      "description": "Why the wallet was archived: 'unresponsive' (probe-confirmed silence with relays up), 'idle' (more than 48h with no sign of life) or 'warmup_failed' (more than 48h and NWC warm-up never succeeded). Null unless DEAD."
                     },
                     "provider": {
                       "type": [
@@ -11550,7 +12120,8 @@
                         "null"
                       ],
                       "enum": [
-                        "lncurl"
+                        "lncurl",
+                        null
                       ],
                       "description": "'lncurl' for a disposable LNCurl wallet; null for a user-supplied connection."
                     },
@@ -11571,6 +12142,7 @@
                     "createdAt",
                     "updatedAt",
                     "diedAt",
+                    "diedReason",
                     "provider",
                     "lncurlServerUrl"
                   ],
@@ -15588,7 +16160,20 @@
                         "null"
                       ],
                       "format": "date-time",
-                      "description": "When an archived (DEAD) disposable wallet was detected dead; null otherwise."
+                      "description": "When an archived (DEAD) wallet was detected dead; null otherwise."
+                    },
+                    "diedReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "unresponsive",
+                        "idle",
+                        "warmup_failed",
+                        null
+                      ],
+                      "description": "Why the wallet was archived: 'unresponsive' (probe-confirmed silence with relays up), 'idle' (more than 48h with no sign of life) or 'warmup_failed' (more than 48h and NWC warm-up never succeeded). Null unless DEAD."
                     },
                     "provider": {
                       "type": [
@@ -15596,7 +16181,8 @@
                         "null"
                       ],
                       "enum": [
-                        "lncurl"
+                        "lncurl",
+                        null
                       ],
                       "description": "'lncurl' for a disposable LNCurl wallet; null for a user-supplied connection."
                     },
@@ -15617,6 +16203,7 @@
                     "createdAt",
                     "updatedAt",
                     "diedAt",
+                    "diedReason",
                     "provider",
                     "lncurlServerUrl"
                   ],
@@ -15764,7 +16351,20 @@
                         "null"
                       ],
                       "format": "date-time",
-                      "description": "When an archived (DEAD) disposable wallet was detected dead; null otherwise."
+                      "description": "When an archived (DEAD) wallet was detected dead; null otherwise."
+                    },
+                    "diedReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "unresponsive",
+                        "idle",
+                        "warmup_failed",
+                        null
+                      ],
+                      "description": "Why the wallet was archived: 'unresponsive' (probe-confirmed silence with relays up), 'idle' (more than 48h with no sign of life) or 'warmup_failed' (more than 48h and NWC warm-up never succeeded). Null unless DEAD."
                     },
                     "provider": {
                       "type": [
@@ -15772,7 +16372,8 @@
                         "null"
                       ],
                       "enum": [
-                        "lncurl"
+                        "lncurl",
+                        null
                       ],
                       "description": "'lncurl' for a disposable LNCurl wallet; null for a user-supplied connection."
                     },
@@ -15793,6 +16394,7 @@
                     "createdAt",
                     "updatedAt",
                     "diedAt",
+                    "diedReason",
                     "provider",
                     "lncurlServerUrl"
                   ],
@@ -15937,7 +16539,20 @@
                         "null"
                       ],
                       "format": "date-time",
-                      "description": "When an archived (DEAD) disposable wallet was detected dead; null otherwise."
+                      "description": "When an archived (DEAD) wallet was detected dead; null otherwise."
+                    },
+                    "diedReason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "enum": [
+                        "unresponsive",
+                        "idle",
+                        "warmup_failed",
+                        null
+                      ],
+                      "description": "Why the wallet was archived: 'unresponsive' (probe-confirmed silence with relays up), 'idle' (more than 48h with no sign of life) or 'warmup_failed' (more than 48h and NWC warm-up never succeeded). Null unless DEAD."
                     },
                     "provider": {
                       "type": [
@@ -15945,7 +16560,8 @@
                         "null"
                       ],
                       "enum": [
-                        "lncurl"
+                        "lncurl",
+                        null
                       ],
                       "description": "'lncurl' for a disposable LNCurl wallet; null for a user-supplied connection."
                     },
@@ -15966,6 +16582,7 @@
                     "createdAt",
                     "updatedAt",
                     "diedAt",
+                    "diedReason",
                     "provider",
                     "lncurlServerUrl"
                   ],
@@ -16256,6 +16873,7 @@
               "description": "Session JWT (from POST /api/jwt) or base64-encoded NIP-98 event whose `u` tag is the /api/events URL without query string."
             },
             "required": true,
+            "description": "Session JWT (from POST /api/jwt) or base64-encoded NIP-98 event whose `u` tag is the /api/events URL without query string.",
             "name": "token",
             "in": "query"
           }
@@ -16459,6 +17077,9 @@
                                       "string",
                                       "null"
                                     ]
+                                  },
+                                  "parked": {
+                                    "type": "boolean"
                                   }
                                 },
                                 "required": [
@@ -16536,6 +17157,10 @@
                                   "minimum": 0
                                 },
                                 "walletsDeclaredDead": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                },
+                                "walletsArchiveRequested": {
                                   "type": "integer",
                                   "minimum": 0
                                 }
@@ -16794,7 +17419,8 @@
                             "type": "string"
                           }
                         }
-                      }
+                      },
+                      "additionalProperties": {}
                     },
                     "balanceMsats": {
                       "type": [
@@ -16988,7 +17614,8 @@
                             "type": "string"
                           }
                         }
-                      }
+                      },
+                      "additionalProperties": {}
                     },
                     "balanceMsats": {
                       "type": [
@@ -17770,6 +18397,1560 @@
           },
           "500": {
             "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/zaps/settle": {
+      "post": {
+        "tags": [
+          "Nostr"
+        ],
+        "summary": "Request a NIP-57 zap settlement pass.",
+        "description": "Internal listener-only endpoint. `notifications` is optional in NIP-47, so a wallet may never report a payment — this tick lets the server poll pending zap invoices with `lookup_invoice` and publish their kind:9735 receipts. The listener signs an empty JSON body with HMAC-SHA256 over `<timestamp>.<body>` and supplies x-lawallet-timestamp plus x-lawallet-signature. The body is ignored: the server selects the candidates itself. The response is immediate; the sweep runs after the response. Returns 404 when no listener is configured.",
+        "operationId": "nostr.internal.zapsSettle",
+        "security": [
+          {
+            "ListenerHmac": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settlement pass accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accepted"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vouchers": {
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Deposit a voucher to a member’s npub.",
+        "description": "Public deposit endpoint for external coupon-manager services. The caller authenticates with NIP-98 (or a Bearer session) but does **not** need an account on this instance. The write is gated by the *recipient’s* deposit policy, and a signer the recipient does not accept gets the same 403 as an unknown npub — this endpoint is deliberately not an account-existence oracle.\n\nIdempotent on `(servicePubkey, nonce)`: a redeposit refreshes the row and returns 200 rather than conflicting.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepositVoucher"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Voucher already existed and was refreshed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "MINTED",
+                        "TRANSFER_PENDING",
+                        "TRANSFERRED",
+                        "CLAIMED",
+                        "EXPIRED",
+                        "VOIDED"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Voucher stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "MINTED",
+                        "TRANSFER_PENDING",
+                        "TRANSFERRED",
+                        "CLAIMED",
+                        "EXPIRED",
+                        "VOIDED"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; check the Retry-After header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/vouchers": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "List the caller’s vouchers.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "MINTED",
+                "TRANSFER_PENDING",
+                "TRANSFERRED",
+                "CLAIMED",
+                "EXPIRED",
+                "VOIDED"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller’s vouchers, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "nonce": {
+                        "type": "string"
+                      },
+                      "couponId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "imageUrl": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "url": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "merchantPubkey": {
+                        "type": "string"
+                      },
+                      "servicePubkey": {
+                        "type": "string"
+                      },
+                      "claimUrl": {
+                        "type": "string"
+                      },
+                      "mintUrl": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "refreshUrl": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "metadata": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "additionalProperties": {}
+                      },
+                      "voucherEvent": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "additionalProperties": {}
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "MINTED",
+                          "TRANSFER_PENDING",
+                          "TRANSFERRED",
+                          "CLAIMED",
+                          "EXPIRED",
+                          "VOIDED"
+                        ]
+                      },
+                      "expiresAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time"
+                      },
+                      "claimedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time"
+                      },
+                      "statusCheckedAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time"
+                      },
+                      "depositedBy": {
+                        "type": "string"
+                      },
+                      "transferredTo": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "nonce",
+                      "couponId",
+                      "name",
+                      "description",
+                      "imageUrl",
+                      "url",
+                      "merchantPubkey",
+                      "servicePubkey",
+                      "claimUrl",
+                      "mintUrl",
+                      "refreshUrl",
+                      "metadata",
+                      "voucherEvent",
+                      "status",
+                      "expiresAt",
+                      "claimedAt",
+                      "statusCheckedAt",
+                      "depositedBy",
+                      "transferredTo",
+                      "createdAt"
+                    ],
+                    "description": "A coupon held on the caller’s behalf."
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/vouchers/{id}": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Get one of the caller’s vouchers.",
+        "description": "A voucher belonging to another account is reported as missing rather than forbidden, so ids cannot be probed.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The voucher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "nonce": {
+                      "type": "string"
+                    },
+                    "couponId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "imageUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "merchantPubkey": {
+                      "type": "string"
+                    },
+                    "servicePubkey": {
+                      "type": "string"
+                    },
+                    "claimUrl": {
+                      "type": "string"
+                    },
+                    "mintUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "refreshUrl": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "metadata": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "voucherEvent": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "MINTED",
+                        "TRANSFER_PENDING",
+                        "TRANSFERRED",
+                        "CLAIMED",
+                        "EXPIRED",
+                        "VOIDED"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "claimedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "statusCheckedAt": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    },
+                    "depositedBy": {
+                      "type": "string"
+                    },
+                    "transferredTo": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "nonce",
+                    "couponId",
+                    "name",
+                    "description",
+                    "imageUrl",
+                    "url",
+                    "merchantPubkey",
+                    "servicePubkey",
+                    "claimUrl",
+                    "mintUrl",
+                    "refreshUrl",
+                    "metadata",
+                    "voucherEvent",
+                    "status",
+                    "expiresAt",
+                    "claimedAt",
+                    "statusCheckedAt",
+                    "depositedBy",
+                    "transferredTo",
+                    "createdAt"
+                  ],
+                  "description": "A coupon held on the caller’s behalf."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Remove a voucher from the caller’s stash.",
+        "description": "Local only — the coupon stays valid at the merchant for anyone holding the nonce. Voiding is the merchant’s call, not ours.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/vouchers/{id}/refresh": {
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Re-read a voucher’s status from its coupon service.",
+        "description": "Polls `GET {claimUrl}?nonce=`. Status is monotonic: a voucher already CLAIMED or VOIDED is never walked back, and is not polled at all. `checked: false` means the poll was skipped (terminal status, or a recent check still within the cooldown).",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The voucher, refreshed or unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "voucher": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "nonce": {
+                          "type": "string"
+                        },
+                        "couponId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "imageUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "url": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "merchantPubkey": {
+                          "type": "string"
+                        },
+                        "servicePubkey": {
+                          "type": "string"
+                        },
+                        "claimUrl": {
+                          "type": "string"
+                        },
+                        "mintUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "refreshUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "metadata": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": {}
+                        },
+                        "voucherEvent": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": {}
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "MINTED",
+                            "TRANSFER_PENDING",
+                            "TRANSFERRED",
+                            "CLAIMED",
+                            "EXPIRED",
+                            "VOIDED"
+                          ]
+                        },
+                        "expiresAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "claimedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "statusCheckedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "depositedBy": {
+                          "type": "string"
+                        },
+                        "transferredTo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "nonce",
+                        "couponId",
+                        "name",
+                        "description",
+                        "imageUrl",
+                        "url",
+                        "merchantPubkey",
+                        "servicePubkey",
+                        "claimUrl",
+                        "mintUrl",
+                        "refreshUrl",
+                        "metadata",
+                        "voucherEvent",
+                        "status",
+                        "expiresAt",
+                        "claimedAt",
+                        "statusCheckedAt",
+                        "depositedBy",
+                        "transferredTo",
+                        "createdAt"
+                      ],
+                      "description": "A coupon held on the caller’s behalf."
+                    },
+                    "checked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "voucher",
+                    "checked"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; check the Retry-After header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Upstream service unavailable or maintenance mode active.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/vouchers/settings": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Get the caller’s voucher deposit policy.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deposit policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "string",
+                      "enum": [
+                        "ANYONE",
+                        "ALLOWLIST"
+                      ]
+                    },
+                    "allowVouchers": {
+                      "type": "boolean"
+                    },
+                    "allowlist": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pubkey": {
+                            "type": "string"
+                          },
+                          "npub": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "pubkey",
+                          "npub"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "allowVouchers",
+                    "allowlist"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Set who may deposit vouchers to the caller.",
+        "description": "Allowlist entries may be hex, npub, or NIP-05, and are resolved to hex here so deposits stay a plain membership test. An entry that cannot be resolved fails the whole save — a silently shortened list would leave the owner believing a sender is allowed when they are not.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateVoucherSettings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "string",
+                      "enum": [
+                        "ANYONE",
+                        "ALLOWLIST"
+                      ]
+                    },
+                    "allowVouchers": {
+                      "type": "boolean"
+                    },
+                    "allowlist": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pubkey": {
+                            "type": "string"
+                          },
+                          "npub": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "pubkey",
+                          "npub"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "allowVouchers",
+                    "allowlist"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/vouchers/{id}/send": {
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Vouchers"
+        ],
+        "summary": "Hand a voucher to a lightning address.",
+        "description": "Resolves the recipient’s LUD-16 payRequest, requires `allowVouchers`, and POSTs the signed voucher to their callback. The recipient swaps the nonce at the coupon service to take it, so this is **irreversible** once accepted.\n\nThe claim is a conditional `MINTED → TRANSFER_PENDING` update, so a double send cannot start two deliveries of one nonce. On refusal the coupon service — not the recipient’s answer — decides the final status: a recipient can swap the nonce and then reply with an error.",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendVoucher"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Delivered. The voucher is now TRANSFERRED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "voucher": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "nonce": {
+                          "type": "string"
+                        },
+                        "couponId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "imageUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "url": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "merchantPubkey": {
+                          "type": "string"
+                        },
+                        "servicePubkey": {
+                          "type": "string"
+                        },
+                        "claimUrl": {
+                          "type": "string"
+                        },
+                        "mintUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "refreshUrl": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "metadata": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": {}
+                        },
+                        "voucherEvent": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": {}
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "MINTED",
+                            "TRANSFER_PENDING",
+                            "TRANSFERRED",
+                            "CLAIMED",
+                            "EXPIRED",
+                            "VOIDED"
+                          ]
+                        },
+                        "expiresAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "claimedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "statusCheckedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time"
+                        },
+                        "depositedBy": {
+                          "type": "string"
+                        },
+                        "transferredTo": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "nonce",
+                        "couponId",
+                        "name",
+                        "description",
+                        "imageUrl",
+                        "url",
+                        "merchantPubkey",
+                        "servicePubkey",
+                        "claimUrl",
+                        "mintUrl",
+                        "refreshUrl",
+                        "metadata",
+                        "voucherEvent",
+                        "status",
+                        "expiresAt",
+                        "claimedAt",
+                        "statusCheckedAt",
+                        "depositedBy",
+                        "transferredTo",
+                        "createdAt"
+                      ],
+                      "description": "A coupon held on the caller’s behalf."
+                    }
+                  },
+                  "required": [
+                    "voucher"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request conflicts with current resource state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded; check the Retry-After header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Upstream service unavailable or maintenance mode active.",
             "content": {
               "application/json": {
                 "schema": {

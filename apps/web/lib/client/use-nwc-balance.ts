@@ -49,7 +49,7 @@ export function nwcStatusLabel(status: NwcStatus): string {
   }
 }
 
-interface BalanceState {
+export interface NwcBalanceState {
   /** Current balance in sats. Null while loading or on error. */
   sats: number | null
   loading: boolean
@@ -113,15 +113,22 @@ function installSdkConsolePatch() {
  *
  * When `onTransaction` is provided, subscribes to NIP-47 notifications
  * (`payment_received` / `payment_sent`) for real-time updates.
+ *
+ * Connection changes are silent unless `announceStatus` is set — the wallet
+ * surfaces render `status` inline (RelayErrorBadge) and don't want a toast
+ * on every relay hiccup.
  */
 export function useNwcBalance(
   nwcString: string | null,
   opts?: {
     pollMs?: number
     onTransaction?: (tx: NwcTransactionEvent) => void
+    /** Toast on connect/disconnect transitions. Off by default. */
+    announceStatus?: boolean
   }
-): BalanceState {
+): NwcBalanceState {
   const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS
+  const announceStatus = opts?.announceStatus ?? false
   // Seed lazily from the local cache so a reload paints the last-seen
   // balance immediately. `nwcCacheKey` is synchronous (FNV-1a) so this
   // happens in the same tick as state init — no flash of `null` and no
@@ -201,6 +208,14 @@ export function useNwcBalance(
     let cancelled = false
     let intervalId: ReturnType<typeof setInterval> | null = null
     let unsubscribe: (() => void) | null = null
+    // Per-request id so only the most recent in-flight `fetchOnce` may
+    // commit state. `fetchOnce` is fired from both the poll `setInterval`
+    // and the un-awaited NIP-47 notification callback, so two requests can
+    // overlap. Without this guard the request that settles last wins
+    // regardless of initiation order — a stale, later-resolving result
+    // (e.g. an older `getBalance` that times out 10 s after a newer fetch
+    // already succeeded) would clobber the current status/toast.
+    let reqId = 0
 
     async function load() {
       // Dynamic import keeps the SDK out of the initial bundle
@@ -218,10 +233,14 @@ export function useNwcBalance(
 
       async function fetchOnce() {
         if (cancelled) return
+        const myId = ++reqId
         setLoading(true)
         try {
           const res = await client.getBalance()
-          if (cancelled) return
+          // Ignore stale results from an in-flight fetch that is no longer
+          // the latest (a newer fetch was started while this one was
+          // pending). The newer fetch owns the state.
+          if (cancelled || myId !== reqId) return
           // NWC returns balance in msats
           const fresh = Math.floor(res.balance / 1000)
           setSats(fresh)
@@ -232,12 +251,12 @@ export function useNwcBalance(
           // Persist for the next reload; failures (quota, disabled
           // storage) are swallowed by `writeBalance`.
           writeBalance(nwcKey, fresh)
-          if (lastAnnouncedRef.current === 'disconnected') {
+          if (announceStatus && lastAnnouncedRef.current === 'disconnected') {
             toast.success('Wallet reconnected')
           }
           lastAnnouncedRef.current = 'connected'
         } catch (err) {
-          if (cancelled) return
+          if (cancelled || myId !== reqId) return
           const e = err instanceof Error ? err : new Error(String(err))
           setError(e)
           setStatus('disconnected')
@@ -246,15 +265,17 @@ export function useNwcBalance(
           // toast every 30 s on a flaky relay.
           if (lastAnnouncedRef.current !== 'disconnected') {
             const isTimeout = /reply timeout/i.test(e.message)
-            toast.error(
-              isTimeout
-                ? 'Wallet relay timed out. Retrying in the background…'
-                : 'Wallet disconnected. Retrying in the background…'
-            )
+            if (announceStatus) {
+              toast.error(
+                isTimeout
+                  ? 'Wallet relay timed out. Retrying in the background…'
+                  : 'Wallet disconnected. Retrying in the background…'
+              )
+            }
             lastAnnouncedRef.current = 'disconnected'
           }
         } finally {
-          if (!cancelled) setLoading(false)
+          if (!cancelled && myId === reqId) setLoading(false)
         }
       }
 
@@ -323,7 +344,7 @@ export function useNwcBalance(
       }
       clientRef.current = null
     }
-  }, [nwcString, pollMs, nonce])
+  }, [nwcString, pollMs, nonce, announceStatus])
 
   return { sats, loading, error, refetch, updatedAt, status, fromCache }
 }

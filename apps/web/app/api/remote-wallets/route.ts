@@ -15,6 +15,7 @@ import {
 } from '@/lib/validation/schemas'
 import { validateBody, validateQuery } from '@/lib/validation/middleware'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
+import { resolveNwcModeForCreate } from '@/lib/wallet/nwc-send-capability'
 import { getDriver } from '@/lib/wallet/drivers'
 import { eventBus } from '@/lib/events/event-bus'
 import type {
@@ -46,6 +47,8 @@ interface RemoteWalletDto {
   updatedAt: string
   /** Set only for archived (DEAD) wallets — when the wallet was detected dead. */
   diedAt: string | null
+  /** Why it was archived: `unresponsive`, `idle` or `warmup_failed`. Null unless DEAD. */
+  diedReason: string | null
   /** `'lncurl'` for a disposable LNCurl-provisioned wallet, else null. Drives the UI tag + countdown. */
   provider: 'lncurl' | null
   /** For LNCurl wallets, the server that minted THIS wallet (stored per-wallet, so a later settings change doesn't move it). Null otherwise. */
@@ -67,6 +70,7 @@ function toDto(w: RemoteWallet): RemoteWalletDto {
     createdAt: w.createdAt.toISOString(),
     updatedAt: w.updatedAt.toISOString(),
     diedAt: w.diedAt ? w.diedAt.toISOString() : null,
+    diedReason: w.diedReason,
     provider: isLncurl ? 'lncurl' : null,
     lncurlServerUrl:
       isLncurl && typeof cfg?.lncurlServerUrl === 'string'
@@ -161,11 +165,30 @@ export const POST = withErrorHandling(async (request: Request) => {
     })
   }
 
+  // The client sends its own capability probe result, but that probe is a
+  // debounced browser relay round-trip that silently falls back to RECEIVE when
+  // it doesn't finish — which permanently blocks card spends from a wallet that
+  // can pay. Confirm it against the wallet before storing.
+  let configToStore: unknown = parsedConfig.data
+  if (body.type === 'NWC') {
+    const nwcConfig = parsedConfig.data as {
+      connectionString: string
+      mode: 'RECEIVE' | 'SEND_RECEIVE'
+    }
+    configToStore = {
+      ...nwcConfig,
+      mode: await resolveNwcModeForCreate(
+        nwcConfig.connectionString,
+        nwcConfig.mode
+      )
+    }
+  }
+
   const walletId = randomUUID()
   const storedConfig = encryptRemoteWalletConfig(
     walletId,
     body.type,
-    parsedConfig.data
+    configToStore
   )
 
   try {

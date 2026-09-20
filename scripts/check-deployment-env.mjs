@@ -89,19 +89,77 @@ const UMBREL_PERSISTED_SECRET_CONTRACT = {
   ]
 }
 
-async function readRemote(relativePath) {
+async function readRemoteUrl(url) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 10_000)
   try {
-    const response = await fetch(`${UMBREL_RAW_BASE}/${relativePath}`, {
-      signal: controller.signal
-    })
+    const response = await fetch(url, { signal: controller.signal })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     return await response.text()
   } finally {
     clearTimeout(timer)
   }
 }
+
+async function readRemote(relativePath) {
+  return readRemoteUrl(`${UMBREL_RAW_BASE}/${relativePath}`)
+}
+
+function minOccurrenceFailure(contents, value, minimum, label) {
+  const count = contents.split(value).length - 1
+  if (count >= minimum) return null
+  return `${label} (found ${count}, expected at least ${minimum})`
+}
+
+// `owned: false` marks a listing in someone else's registry. We can open a PR
+// there but not merge it, so its adoption lag must never gate our releases —
+// otherwise cutting a version depends on a third party's review queue. Those
+// packages stay advisory even under STRICT_EXTERNAL_PACKAGES; the ones we own
+// still block, because for those "not adopted yet" means we forgot.
+const START9_PACKAGES = [
+  {
+    name: 'lawalletio/lawallet-startos',
+    owned: true,
+    rawBase:
+      'https://raw.githubusercontent.com/lawalletio/lawallet-startos/master'
+  },
+  {
+    name: 'Start9-Community/lawallet-startos',
+    owned: false,
+    rawBase:
+      'https://raw.githubusercontent.com/Start9-Community/lawallet-startos/master'
+  }
+]
+
+// Only NWC_VAULT_SECRET is checked here. It is non-optional in
+// apps/listener/src/env.ts, so a StartOS package that never sets it ships a
+// listener that exits on boot. LISTENER_REQUEST_AUTH_SECRET is deliberately
+// NOT in this contract: it is `.optional()` in both apps/web/lib/config/env.ts
+// and apps/listener/src/env.ts and documented to fall back to
+// LISTENER_AUTH_SECRET, so requiring it here would assert a constraint the app
+// does not have.
+const START9_SECRET_CONTRACT = [
+  {
+    path: 'startos/main.ts',
+    checks: [
+      {
+        value: 'NWC_VAULT_SECRET',
+        minimum: 2,
+        label: 'must pass NWC_VAULT_SECRET to web and listener'
+      }
+    ]
+  },
+  {
+    path: 'startos/init/generateSecrets.ts',
+    checks: [
+      {
+        value: 'nwcVaultSecret',
+        minimum: 2,
+        label: 'must generate and persist nwcVaultSecret on install/update'
+      }
+    ]
+  }
+]
 
 function parseDotenv(contents) {
   return Object.fromEntries(
@@ -127,7 +185,8 @@ const [
   devBootstrap,
   webEnvExample,
   environmentGuide,
-  packageManifest
+  packageManifest,
+  listenerDockerfile
 ] = await Promise.all([
   read('docker-compose.yml'),
   read('docker-compose.hub.yml'),
@@ -139,7 +198,8 @@ const [
   read('scripts/dev-worktree.mjs'),
   read('apps/web/.env.example'),
   read('apps/docs/content/docs/deploy/environment.mdx'),
-  read('package.json')
+  read('package.json'),
+  read('apps/listener/Dockerfile')
 ])
 
 for (const [contents, label] of [
@@ -172,6 +232,11 @@ for (const [contents, label] of [
 // changed the APP_SEED suffixes and made already-encrypted NWC/user-key data
 // unreadable. Those exact domain tags are therefore a persisted-data contract,
 // not merely presence checks.
+//
+// StartOS packages get the same treatment below: presence of NWC_VAULT_SECRET
+// on web and listener, plus generateSecrets persistence. Advisory on PRs,
+// strict on release — but only for the packages we can actually merge into
+// (see START9_PACKAGES).
 //
 // Strict only where it matters — the release gate sets
 // STRICT_EXTERNAL_PACKAGES=1. On ordinary PRs this stays advisory: the Umbrel
@@ -210,6 +275,47 @@ for (const packagePath of UMBREL_PACKAGE_FILES) {
   console.warn(
     `WARNING: ${failures.join('; ')}. Releases stay blocked until lawalletio/umbrel-app-store is updated.`
   )
+}
+
+// StartOS packages live in separate repos (sideload vs Community marketplace)
+// and are only rewritten by their own automation. v2.6.0 made NWC_VAULT_SECRET
+// required on the listener; a tag-only bump of either package crash-loops
+// Payment Listener. The two tracks share package id `lawallet-nwc` but not
+// volume layout, so this gate only checks the secret contract, not mounts.
+for (const start9Package of START9_PACKAGES) {
+  for (const { path: packagePath, checks } of START9_SECRET_CONTRACT) {
+    let contents
+    try {
+      contents = await readRemoteUrl(`${start9Package.rawBase}/${packagePath}`)
+    } catch (error) {
+      console.warn(
+        `Skipped Start9 package check for ${start9Package.name} ${packagePath}: ${error.message}`
+      )
+      continue
+    }
+    const failures = checks
+      .map(contract =>
+        minOccurrenceFailure(
+          contents,
+          contract.value,
+          contract.minimum,
+          `Start9 package ${start9Package.name} ${packagePath} ${contract.label}`
+        )
+      )
+      .filter(Boolean)
+    if (failures.length === 0) continue
+
+    if (strictExternalPackages && start9Package.owned) {
+      throw new Error(
+        `Deployment environment check failed: ${failures.join('; ')}`
+      )
+    }
+    console.warn(
+      start9Package.owned
+        ? `WARNING: ${failures.join('; ')}. Releases stay blocked until ${start9Package.name} is updated.`
+        : `WARNING: ${failures.join('; ')}. ${start9Package.name} is a third-party registry we cannot merge into, so this never blocks a release — operators on that listing should sideload instead until it adopts the contract.`
+    )
+  }
 }
 
 requireMatch(
@@ -271,11 +377,16 @@ requireMatch(
   /"deploy:env":\s*"bash scripts\/generate-deployment-env\.sh --mode compose"/,
   'package scripts must expose the Compose generator'
 )
-requireMatch(
-  packageManifest,
-  /"deploy:env:cloud":\s*"bash scripts\/generate-deployment-env\.sh --mode cloud"/,
-  'package scripts must expose the cloud generator'
-)
+  requireMatch(
+    packageManifest,
+    /"deploy:env:cloud":\s*"bash scripts\/generate-deployment-env\.sh --mode cloud"/,
+    'package scripts must expose the cloud generator'
+  )
+  requireMatch(
+    listenerDockerfile,
+    /packages\/shared\/node_modules/,
+    'listener Dockerfile must copy shared node_modules so tsup can resolve @asteasolutions/zod-to-openapi'
+  )
 
 const forbiddenSignerEnv =
   /(?:NIP57|NIP_57|ZAP_RECEIPT|RECEIPT_SIGNER)_(?:NSEC|SECRET|PRIVATE_KEY)\s*=/i

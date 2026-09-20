@@ -2,7 +2,12 @@ function normalizePart(value?: string): string {
   return value?.trim().toLowerCase() || ''
 }
 
-function isLocalHost(host: string): boolean {
+/**
+ * Whether a host is this machine. Drives http-vs-https everywhere we build a
+ * URL for a host we did not hard-code — guessing from `NODE_ENV` instead is
+ * the bug that makes a dev build unable to talk to any real domain.
+ */
+export function isLocalHost(host: string): boolean {
   return (
     host === 'localhost' ||
     host.startsWith('localhost:') ||
@@ -13,18 +18,11 @@ function isLocalHost(host: string): boolean {
 }
 
 /**
- * Joins a domain and optional subdomain into a single host string,
- * lowercasing and trimming both. Returns `''` when `domain` is missing.
+ * Normalizes the configured `domain` into a host string, lowercasing and
+ * trimming it. Returns `''` when `domain` is missing.
  */
-export function buildPublicHost(domain?: string, subdomain?: string): string {
-  const cleanDomain = normalizePart(domain)
-  const cleanSubdomain = normalizePart(subdomain)
-
-  if (!cleanDomain) {
-    return ''
-  }
-
-  return cleanSubdomain ? `${cleanSubdomain}.${cleanDomain}` : cleanDomain
+export function buildPublicHost(domain?: string): string {
+  return normalizePart(domain)
 }
 
 /**

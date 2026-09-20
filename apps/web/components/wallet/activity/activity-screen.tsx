@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
-import { useNwcBalance } from '@/lib/client/use-nwc-balance'
+import { useWalletNwcTransactions } from '@/components/wallet/nwc-provider'
 import { listTransactions, type NwcTransaction } from '@/lib/client/nwc'
 import { nwcCacheKey } from '@/lib/client/cache/key'
 import { readRecent, upsertMany } from '@/lib/client/cache/activity-cache'
@@ -11,6 +11,10 @@ import { ScreenHeader } from '@/components/wallet/shared/screen-header'
 import { NavTabbar } from '@/components/wallet/shared/nav-tabbar'
 import { TransactionRow } from '@/components/wallet/shared/transaction-row'
 import { Spinner } from '@/components/ui/spinner'
+import {
+  activityDetailHref,
+  demoActivityTransactions
+} from '@/lib/client/activity-detail'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 25
@@ -24,12 +28,10 @@ export function ActivityScreen() {
   const { data: me } = useApi<UserMeResponse>('/api/users/me')
   const nwcString = resolveUserNwc(me)
 
-  // Reuse the existing balance subscription so an inbound payment refreshes
+  // Reuse the layout provider's connection so an inbound payment refreshes
   // the list in real-time without spinning up a second relay connection.
   const [refreshKey, setRefreshKey] = useState(0)
-  useNwcBalance(nwcString, {
-    onTransaction: () => setRefreshKey(k => k + 1)
-  })
+  useWalletNwcTransactions(() => setRefreshKey(k => k + 1))
 
   const [transactions, setTransactions] = useState<NwcTransaction[]>([])
   const [loadingInitial, setLoadingInitial] = useState(false)
@@ -150,6 +152,11 @@ export function ActivityScreen() {
     }
   }, [nwcString, hasMore, transactions])
 
+  const [previewTxs, setPreviewTxs] = useState<NwcTransaction[]>([])
+  useEffect(() => {
+    setPreviewTxs(demoActivityTransactions())
+  }, [])
+
   const filtered = useMemo(
     () =>
       transactions.filter(tx =>
@@ -157,8 +164,8 @@ export function ActivityScreen() {
       ),
     [transactions, tab]
   )
-
-  const groups = useMemo(() => groupByDay(filtered), [filtered])
+  const rows = previewTxs.length > 0 ? previewTxs : filtered
+  const groups = useMemo(() => groupByDay(rows), [rows])
 
   return (
     <div className="flex flex-1 flex-col pb-32">
@@ -237,7 +244,7 @@ function Body({
   groups: { label: string; items: NwcTransaction[] }[]
   onLoadMore: () => void
 }) {
-  if (!nwcString) {
+  if (!nwcString && groups.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 text-center">
         <p className="text-sm text-muted-foreground">
@@ -282,7 +289,14 @@ function Body({
                 key={tx.paymentHash || `${tx.createdAt}-${i}`}
                 className="border-b border-border/40 last:border-b-0"
               >
-                <TransactionRow tx={tx} />
+                <TransactionRow
+                  tx={tx}
+                  href={
+                    tx.paymentHash
+                      ? activityDetailHref(tx.paymentHash)
+                      : undefined
+                  }
+                />
               </div>
             ))}
           </div>

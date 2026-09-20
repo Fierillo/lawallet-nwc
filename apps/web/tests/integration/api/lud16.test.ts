@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createNextRequest, assertResponse } from '@/tests/helpers/api-helpers'
 import { prismaMock, resetPrismaMock } from '@/tests/helpers/prisma-mock'
 import { createLightningAddressFixture } from '@/tests/helpers/fixtures'
@@ -9,7 +9,13 @@ const { createProxyPayRequestMock } = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/config', () => ({
-  getConfig: vi.fn(() => ({ maintenance: { enabled: false } }))
+  getConfig: vi.fn(() => ({
+    maintenance: { enabled: false },
+    nwcVault: {
+      secret: 'test-lud16-nwc-vault-secret-0123456789abcdef',
+      enabled: true
+    }
+  }))
 }))
 
 vi.mock('@/lib/logger', () => ({
@@ -52,6 +58,25 @@ vi.mock('@/lib/proxy/pay-request', () => ({
   createProxyPayRequest: createProxyPayRequestMock
 }))
 
+const resolveWalletRouteHarness = vi.hoisted(() => ({
+  mock: vi.fn(),
+  restoreActual: () => {
+    /* assigned after the module mock loads */
+  }
+}))
+vi.mock('@/lib/wallet/resolve-payment-route', async importActual => {
+  const actual =
+    await importActual<typeof import('@/lib/wallet/resolve-payment-route')>()
+  resolveWalletRouteHarness.restoreActual = () => {
+    resolveWalletRouteHarness.mock.mockImplementation(actual.resolveWalletRoute)
+  }
+  resolveWalletRouteHarness.restoreActual()
+  return {
+    ...actual,
+    resolveWalletRoute: resolveWalletRouteHarness.mock
+  }
+})
+
 // LNCurl re-provisioning is exercised in dedicated suites; here we stub it so
 // the cb route's self-heal branch is testable without a network call.
 // Keep the real `lncurlHealTarget` (pure eligibility logic the LUD-16 routes
@@ -74,14 +99,16 @@ const makeInvoiceMock = vi.fn().mockResolvedValue({
 })
 const nwcCtorMock = vi.fn()
 
-vi.mock('@getalby/sdk', () => ({
-  NWCClient: vi
-    .fn()
-    .mockImplementation((opts: { nostrWalletConnectUrl: string }) => {
+vi.mock('@getalby/sdk', () => {
+  class FakeNWCClient {
+    constructor(opts: { nostrWalletConnectUrl: string }) {
       nwcCtorMock(opts)
-      return { makeInvoice: makeInvoiceMock, close: vi.fn() }
-    })
-}))
+    }
+    makeInvoice = makeInvoiceMock
+    close = vi.fn()
+  }
+  return { NWCClient: FakeNWCClient }
+})
 
 vi.mock('light-bolt11-decoder', () => ({
   decode: vi.fn().mockReturnValue({
@@ -107,6 +134,7 @@ import { closeAllServerNwcClients } from '@/lib/wallet/drivers/nwc-client-cache'
 import { getSettings } from '@/lib/settings'
 import { createLncurlRemoteWallet } from '@/lib/wallet/lncurl-wallet'
 import { DEV_ADMIN_USER_ID } from '@/lib/dev-identity'
+import { logger } from '@/lib/logger'
 
 function nwcUri(walletKey: string, secret: string, relay: string): string {
   return `nostr+walletconnect://${walletKey.repeat(64)}?relay=${encodeURIComponent(`wss://${relay}`)}&secret=${secret.repeat(64)}`
@@ -126,8 +154,7 @@ const DEFAULT_WALLET = {
 
 function mockPrimaryAddressWallet(
   wallet:
-    | (typeof DEFAULT_WALLET & Record<string, unknown>)
-    | null = DEFAULT_WALLET
+    (typeof DEFAULT_WALLET & Record<string, unknown>) | null = DEFAULT_WALLET
 ) {
   vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue(
     wallet
@@ -143,6 +170,7 @@ function mockPrimaryAddressWallet(
 beforeEach(() => {
   resetPrismaMock()
   vi.clearAllMocks()
+  resolveWalletRouteHarness.restoreActual()
   // Sane default so every route that reads settings gets an object, not
   // `undefined`. The LUD-16 routes now consult the `lncurl_*` flags before
   // 404ing an unroutable address (lazy auto-heal), so the 404 paths exercise
@@ -446,6 +474,151 @@ describe('GET /api/lud16/[username]', () => {
     const res = await Lud16Get(req, createParamsPromise({ username: 'alice' }))
     expect(res.status).toBe(404)
   })
+
+  // ─── ALIAS self-cycle detection (followLocalAliases) ─────────────────────
+  // An ALIAS that points back at this same instance via any DNS name that
+  // routes here must be caught by the in-DB visited set, not re-fetched over
+  // HTTPS into this same handler. The detector folds the request's arrival
+  // host into `localBlockedHosts` so the instance is recognised as local
+  // regardless of which hostname the request came in on (a custom
+  // `endpoint`/`domain` plus a platform default host both route here).
+
+  describe('ALIAS self-cycle detection (followLocalAliases)', () => {
+    afterEach(() => {
+      // mockImplementation recurses/throws persistently; reset so the next
+      // test's `mockResolvedValueOnce`/`mockRejectedValueOnce` stays in control.
+      vi.mocked(fetchDestinationPayRequest).mockReset()
+    })
+
+    it('detects a self-cycle via the configured endpoint host (control)', async () => {
+      vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+        username: 'alice',
+        mode: 'ALIAS',
+        redirect: 'alice@app.test.com',
+        nwcConnection: null,
+        remoteWallet: null,
+        user: { id: 'user-1', remoteWallets: [] }
+      } as any)
+      fetchDestinationPayRequest.mockImplementation(async () => {
+        throw new Error('fetch must NOT be called for a detected self-cycle')
+      })
+
+      const req = createNextRequest('https://app.test.com/api/lud16/alice')
+      const res = await Lud16Get(
+        req,
+        createParamsPromise({ username: 'alice' })
+      )
+
+      expect(res.status).toBe(404)
+      expect(fetchDestinationPayRequest).not.toHaveBeenCalled()
+    })
+
+    it('detects a self-cycle via an unconfigured host that routes to this instance', async () => {
+      // Settings configure only app.test.com / test.com; alt.example.com is
+      // NOT configured but routes to this same process (the PaaS default-host
+      // case). Before the fix, the detector missed this and re-fetched.
+      vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+        username: 'alice',
+        mode: 'ALIAS',
+        redirect: 'alice@alt.example.com',
+        nwcConnection: null,
+        remoteWallet: null,
+        user: { id: 'user-1', remoteWallets: [] }
+      } as any)
+      fetchDestinationPayRequest.mockImplementation(async () => {
+        throw new Error('fetch must NOT be called for a detected self-cycle')
+      })
+
+      // Request arrives via the unconfigured host.
+      const req = createNextRequest('https://alt.example.com/api/lud16/alice')
+      const res = await Lud16Get(
+        req,
+        createParamsPromise({ username: 'alice' })
+      )
+
+      expect(res.status).toBe(404)
+      expect(fetchDestinationPayRequest).not.toHaveBeenCalled()
+    })
+
+    it('bounds a self-cycle to a single fetch when the trigger arrives via the configured host', async () => {
+      // Scenario (b): the payer's request arrives via the configured endpoint,
+      // so the first hop is not recognised as local yet — the handler issues
+      // one outbound fetch, which re-enters the handler at the alt-host where
+      // the cycle IS caught (404, no further fetch). The recursion is bounded
+      // to depth 2 instead of amplifying once per level.
+      vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+        username: 'alice',
+        mode: 'ALIAS',
+        redirect: 'alice@alt.example.com',
+        nwcConnection: null,
+        remoteWallet: null,
+        user: { id: 'user-1', remoteWallets: [] }
+      } as any)
+      let fetchCalls = 0
+      const MAX_SIM_DEPTH = 5 // stands in for FETCH_TIMEOUT_MS so a buggy
+      // build can amplify but cannot hang the suite.
+      fetchDestinationPayRequest.mockImplementation(async () => {
+        fetchCalls++
+        if (fetchCalls >= MAX_SIM_DEPTH) {
+          throw new Error('simulated FETCH_TIMEOUT')
+        }
+        // Simulate the rewrite re-entering this same handler at the alt-host.
+        const inner = await Lud16Get(
+          createNextRequest('https://alt.example.com/api/lud16/alice'),
+          createParamsPromise({ username: 'alice' })
+        )
+        if (inner.status !== 404) {
+          throw new Error(`inner HTTP ${inner.status}`)
+        }
+        // The re-entered handler 404s, which surfaces upstream as a fetch
+        // failure.
+        throw new Error('Destination LNURL returned HTTP 404')
+      })
+
+      const req = createNextRequest('https://app.test.com/api/lud16/alice')
+      const res = await Lud16Get(
+        req,
+        createParamsPromise({ username: 'alice' })
+      )
+
+      // Exactly one outbound fetch (depth-2 bound), and the outer 404s.
+      expect(fetchCalls).toBe(1)
+      expect(res.status).toBe(404)
+    })
+
+    it('still proxies a genuinely off-instance ALIAS even with an unconfigured arrival host', async () => {
+      // No over-blocking: folding the arrival host in must not refuse a
+      // redirect to a genuinely remote host.
+      vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+        username: 'alice',
+        mode: 'ALIAS',
+        redirect: 'bob@other.com',
+        nwcConnection: null,
+        remoteWallet: null,
+        user: { id: 'user-1', remoteWallets: [] }
+      } as any)
+      fetchDestinationPayRequest.mockResolvedValueOnce({
+        status: 'OK',
+        tag: 'payRequest',
+        callback: 'https://other.com/lnurlp/bob/cb',
+        minSendable: 1000,
+        maxSendable: 1000000,
+        metadata: '[["text/plain","Bob"]]'
+      })
+
+      // Request arrives via an unconfigured host that is NOT the redirect.
+      const req = createNextRequest('https://alt.example.com/api/lud16/alice')
+      const res = await Lud16Get(
+        req,
+        createParamsPromise({ username: 'alice' })
+      )
+
+      expect(res.status).toBe(200)
+      expect(fetchDestinationPayRequest).toHaveBeenCalledWith('bob@other.com')
+      const body: any = await res.json()
+      expect(body.callback).toBe('https://other.com/lnurlp/bob/cb')
+    })
+  })
 })
 
 describe('GET /api/lud16/[username]/cb', () => {
@@ -529,6 +702,34 @@ describe('GET /api/lud16/[username]/cb', () => {
     expect(createProxyPayRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({ username: 'proxy', amountMsats: 100_000 })
     )
+  })
+
+  it('returns 400 for a proxy callback with amount 0', async () => {
+    vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+      username: 'proxy',
+      mode: 'PROXY_ALIAS',
+      redirect: 'bob@destination.example',
+      remoteWallet: null,
+      user: {
+        id: DEV_ADMIN_USER_ID,
+        pubkey: DEV_ADMIN_USER_ID,
+        nostrIdentities: [{ pubkey: DEV_ADMIN_USER_ID }]
+      }
+    } as any)
+
+    const req = createNextRequest('/api/lud16/proxy/cb', {
+      searchParams: { amount: '0' }
+    })
+    const res = await Lud16CbGet(
+      req,
+      createParamsPromise({ username: 'proxy' })
+    )
+    const body: any = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toBe('Invalid payment amount')
+    expect(createProxyPayRequestMock).not.toHaveBeenCalled()
   })
 
   it('persists invoice to DB with LUD16_PAYMENT purpose', async () => {
@@ -843,7 +1044,71 @@ describe('GET /api/lud16/[username]/cb', () => {
     )
 
     expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('Wallet is currently unavailable')
     expect(prismaMock.invoice.upsert).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 when the bound wallet vault config cannot be decrypted', async () => {
+    vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+      username: 'alice',
+      mode: 'CUSTOM_NWC',
+      redirect: null,
+      remoteWallet: {
+        ...DEFAULT_WALLET,
+        config: {
+          connectionString: 'lwrw1:not-a-valid-envelope',
+          mode: 'SEND_RECEIVE'
+        }
+      },
+      nwcConnection: null,
+      user: { id: 'user-1', remoteWallets: [DEFAULT_WALLET] }
+    } as any)
+
+    const req = createNextRequest('/api/lud16/alice/cb', {
+      searchParams: { amount: '10000' }
+    })
+    const res = await Lud16CbGet(
+      req,
+      createParamsPromise({ username: 'alice' })
+    )
+
+    expect(res.status).toBe(503)
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('Wallet is currently unavailable')
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'alice' }),
+      'LUD16 wallet route resolution failed'
+    )
+    expect(makeInvoiceMock).not.toHaveBeenCalled()
+    expect(prismaMock.invoice.upsert).not.toHaveBeenCalled()
+  })
+
+  it('does not map non-driver route errors to a 503', async () => {
+    resolveWalletRouteHarness.mock.mockImplementation(() => {
+      throw new Error('unexpected routing failure')
+    })
+    vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue({
+      username: 'alice',
+      mode: 'CUSTOM_NWC',
+      redirect: null,
+      remoteWallet: DEFAULT_WALLET,
+      nwcConnection: null,
+      user: { id: 'user-1', remoteWallets: [DEFAULT_WALLET] }
+    } as any)
+
+    const req = createNextRequest('/api/lud16/alice/cb', {
+      searchParams: { amount: '10000' }
+    })
+    const res = await Lud16CbGet(
+      req,
+      createParamsPromise({ username: 'alice' })
+    )
+
+    expect(res.status).toBe(500)
+    const body = (await res.json()) as { error: { message: string } }
+    expect(body.error.message).toBe('Internal server error')
+    expect(makeInvoiceMock).not.toHaveBeenCalled()
   })
 
   it('returns 404 for IDLE addresses on the callback', async () => {

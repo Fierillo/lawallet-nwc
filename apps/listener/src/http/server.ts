@@ -173,7 +173,8 @@ export function createHttpServer(deps: HttpServerDeps): http.Server {
           catchupErrors: metrics.catchupErrors,
           deadProbesRun: metrics.deadProbesRun,
           deadProbesTimedOut: metrics.deadProbesTimedOut,
-          walletsDeclaredDead: metrics.walletsDeclaredDead
+          walletsDeclaredDead: metrics.walletsDeclaredDead,
+          walletsArchiveRequested: metrics.walletsArchiveRequested
         },
         recentEvents: events.map(event => {
           // invoice / fees / preimage live only in the raw NIP-47 payload.
@@ -242,7 +243,7 @@ export function createHttpServer(deps: HttpServerDeps): http.Server {
           requestId,
           error: {
             code: 'validation_error',
-            message: parsed.error.errors[0]?.message ?? 'Invalid request'
+            message: parsed.error.issues[0]?.message ?? 'Invalid request'
           }
         } satisfies NwcPaymentResponse)
         return
@@ -301,7 +302,7 @@ export function createHttpServer(deps: HttpServerDeps): http.Server {
         sendProxyError(
           res,
           'validation_error',
-          parsed.error.errors[0]?.message ?? 'Invalid request'
+          parsed.error.issues[0]?.message ?? 'Invalid request'
         )
         return
       }

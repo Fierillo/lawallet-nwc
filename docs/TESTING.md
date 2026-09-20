@@ -45,7 +45,7 @@ All scripts are defined in [apps/web/package.json](../apps/web/package.json). Te
 
 | Tool                                                                     | Role                                                     |
 | ------------------------------------------------------------------------ | -------------------------------------------------------- |
-| [Vitest 3.2](https://vitest.dev)                                         | Test runner, assertion library, watch mode, UI, coverage |
+| [Vitest 5](https://vitest.dev)                                           | Test runner, assertion library, watch mode, UI, coverage |
 | [happy-dom](https://github.com/capricorn86/happy-dom)                    | Lightweight DOM for hook/component tests                 |
 | [MSW](https://mswjs.io)                                                  | HTTP mocking for outbound calls (Alby, third-party)      |
 | [@faker-js/faker](https://fakerjs.dev)                                   | Random fixture data                                      |
@@ -71,7 +71,7 @@ Configuration lives in [apps/web/vitest.config.ts](../apps/web/vitest.config.ts)
 | Integration | Vitest + Prisma mock                                                  | DB-touching flows, auth chains                | 70%                                                       |
 | E2E         | Playwright (`apps/web/e2e/` — see [TESTING-E2E.md](./TESTING-E2E.md)) | Real server + DB + auth, multi-browser opt-in | Critical paths                                            |
 | Bench       | Vitest bench (`apps/web/bench/` — see [BENCHMARK.md](./BENCHMARK.md)) | CPU-bound hot paths                           | Observational                                             |
-| Overall     | v8 coverage                                                           | Whole codebase                                | 60% statements / 75% branches / 70% functions / 60% lines |
+| Overall     | v8 coverage                                                           | Whole codebase                                | 60% statements / 70% branches / 70% functions / 60% lines |
 
 The pyramid widens at the bottom — **most coverage should come from fast unit and API tests**. Reserve heavier integration tests for flows that genuinely cross module boundaries (auth chain, payment routing, NWC).
 
@@ -374,7 +374,7 @@ The Vitest config enforces global thresholds:
 | Metric     | Threshold |
 | ---------- | --------- |
 | Statements | 60%       |
-| Branches   | 75%       |
+| Branches   | 70%       |
 | Functions  | 70%       |
 | Lines      | 60%       |
 
@@ -422,7 +422,7 @@ The numbers above are a floor, not a target. New API routes and lib utilities sh
 
 ## CI Integration
 
-GitHub Actions runs `lint → typecheck → test` on every PR. Branch protection requires green status checks before merge to `main`. Coverage reports are uploaded to Codecov (planned).
+GitHub Actions runs `lint → typecheck → test` on every PR. Branch protection requires green status checks before merge to `main`. Vitest writes `apps/web/coverage/lcov.info`; the Test job uploads it to [Codecov](https://codecov.io/gh/lawalletio/lawallet-nwc) via `codecov/codecov-action`. That upload needs the `CODECOV_TOKEN` repository secret (Codecov repo settings → GitHub Actions secrets).
 
 Locally, the pre-flight check before opening a PR:
 

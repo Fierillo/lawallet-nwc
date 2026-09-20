@@ -39,16 +39,6 @@ const envSchema = z.object({
       )
   ),
 
-  KEY_VAULT_SECRET_PREVIOUS: z.preprocess(
-    emptyEnvToUndefined,
-    z
-      .string()
-      .optional()
-      .describe(
-        'Comma-separated previous KEY_VAULT_SECRET values still accepted for decryption during rotation'
-      )
-  ),
-
   // NWC connection vault. Kept separate from the user-key vault so the
   // listener never needs access to passkey-custody key material.
   NWC_VAULT_SECRET: z.preprocess(
@@ -105,26 +95,6 @@ const envSchema = z.object({
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
     .describe('Timeout for NWC requests proxied through the listener service'),
-
-  // Alby Integration
-  ALBY_API_URL: z
-    .string()
-    .url('ALBY_API_URL must be a valid URL')
-    .optional()
-    .describe('Alby Hub API base URL'),
-
-  ALBY_BEARER_TOKEN: z
-    .string()
-    .min(1, 'ALBY_BEARER_TOKEN must not be empty')
-    .optional()
-    .describe('Alby Hub API bearer token for authentication'),
-
-  AUTO_GENERATE_ALBY_SUBACCOUNTS: z
-    .string()
-    .default('false')
-    .transform(val => val === 'true')
-    .pipe(z.boolean())
-    .describe('Enable automatic Alby subaccount generation for new users'),
 
   // Server Configuration
   PORT: z
@@ -227,30 +197,30 @@ const envSchema = z.object({
   // Request Size Limits
   REQUEST_MAX_BODY_SIZE: z
     .string()
+    .default('1048576')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .default('1048576')
     .describe('Maximum request body size in bytes (default: 1MB)'),
 
   REQUEST_MAX_JSON_SIZE: z
     .string()
+    .default('102400')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .default('102400')
     .describe('Maximum JSON payload size in bytes (default: 100KB)'),
 
   REQUEST_MAX_FILE_SIZE: z
     .string()
+    .default('5242880')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .default('5242880')
     .describe('Maximum single file upload size in bytes (default: 5MB)'),
 
   REQUEST_MAX_FILES: z
     .string()
+    .default('10')
     .transform(val => parseInt(val, 10))
     .pipe(z.number().int().positive())
-    .default('10')
     .describe('Maximum number of files per upload request (default: 10)'),
 
   // Sentry error monitoring (optional — nothing initializes without a DSN)
@@ -307,7 +277,7 @@ export function getEnv(strict: boolean = true): Env {
 
   if (!result.success) {
     if (strict) {
-      const errors = result.error.errors.map(err => {
+      const errors = result.error.issues.map(err => {
         const path = err.path.join('.')
         return `  - ${path}: ${err.message}`
       })
@@ -332,7 +302,7 @@ export function getEnv(strict: boolean = true): Env {
 
       // If still failing, throw in non-strict mode too for critical errors
       throw new Error(
-        `Critical environment variable validation failed: ${result.error.errors[0]?.message}`
+        `Critical environment variable validation failed: ${result.error.issues[0]?.message}`
       )
     }
   }

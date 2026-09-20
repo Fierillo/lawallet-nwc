@@ -37,12 +37,7 @@ export class NwcPoolError extends Error {
 }
 
 type WalletState =
-  | 'connecting'
-  | 'negotiating'
-  | 'ready'
-  | 'disconnected'
-  | 'error'
-  | 'closed'
+  'connecting' | 'negotiating' | 'ready' | 'disconnected' | 'error' | 'closed'
 
 interface WalletConnection {
   wallet: DesiredWallet
@@ -60,6 +55,15 @@ interface WalletConnection {
    * threshold WHILE its relays stay up is a destroyed LNCurl wallet.
    */
   lastResponsiveAt: Date | null
+  /** True once warmup completed at least once. False = warmup-stuck wallet. */
+  everReady: boolean
+  /**
+   * Set after web has been told this wallet is dead. Reconnects back off from
+   * the 60s ceiling to `retryAfterMs` (the archive retry interval) instead of
+   * hammering relays forever — the pool never removes the wallet itself, the
+   * `remote_wallet_changed` trigger does that once web archives the row.
+   */
+  parked: boolean
   retryTimer: NodeJS.Timeout | null
   retryAttempt: number
   errorNotified: boolean
@@ -69,6 +73,22 @@ interface WalletConnection {
   generation: number
   /** Foreground card payments suppress maintenance probes/catch-up work. */
   foregroundPayments: number
+}
+
+/** Per-wallet view the auto-archive rule reads (includes never-ready wallets). */
+export interface WalletLivenessSnapshot {
+  wallet: DesiredWallet
+  state: WalletState
+  everReady: boolean
+  lastResponsiveAt: Date | null
+  parked: boolean
+  /**
+   * Consecutive failed connect attempts. Non-zero means this wallet is in a
+   * retry cycle, which matters because a warmup-stuck wallet spends part of
+   * every cycle back in `connecting` — indistinguishable from a fresh startup
+   * handshake by state alone.
+   */
+  retryAttempt: number
 }
 
 // The SDK methods take typed NIP-47 request objects; proxied params arrive as
@@ -95,6 +115,31 @@ export interface NwcPoolDeps {
   ) => void
   /** Fired once per error streak (reset on successful subscribe). */
   onWalletError?: (wallet: DesiredWallet, error: Error) => void
+  /**
+   * True when warmup errors for this wallet must stay out of Sentry: web has
+   * already been told it is dead, so its failures are expected noise. Backed by
+   * a persisted flag, so it holds across restarts (LAWALLET-LISTENER-1/2).
+   */
+  isArchiveReported?: (walletId: string) => boolean
+  /**
+   * Proof of life worth persisting: a completed warmup (`ready: true`), a
+   * received notification, or a successful proxied call/probe. The pool keeps
+   * its own in-memory clock regardless; this is the durable mirror.
+   */
+  onLiveness?: (walletId: string, at: Date, ready: boolean) => void
+  /**
+   * Fired by a TARGETED reconcile (one `remote_wallet_changed` NOTIFY), never by
+   * the bulk startup/periodic reconcile — resetting the whole pool at boot is
+   * exactly what must not happen to the idle clock.
+   *
+   * `readded: true` means the wallet entered the pool or had its credential
+   * rotated (a DEAD → ACTIVE restore, an un-archived proxy, a new NWC URI):
+   * whatever idleness it accrued while it was gone is not its own, so it earns a
+   * fresh archive window. `readded: false` is a plain metadata refresh of a
+   * wallet that never left — the clock only resets there if web had already been
+   * told the wallet was dead, i.e. web un-archived it.
+   */
+  onWalletRestored?: (walletId: string, opts: { readded: boolean }) => void
   /** Fired after a wallet's live subscription is established (startup, add, rotation). */
   onSubscribed?: (wallet: DesiredWallet, client: NWCClient) => void
   /**
@@ -110,6 +155,14 @@ const WATCHER_INTERVAL_MS = 30000
 /** Avoid a startup relay storm while keeping enough parallel warm-ups. */
 const MAX_CONCURRENT_NEGOTIATIONS = 8
 const WARMUP_TIMEOUT_MS = 15000
+/**
+ * Number of retry attempts before reporting retryable warmup errors to
+ * onWalletError (Sentry). Transient failures like missing kind 13194 or SDK
+ * timeouts during connect() often resolve on retry — reporting them on every
+ * first failure drowns real payment errors. Only persistent failures (3+
+ * consecutive attempts) are worth alerting on.
+ */
+const WARMUP_RETRY_SENTRY_THRESHOLD = 3
 
 /**
  * Holds one live NWCClient per ACTIVE NWC RemoteWallet for the process
@@ -172,7 +225,57 @@ export class NwcPool {
   /** Bump the liveness clock — called by the prober on a successful probe. */
   markResponsive(walletId: string): void {
     const conn = this.connections.get(walletId)
-    if (conn) conn.lastResponsiveAt = new Date()
+    if (!conn) return
+    conn.lastResponsiveAt = new Date()
+    this.deps.onLiveness?.(walletId, conn.lastResponsiveAt, false)
+  }
+
+  /**
+   * Everything the auto-archive rule needs about the pooled wallets. Includes
+   * wallets that never reached `ready` — the whole point of issue #279 is that
+   * warmup-stuck wallets must be reachable by the archive path, and
+   * {@link deadCandidates} deliberately only sees `ready` ones.
+   */
+  livenessSnapshot(): WalletLivenessSnapshot[] {
+    return [...this.connections.values()].map(conn => ({
+      wallet: conn.wallet,
+      state: conn.state,
+      everReady: conn.everReady,
+      lastResponsiveAt: conn.lastResponsiveAt,
+      parked: conn.parked,
+      retryAttempt: conn.retryAttempt
+    }))
+  }
+
+  /**
+   * Stops the reconnect storm for a wallet web has been told is dead: cancels
+   * the pending retry, drops the client, and schedules a single retry
+   * `retryAfterMs` out instead of the 60s backoff ceiling. The wallet stays in
+   * the pool — removal is web's job (archive → `remote_wallet_changed`) — so a
+   * wallet web declines to archive still recovers, just calmly.
+   */
+  parkWallet(walletId: string, retryAfterMs: number): void {
+    const conn = this.connections.get(walletId)
+    if (!conn || conn.state === 'closed' || conn.parked) return
+    conn.parked = true
+    conn.errorNotified = true
+    if (conn.retryTimer) {
+      clearTimeout(conn.retryTimer)
+      conn.retryTimer = null
+    }
+    if (conn.state !== 'ready') this.teardownClient(conn)
+    this.resolveReadyWaiters(walletId, false)
+    // `retryAttempt` is deliberately NOT reset: if the un-park attempt fails
+    // too, the normal backoff resumes at its 60s ceiling instead of restarting
+    // from 1s, so the pre-park storm can't come back for the window between
+    // this attempt and the next archive sweep.
+    conn.retryTimer = setTimeout(() => {
+      conn.retryTimer = null
+      conn.parked = false
+      this.enqueueConnect(conn, false)
+    }, retryAfterMs)
+    conn.retryTimer.unref()
+    this.deps.log.warn({ walletId, retryAfterMs }, 'pool.wallet_parked')
   }
 
   /**
@@ -296,14 +399,20 @@ export class NwcPool {
     }
     if (!existing) {
       this.addWallet(row, true)
+      this.deps.onWalletRestored?.(walletId, { readded: true })
       return
     }
     if (existing.wallet.connectionString !== row.connectionString) {
       this.removeWallet(walletId)
       this.addWallet(row, true)
+      this.deps.onWalletRestored?.(walletId, { readded: true })
       return
     }
     existing.wallet = { ...row }
+    // Still pooled: only interesting if web had already been told this wallet is
+    // dead and has since un-archived it (an LUD-16 proxy with settlements in
+    // flight never leaves the pool, so a re-enable arrives as a plain refresh).
+    this.deps.onWalletRestored?.(walletId, { readded: false })
   }
 
   private addWallet(wallet: DesiredWallet, priority = false): void {
@@ -317,6 +426,8 @@ export class NwcPool {
       lastError: null,
       lastCatchupAt: null,
       lastResponsiveAt: null,
+      everReady: false,
+      parked: false,
       retryTimer: null,
       retryAttempt: 0,
       errorNotified: false,
@@ -402,7 +513,7 @@ export class NwcPool {
         try {
           const now = new Date()
           conn.lastEventAt = now
-          conn.lastResponsiveAt = now
+          this.noteResponsive(conn)
           this.deps.onNotification(conn.wallet, notification)
         } catch (err) {
           this.deps.log.error(
@@ -454,9 +565,12 @@ export class NwcPool {
       conn.state = 'ready'
       conn.retryAttempt = 0
       conn.errorNotified = false
+      conn.everReady = true
+      conn.parked = false
       // Seed the liveness clock so a freshly (re)subscribed wallet isn't
       // instantly a dead-wallet candidate.
       conn.lastResponsiveAt = new Date()
+      this.deps.onLiveness?.(conn.wallet.id, conn.lastResponsiveAt, true)
       // Assume connected at subscribe time — the watcher corrects the flag on
       // its next sample and fires onReconnected on the false → true edge.
       conn.wasConnected = true
@@ -473,11 +587,25 @@ export class NwcPool {
       conn.lastErrorAt = new Date()
       conn.lastError = error.message
       this.teardownClient(conn)
+
+      const isRetryable = isRetryableWarmupError(error)
       if (conn.retryAttempt === 0) {
-        log.warn(
-          { err: error, walletId: conn.wallet.id, attempt: conn.retryAttempt },
-          'pool.wallet_connect_failed'
-        )
+        // First failure: full stack for non-retryable, lighter log for transient
+        if (isRetryable) {
+          log.info(
+            { error: error.message, walletId: conn.wallet.id },
+            'pool.wallet_warmup_transient'
+          )
+        } else {
+          log.warn(
+            {
+              err: error,
+              walletId: conn.wallet.id,
+              attempt: conn.retryAttempt
+            },
+            'pool.wallet_connect_failed'
+          )
+        }
       } else if (isPowerOfTwo(conn.retryAttempt)) {
         // Keep long-running outages observable without formatting the same
         // source-mapped stack every minute for every disconnected wallet.
@@ -490,7 +618,18 @@ export class NwcPool {
           'pool.wallet_connect_retrying'
         )
       }
-      if (!conn.errorNotified) {
+
+      // Report to Sentry only for non-retryable errors OR after multiple
+      // consecutive failures. Transient warmup issues (missing 13194, SDK
+      // timeout) often resolve on retry — reporting them on every first
+      // failure drowns real payment errors (LAWALLET-LISTENER-1/2). A wallet
+      // web has already been told is dead never reports at all, in this process
+      // lifetime or any later one — that persisted mute is what stops a restart
+      // from re-storming Sentry with the same warmup failure.
+      const shouldReport =
+        (!isRetryable || conn.retryAttempt >= WARMUP_RETRY_SENTRY_THRESHOLD) &&
+        !this.deps.isArchiveReported?.(conn.wallet.id)
+      if (!conn.errorNotified && shouldReport) {
         conn.errorNotified = true
         this.deps.onWalletError?.(conn.wallet, error)
       }
@@ -500,6 +639,8 @@ export class NwcPool {
 
   private scheduleRetry(conn: WalletConnection): void {
     if (this.closed || conn.state === 'closed') return
+    // Parked: the single archive-interval retry is already scheduled.
+    if (conn.parked) return
     const base = Math.min(1000 * 2 ** conn.retryAttempt, 60000)
     const jitter = base * 0.25 * (Math.random() * 2 - 1)
     conn.retryAttempt++
@@ -566,7 +707,7 @@ export class NwcPool {
         timeout
       ])
       // A wallet that answered a proxied call is demonstrably alive.
-      conn.lastResponsiveAt = new Date()
+      this.noteResponsive(conn)
       return result
     } catch (err) {
       if (err instanceof NwcPoolError) throw err
@@ -621,6 +762,16 @@ export class NwcPool {
   prioritizeWallet(walletId: string): void {
     const conn = this.connections.get(walletId)
     if (!conn || conn.state === 'ready' || conn.state === 'closed') return
+    // A foreground demand for this wallet outranks the archive backoff.
+    if (conn.parked) {
+      conn.parked = false
+      if (conn.retryTimer) {
+        clearTimeout(conn.retryTimer)
+        conn.retryTimer = null
+      }
+      this.enqueueConnect(conn, true)
+      return
+    }
     const queued = this.connectQueue.indexOf(conn)
     if (queued >= 0) {
       this.connectQueue.splice(queued, 1)
@@ -672,7 +823,7 @@ export class NwcPool {
     conn.foregroundPayments++
     try {
       const result = await client.payInvoice({ invoice })
-      conn.lastResponsiveAt = new Date()
+      this.noteResponsive(conn)
       return result
     } catch (err) {
       throw this.mapSdkError(conn, err)
@@ -691,7 +842,7 @@ export class NwcPool {
       const result = await conn.client!.lookupInvoice({
         payment_hash: paymentHash
       })
-      conn.lastResponsiveAt = new Date()
+      this.noteResponsive(conn)
       return result
     } catch (err) {
       throw this.mapSdkError(conn, err)
@@ -722,7 +873,8 @@ export class NwcPool {
       lastEventAt: conn.lastEventAt?.toISOString() ?? null,
       lastErrorAt: conn.lastErrorAt?.toISOString() ?? null,
       lastError: conn.lastError,
-      lastCatchupAt: conn.lastCatchupAt?.toISOString() ?? null
+      lastCatchupAt: conn.lastCatchupAt?.toISOString() ?? null,
+      parked: conn.parked
     }))
   }
 
@@ -770,6 +922,12 @@ export class NwcPool {
     this.connections.clear()
     this.byConnectionString.clear()
     this.connectQueue = []
+  }
+
+  /** In-memory liveness clock plus its durable mirror (one write per proof). */
+  private noteResponsive(conn: WalletConnection): void {
+    conn.lastResponsiveAt = new Date()
+    this.deps.onLiveness?.(conn.wallet.id, conn.lastResponsiveAt, false)
   }
 
   private requireReady(walletId: string): WalletConnection {
@@ -873,4 +1031,25 @@ function isConnectedSafe(client: NWCClient): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Detects transient warmup failures that commonly resolve on retry:
+ * - SDK timeout during negotiation (Nip47TimeoutError)
+ * - Missing NIP-47 info event (relay hadn't propagated kind 13194 yet)
+ * - Our own warmup timeout wrapper
+ *
+ * These should NOT be reported to Sentry on every first failure — only after
+ * multiple consecutive retries to avoid drowning real payment errors.
+ */
+export function isRetryableWarmupError(err: unknown): boolean {
+  if (err instanceof Nip47TimeoutError) return true
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase()
+    if (msg.includes('no info event')) return true
+    if (msg.includes('kind 13194')) return true
+    if (msg.includes('warm-up timed out')) return true
+    if (msg.includes('reply timeout')) return true
+  }
+  return false
 }

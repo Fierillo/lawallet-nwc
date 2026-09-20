@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createNextRequest, assertResponse } from '@/tests/helpers/api-helpers'
 import { prismaMock, resetPrismaMock } from '@/tests/helpers/prisma-mock'
+import { stubFetch } from '@/tests/helpers/stub-fetch'
 
 // Mock dependencies
 vi.mock('@/lib/config', () => ({
@@ -88,7 +89,6 @@ describe('GET /api/settings', () => {
       root: mockPubkey,
       domain: 'test.com',
       endpoint: 'app',
-      subdomain: 'app',
       hasRoot: true,
       // Computed NWC-listener keys (full response only)
       listener_enabled: 'false',
@@ -135,7 +135,6 @@ describe('GET /api/settings', () => {
     expect(body).toEqual({
       domain: 'test.com',
       endpoint: 'app',
-      subdomain: 'app',
       hasRoot: true
     })
   })
@@ -156,16 +155,14 @@ describe('GET /api/settings', () => {
     expect(body).toEqual({
       domain: 'test.com',
       endpoint: 'app',
-      subdomain: 'app',
       hasRoot: true
     })
   })
 
-  it('falls back to legacy subdomain setting when endpoint is missing', async () => {
+  it('omits endpoint when it is not configured', async () => {
     vi.mocked(validateNip98Auth).mockRejectedValue(new Error('no auth'))
     vi.mocked(getSettings).mockResolvedValue({
-      domain: 'test.com',
-      subdomain: 'wallet'
+      domain: 'test.com'
     })
 
     const req = createNextRequest('/api/settings')
@@ -174,8 +171,6 @@ describe('GET /api/settings', () => {
 
     expect(body).toEqual({
       domain: 'test.com',
-      endpoint: 'wallet',
-      subdomain: 'wallet',
       hasRoot: false
     })
   })
@@ -194,7 +189,8 @@ describe('POST /api/settings', () => {
     const res = await POST(req)
     const body = await assertResponse(res, 200)
 
-    expect(body).toEqual({ message: 'Settings updated successfully', count: 2 })
+    // domain + domain_verified + the endpoint defaulted from the domain
+    expect(body).toEqual({ message: 'Settings updated successfully', count: 3 })
     expect(prismaMock.settings.upsert).toHaveBeenCalledWith({
       where: { name: 'domain' },
       update: { value: 'new.com' },
@@ -251,14 +247,95 @@ describe('POST /api/settings', () => {
     expect(prismaMock.settings.upsert).toHaveBeenCalledTimes(3)
   })
 
-  it('maps subdomain updates to the endpoint setting', async () => {
+  it('defaults a blank endpoint to https://<domain> when saving the domain', async () => {
     vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
     vi.mocked(getSettings).mockResolvedValue({ root: mockPubkey })
     vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
 
     const req = createNextRequest('/api/settings', {
       method: 'POST',
-      body: { subdomain: 'wallet' }
+      body: { domain: 'Example.com' }
+    })
+    await assertResponse(await POST(req), 200)
+
+    expect(prismaMock.settings.upsert).toHaveBeenCalledWith({
+      where: { name: 'endpoint' },
+      update: { value: 'https://example.com' },
+      create: { name: 'endpoint', value: 'https://example.com' }
+    })
+  })
+
+  it('refills the endpoint when it is cleared', async () => {
+    vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
+    vi.mocked(getSettings).mockResolvedValue({
+      root: mockPubkey,
+      domain: 'example.com',
+      endpoint: 'https://app.example.com'
+    })
+    vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
+
+    const req = createNextRequest('/api/settings', {
+      method: 'POST',
+      body: { endpoint: '  ' }
+    })
+    await assertResponse(await POST(req), 200)
+
+    expect(prismaMock.settings.upsert).toHaveBeenCalledWith({
+      where: { name: 'endpoint' },
+      update: { value: 'https://example.com' },
+      create: { name: 'endpoint', value: 'https://example.com' }
+    })
+  })
+
+  it('leaves an explicit endpoint alone', async () => {
+    vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
+    vi.mocked(getSettings).mockResolvedValue({ root: mockPubkey })
+    vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
+
+    const req = createNextRequest('/api/settings', {
+      method: 'POST',
+      body: { domain: 'example.com', endpoint: 'https://app.example.com' }
+    })
+    await assertResponse(await POST(req), 200)
+
+    expect(prismaMock.settings.upsert).toHaveBeenCalledWith({
+      where: { name: 'endpoint' },
+      update: { value: 'https://app.example.com' },
+      create: { name: 'endpoint', value: 'https://app.example.com' }
+    })
+  })
+
+  it('does not touch the endpoint on an unrelated settings save', async () => {
+    vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
+    vi.mocked(getSettings).mockResolvedValue({
+      root: mockPubkey,
+      domain: 'example.com',
+      endpoint: ''
+    })
+    vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
+
+    const req = createNextRequest('/api/settings', {
+      method: 'POST',
+      body: { smtp_host: 'mail.example.com' }
+    })
+    await assertResponse(await POST(req), 200)
+
+    expect(prismaMock.settings.upsert).toHaveBeenCalledTimes(1)
+    expect(prismaMock.settings.upsert).toHaveBeenCalledWith({
+      where: { name: 'smtp_host' },
+      update: { value: 'mail.example.com' },
+      create: { name: 'smtp_host', value: 'mail.example.com' }
+    })
+  })
+
+  it('resets domain verification when the endpoint changes', async () => {
+    vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
+    vi.mocked(getSettings).mockResolvedValue({ root: mockPubkey })
+    vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
+
+    const req = createNextRequest('/api/settings', {
+      method: 'POST',
+      body: { endpoint: 'wallet' }
     })
     const res = await POST(req)
     const body = await assertResponse(res, 200)
@@ -305,9 +382,8 @@ describe('POST /api/settings', () => {
   })
 
   describe('paid registration precondition', () => {
-    const originalFetch = global.fetch
     afterEach(() => {
-      global.fetch = originalFetch
+      vi.unstubAllGlobals()
     })
 
     it('rejects when enabling paid registration with an empty LN address', async () => {
@@ -331,7 +407,7 @@ describe('POST /api/settings', () => {
     it('rejects when the configured LN address does not expose LUD-21 verify', async () => {
       vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
       vi.mocked(getSettings).mockResolvedValue({ root: mockPubkey })
-      global.fetch = vi.fn(async (input: string | URL | Request) => {
+      stubFetch(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString()
         if (url.includes('/.well-known/lnurlp/')) {
           return {
@@ -370,7 +446,7 @@ describe('POST /api/settings', () => {
       vi.mocked(validateNip98Auth).mockResolvedValue(mockPubkey)
       vi.mocked(getSettings).mockResolvedValue({ root: mockPubkey })
       vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
-      global.fetch = vi.fn(async (input: string | URL | Request) => {
+      stubFetch(async (input: string | URL | Request) => {
         const url = typeof input === 'string' ? input : input.toString()
         if (url.includes('/.well-known/lnurlp/')) {
           return {
@@ -413,8 +489,7 @@ describe('POST /api/settings', () => {
         registration_ln_enabled: 'false'
       })
       vi.mocked(prismaMock.settings.upsert).mockResolvedValue({} as any)
-      const fetchSpy = vi.fn()
-      global.fetch = fetchSpy as any
+      const fetchSpy = stubFetch()
 
       const req = createNextRequest('/api/settings', {
         method: 'POST',

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# ── Build base: Node.js 22 (Debian Trixie Slim) + pnpm via corepack ────
-FROM node:22-trixie-slim AS base
+# ── Build base: Node.js 24 (Debian Trixie Slim) + pnpm via corepack ────
+FROM node:24-trixie-slim AS base
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable \
     && corepack prepare pnpm@11.20.0 --activate
@@ -28,12 +28,16 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/listener/node_modules ./apps/listener/node_modules
+# Shared ships raw TS and depends on @asteasolutions/zod-to-openapi. tsup
+# resolves that from packages/shared/node_modules; omitting it fails the
+# listener image build even though the full-monorepo turbo build is green.
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY apps/listener ./apps/listener
 COPY packages/shared ./packages/shared
 RUN pnpm --filter=@lawallet-nwc/listener build
 
 # ── runner: minimal runtime (node + prod deps + dist bundle) ───────────
-FROM node:22-trixie-slim AS runner
+FROM node:24-trixie-slim AS runner
 WORKDIR /app
 
 # curl: the docker-compose healthcheck curls /health from inside the container.

@@ -54,6 +54,135 @@ Set `0` to disable, or lower it while hunting a regression.
 | 403 `AUTHORIZATION_ERROR`    | Authenticated but missing the permission — check `lib/auth/permissions.ts` mapping and the user's role in the DB (or the role claim in the JWT).                                                                      |
 | 503 from `/api/health`       | The server is up but can't reach the database — see below.                                                                                                                                                            |
 
+## NWC vault credentials
+
+Every NWC credential at rest (`RemoteWallet.config.connectionString`, the proxy
+NWC URI, the NIP-57 receipt nsec) is the same `lwrw1:` AES-256-GCM envelope
+under `NWC_VAULT_SECRET`. Startup converts legacy envelopes and reports
+anything the secret cannot open, so the boot log is the first place to look.
+
+| Log message                                          | Meaning / fix                                                                                                                                                                    |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `remote_wallet_nwc_encryption.unreadable_rows`       | Those `walletIds` were sealed under a different `NWC_VAULT_SECRET`. Restore that secret, or have the owner reconnect the wallet. Only those wallets fail (503 on payment paths). |
+| `proxy.nwc_vault.nwc_unreadable`                     | The proxy NWC URI cannot be opened, so deferred forwarding cannot pay out. Restore the secret that sealed it, or re-enter the URI in Admin → Settings → NWC Services.            |
+| `proxy.nwc_vault.converted_to_lwrw1`                 | Informational — a credential still in the legacy `LWPX01` envelope was rewritten in canonical form.                                                                              |
+| `proxy_receipt_signer.replaced_unreadable`           | The secret could not open the signer, so it was replaced; `previousReceiptPubkey` → `receiptPubkey` records the change. Zaps work again from this boot on — see below.           |
+| `proxy_receipt_signer.generated_for_existing_config` | The config row existed with no signer at all, so one was generated. Zaps were off platform-wide until this ran.                                                                  |
+| `proxy_receipt_signer.pubkey_restored`               | The signer was readable but had no published pubkey, so it was derived from the key. No key change.                                                                              |
+| `nip57.receipt_signer_unavailable`                   | Served at request time whenever the signer cannot be decrypted — LUD-16 then omits `allowsNostr`/`nostrPubkey` for every address. Pair it with the startup lines above.          |
+
+`NWC_VAULT_SECRET` has one value and no fallback, so changing it is what makes
+existing credentials unreadable. Keep it stable and backed up.
+
+### Zaps are missing platform-wide
+
+`getZapReceiptCapability()` is the only gate on `allowsNostr` / `nostrPubkey`
+in the LUD-16 payRequest, and it needs **both** an enabled listener and a
+decryptable receipt signer. So a payRequest with `commentAllowed` but no
+`allowsNostr` on _every_ address is an instance-level fault, not an address
+misconfiguration. Check, in order:
+
+1. `nip57.receipt_signer_unavailable` in the request log → signer problem, see
+   the table above. Startup repairs this on the next boot.
+2. Listener reachable and paired (`POST /api/webhooks/nwc` should answer 401,
+   not 404) → otherwise NIP-57 stays off by design, because nothing would
+   observe settlement.
+
+A signer the secret cannot open is replaced on the next boot, so zaps recover
+on their own — but the advertised `nostrPubkey` changes with it, and the
+displaced key is not kept (it was already unopenable). To preserve the
+instance's `_` identity across a secret change, re-enter that nsec through
+Admin → Settings → NWC Services before the instance restarts; that re-seals it
+under the current secret and no replacement happens.
+
+Already-settled zap invoices keep their stored `zapRequest`, so once the
+capability flips true the receipt sweep (`reconcileInvoiceZapReceipts`)
+publishes the backlog — no receipts are lost to the outage window.
+
+## A wallet was auto-archived (status `DEAD`)
+
+Two rules archive a wallet, and `RemoteWallet.diedReason` says which one fired
+(the archived-wallets table in the admin UI shows it too):
+
+| `diedReason`    | Rule                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------- |
+| `unresponsive`  | LNCurl wallet only: silent for `DEAD_THRESHOLD_HOURS` (4) with relays UP, confirmed by 3 `get_info` timeouts. |
+| `idle`          | Any wallet: no sign of life for 48h, after having been `ready` at some point.                                 |
+| `warmup_failed` | Any wallet: no sign of life for 48h and NWC warm-up never succeeded — the wallet was never reachable at all.  |
+
+`warmup_failed` almost always means the connection string is dead upstream (the
+user revoked it, or the provider retired the wallet). Confirm before blaming the
+listener: the archive clock is the listener's own persisted one, so read it
+directly rather than inferring from logs.
+
+```sql
+-- Why the listener thinks this wallet is idle. archive_reported_at non-null
+-- means web has already been told; last_seen_at is the CATCH-UP cursor, not the
+-- liveness clock.
+SELECT last_active_at, ready_at, archive_reported_at, last_seen_at
+FROM listener.wallet_cursors WHERE wallet_id = '<wallet-id>';
+```
+
+A reported wallet is _parked_ in the pool: `GET /status` shows
+`parked: true`, it reconnects every `WALLET_ARCHIVE_RETRY_MS` (6h) instead of
+every 60s, and its warm-up errors stop reaching Sentry. That state survives a
+restart on purpose — if you expected a Sentry alert for a stuck wallet and got
+none, check `archive_reported_at` first.
+
+The owner can `PATCH /api/remote-wallets/<id>` back to `ACTIVE` once the wallet
+works again; that clears `diedAt` / `diedReason`, and the reconcile it triggers
+resets `last_active_at` and `archive_reported_at` so the wallet gets a fresh 48h
+window instead of being re-archived on the next sweep. A previously-reported
+wallet that simply starts working again clears its own report the moment warm-up
+succeeds.
+
+For the LUD-16 proxy wallet the archive lands on `ProxyServiceConfig.archivedAt`
+with `enabled = false`; re-enabling the proxy (or storing a fresh NWC URI) clears
+it and resets the same ledger row. Outstanding proxy settlements keep running
+while archived — they read the credential regardless of `enabled`.
+**Only the 48h rule can archive the proxy**: the credential is the operator's own
+Alby or self-hosted node, so a `reason: 'unresponsive'` probe report about it is
+refused (`nwc.proxy_wallet_dead_ignored_probe_signal`) no matter how long the
+silence lasted.
+
+## The listener came back after a long outage — will it archive everything?
+
+No. Downtime is not wallet idleness. At boot the listener reads its own liveness
+watermark and discounts the outage from every idle measurement:
+
+```sql
+-- What the listener will consider "unobserved" this lifetime.
+SELECT max(updated_at) AS listener_last_alive FROM listener.wallet_cursors;
+```
+
+Look for `archive.policy` at startup (`downtimeSeconds`) and, on the first
+sweeps, `dead_prober.idle_discounted_listener_downtime` — that line means a wallet
+cleared 48h of total silence but not 48h of _observed_ silence, so it was left
+alone. A wallet that was already quiet before the outage only needs the remainder
+of the window in uptime.
+
+## A wallet_dead report keeps repeating
+
+Web refuses reports that don't meet its rules and says so in the webhook ack
+(`walletDeadOutcome`). `ignored` / `unknown_wallet` deliberately do **not** park
+the wallet or mute its errors, so the wallet stays live — that is the intended
+outcome for, say, a user's own Alby node going quiet for an afternoon. Grep web
+for the reason:
+
+| Log                                                     | Meaning                                             |
+| ------------------------------------------------------- | --------------------------------------------------- |
+| `nwc.wallet_dead_ignored_relays_down`                   | Probe report during a relay outage.                 |
+| `nwc.wallet_dead_ignored_non_lncurl`                    | Probe signal against a wallet we didn't mint.       |
+| `nwc.proxy_wallet_dead_ignored_probe_signal`            | Probe signal against the LUD-16 proxy credential.   |
+| `nwc.wallet_dead_ignored_below_idle_window`             | Idle report under 48h.                              |
+| `nwc.proxy_wallet_dead_contradicted_by_recent_activity` | Proxy paid inside the window — the report is stale. |
+| `nwc.wallet_dead_unknown_wallet_id`                     | No `RemoteWallet` and no proxy config owns the id.  |
+
+The listener rate-limits a refused report in memory (one ask per
+`WALLET_ARCHIVE_RETRY_MS`), so a repeat every 15 min means the report is being
+_re-derived_, not retried — check whether the wallet is flapping in and out of the
+pool.
+
 ## Card tap payments
 
 The BoltCard spend path (`app/api/cards/[id]/scan/cb/actions/pay.ts`) validates

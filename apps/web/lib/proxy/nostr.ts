@@ -37,6 +37,13 @@ export function validateZapRequest(input: {
   } catch {
     throw new ValidationError('Zap request is not valid JSON')
   }
+  // `verifyEvent` is safe to hand `event` directly *only* because it was
+  // JSON.parse'd three lines up: nostr-tools memoizes its verdict on the
+  // event under a symbol key, and an object already carrying a `true` there
+  // skips the signature check entirely — but JSON can't carry a symbol. This
+  // input is a string, so no caller can smuggle a pre-verified object in. If
+  // this signature ever changes to accept an `Event`, rebuild it from the
+  // seven signed fields first, the way `lib/vouchers/event.ts` does.
   if (
     event.kind !== 9734 ||
     !verifyEvent(event) ||
@@ -107,7 +114,7 @@ export interface PublishedZapReceipt {
  * the same receipt id is produced after a crash or relay timeout, so a retry
  * cannot create a second zap receipt for the same payment.
  */
-function createZapReceipt(input: {
+export function createZapReceipt(input: {
   zapRequest: Event
   zapRequestJson: string
   payerInvoice: string
@@ -119,6 +126,7 @@ function createZapReceipt(input: {
   const copiedTags = input.zapRequest.tags.filter(tag =>
     ['e', 'p', 'a'].includes(tag[0])
   )
+  // Receipt `P` is the sender: zapRequest.pubkey, not a copied tag (NIP-57).
   return finalizeEvent(
     {
       kind: 9735,
@@ -126,6 +134,7 @@ function createZapReceipt(input: {
       content: '',
       tags: [
         ...copiedTags,
+        ['P', input.zapRequest.pubkey],
         ['bolt11', input.payerInvoice],
         ['description', input.zapRequestJson],
         ...(input.payerPreimage ? [['preimage', input.payerPreimage]] : [])
@@ -172,7 +181,6 @@ export async function publishZapReceipt(input: {
   }
   return { event, json: JSON.stringify(event) }
 }
-
 
 function isRelayUrl(value: string): boolean {
   try {

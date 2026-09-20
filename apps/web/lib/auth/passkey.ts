@@ -1,7 +1,4 @@
-import type {
-  AuthenticatorTransportFuture,
-  WebAuthnCredential
-} from '@simplewebauthn/server'
+import type { WebAuthnCredential } from '@simplewebauthn/server'
 import type { PasskeyCredential, WebAuthnFlow } from '@/lib/generated/prisma'
 import { prisma } from '@/lib/prisma'
 import { resolveApiUrl } from '@/lib/public-url'
@@ -33,13 +30,13 @@ export async function resolveRpContext(request: {
 }): Promise<RpContext> {
   const [apiUrl, settings] = await Promise.all([
     resolveApiUrl(request),
-    getSettings(['community_name'], { cache: 'hot' })
+    getSettings(['community_name'])
   ])
   const url = new URL(apiUrl)
   return {
     rpId: url.hostname,
     origin: url.origin,
-    rpName: settings.community_name || 'LaWallet'
+    rpName: settings.community_name?.trim() || 'LaWallet'
   }
 }
 
@@ -115,9 +112,7 @@ export async function consumeWebAuthnChallenge(
 }
 
 /** JSON round-trip for `PasskeyCredential.transports`. */
-export function parseTransports(
-  raw: string | null
-): AuthenticatorTransportFuture[] | undefined {
+export function parseTransports(raw: string | null): string[] | undefined {
   if (!raw) return undefined
   try {
     const parsed = JSON.parse(raw)

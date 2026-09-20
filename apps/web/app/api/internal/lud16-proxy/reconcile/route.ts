@@ -4,6 +4,7 @@ import { readAuthenticatedListenerBody } from '@/lib/proxy/internal-auth'
 import { reconcileProxyPayments } from '@/lib/proxy/reconcile'
 import { reconcileRemoteWalletForwarding } from '@/lib/remote-wallet-forwarding/reconcile'
 import { reconcileInvoiceZapReceipts } from '@/lib/nostr/zap-receipts'
+import { settlePendingZapInvoices } from '@/lib/nostr/zap-settlement'
 import { reconcileRemoteWalletNotifications } from '@/lib/remote-wallet-notifications/reconcile'
 import { withErrorHandling } from '@/types/server/error-handler'
 import { ValidationError } from '@/types/server/errors'
@@ -23,7 +24,7 @@ export const POST = withErrorHandling(async (request: Request) => {
   }
   const parsed = bodySchema.safeParse(json)
   if (!parsed.success) {
-    throw new ValidationError('Invalid request data', parsed.error.errors)
+    throw new ValidationError('Invalid request data', parsed.error.issues)
   }
   after(async () => {
     await Promise.all([
@@ -32,6 +33,9 @@ export const POST = withErrorHandling(async (request: Request) => {
         ids: parsed.data.forwardingReceiptIds
       }),
       reconcileInvoiceZapReceipts(),
+      // Safety net: an operator running a listener old enough to lack the
+      // dedicated zap-settle timer still gets zaps settled on this tick.
+      settlePendingZapInvoices(),
       reconcileRemoteWalletNotifications()
     ])
   })

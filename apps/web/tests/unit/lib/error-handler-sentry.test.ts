@@ -49,7 +49,12 @@ import {
   NotFoundError,
   ServiceUnavailableError
 } from '@/types/server/errors'
+import { logActivity } from '@/lib/activity-log'
 import { Prisma } from '@/lib/generated/prisma'
+import {
+  TransactionTimeoutError,
+  TransactionConnectionError
+} from '@/lib/prisma-transaction'
 
 const ORIGINAL_DSN = process.env.SENTRY_DSN
 
@@ -135,6 +140,122 @@ describe('handleApiError Sentry forwarding', () => {
     expect(body.success).toBe(false)
     expect(body.error.message).toBe('db exploded')
   })
+
+  it('redacts the OTC bearer segment in tags.path for /api/cards/otc/[otc]', async () => {
+    const otc = 'a'.repeat(32) // 32-hex bearer credential
+    const request = new Request(`http://localhost:3000/api/cards/otc/${otc}`)
+    const error = new InternalServerError('db exploded')
+
+    handleApiError(error, undefined, request)
+    await flushSentryImport()
+
+    expect(captureException).toHaveBeenCalledTimes(1)
+    const [, captureContext] = captureException.mock.calls[0] as [
+      unknown,
+      { tags: Record<string, unknown> }
+    ]
+    expect(captureContext.tags.path).toBe('/api/cards/otc/[otc]')
+    // The OTC must not appear anywhere in the capture context that goes to
+    // Sentry — tags is the only leak channel from this handler.
+    expect(JSON.stringify(captureContext)).not.toContain(otc)
+  })
+
+  it('redacts the OTC bearer segment for the /activate sub-route', async () => {
+    const otc = 'b'.repeat(32)
+    const request = new Request(
+      `http://localhost:3000/api/cards/otc/${otc}/activate`
+    )
+
+    handleApiError(new InternalServerError('db exploded'), undefined, request)
+    await flushSentryImport()
+
+    const [, captureContext] = captureException.mock.calls[0] as [
+      unknown,
+      { tags: Record<string, unknown> }
+    ]
+    expect(captureContext.tags.path).toBe('/api/cards/otc/[otc]/activate')
+    expect(JSON.stringify(captureContext)).not.toContain(otc)
+  })
+
+  it('redacts the externalDeviceKey bearer segment for /api/remote-connections/[externalDeviceKey]', async () => {
+    const edk = 'super-secret-pairing-key-xyz'
+    const request = new Request(
+      `http://localhost:3000/api/remote-connections/${edk}`
+    )
+
+    handleApiError(new InternalServerError('db exploded'), undefined, request)
+    await flushSentryImport()
+
+    const [, captureContext] = captureException.mock.calls[0] as [
+      unknown,
+      { tags: Record<string, unknown> }
+    ]
+    // Placeholder matches the Next.js route segment name exactly.
+    expect(captureContext.tags.path).toBe(
+      '/api/remote-connections/[externalDeviceKey]'
+    )
+    expect(JSON.stringify(captureContext)).not.toContain(edk)
+  })
+
+  it('redacts the externalDeviceKey bearer segment for the /cards sub-route', async () => {
+    const edk = 'super-secret-pairing-key-xyz'
+    const request = new Request(
+      `http://localhost:3000/api/remote-connections/${edk}/cards`
+    )
+
+    handleApiError(new InternalServerError('db exploded'), undefined, request)
+    await flushSentryImport()
+
+    const [, captureContext] = captureException.mock.calls[0] as [
+      unknown,
+      { tags: Record<string, unknown> }
+    ]
+    expect(captureContext.tags.path).toBe(
+      '/api/remote-connections/[externalDeviceKey]/cards'
+    )
+    expect(JSON.stringify(captureContext)).not.toContain(edk)
+  })
+})
+
+describe('handleApiError ActivityLog pathname redaction', () => {
+  // Set Sentry DSN so the same code path executes; we assert on
+  // logActivity.fireAndForget below — the Sentry capture happens too, but
+  // is mocked separately by the `captureException` stub above.
+  const otc = 'a'.repeat(32)
+
+  it('persists the redacted route-pattern to the activity log for /api/cards/otc/[otc]', async () => {
+    const request = new Request(`http://localhost:3000/api/cards/otc/${otc}`)
+
+    handleApiError(new InternalServerError('db exploded'), undefined, request)
+    await flushSentryImport()
+
+    const fireAndForget = vi.mocked(logActivity.fireAndForget)
+    expect(fireAndForget).toHaveBeenCalledTimes(1)
+    const input = fireAndForget.mock.calls[0][0]
+    expect(input.metadata?.pathname).toBe('/api/cards/otc/[otc]')
+    expect(input.message).toContain('/api/cards/otc/[otc]')
+    expect(input.message).not.toContain(otc)
+    expect(JSON.stringify(input)).not.toContain(otc)
+  })
+
+  it('persists the redacted route-pattern to the activity log for /api/remote-connections/[externalDeviceKey]/cards', async () => {
+    const edk = 'super-secret-pairing-key-xyz'
+    const request = new Request(
+      `http://localhost:3000/api/remote-connections/${edk}/cards`
+    )
+
+    handleApiError(new InternalServerError('db exploded'), undefined, request)
+    await flushSentryImport()
+
+    const fireAndForget = vi.mocked(logActivity.fireAndForget)
+    expect(fireAndForget).toHaveBeenCalledTimes(1)
+    const input = fireAndForget.mock.calls[0][0]
+    expect(input.metadata?.pathname).toBe(
+      '/api/remote-connections/[externalDeviceKey]/cards'
+    )
+    expect(input.message).not.toContain(edk)
+    expect(JSON.stringify(input)).not.toContain(edk)
+  })
 })
 
 describe('toApiError sanitization', () => {
@@ -196,5 +317,41 @@ describe('toApiError sanitization', () => {
 
     expect(apiError).toBeInstanceOf(InternalServerError)
     expect(apiError.cause).toBe(cause)
+  })
+
+  it('maps TransactionTimeoutError to 503', async () => {
+    const error = new TransactionTimeoutError('Transaction timed out', {
+      elapsedMs: 130000,
+      timeoutMs: 120000
+    })
+
+    const response = handleApiError(error)
+
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body.error.message).toBe('Database operation timed out')
+    expect(body.error.details).toBeUndefined()
+  })
+
+  it('maps TransactionConnectionError to 503', async () => {
+    const error = new TransactionConnectionError('Connection refused', {
+      cause: new Error("Can't reach database server")
+    })
+
+    const response = handleApiError(error)
+
+    expect(response.status).toBe(503)
+    const body = await response.json()
+    expect(body.error.message).toBe('Database connection failed')
+    expect(body.error.details).toBeUndefined()
+  })
+
+  it('preserves transaction error cause for Sentry', () => {
+    const cause = new Error('Original Prisma error')
+    const timeoutError = new TransactionTimeoutError('Timeout', { cause })
+    const apiError = toApiError(timeoutError)
+
+    expect(apiError).toBeInstanceOf(ServiceUnavailableError)
+    expect((apiError as any).cause).toBe(timeoutError)
   })
 })

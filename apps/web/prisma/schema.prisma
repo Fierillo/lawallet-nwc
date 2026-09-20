@@ -1,16 +1,10 @@
 generator client {
-  provider      = "prisma-client-js"
-  output        = "../lib/generated/prisma"
-  // `rhel-openssl-3.0.x` is for AWS Lambda hosts (Netlify Functions): the
-  // build image is Ubuntu, so `native` alone produces an engine the runtime
-  // can't load. Vercel builds on Amazon Linux, where `native` already resolves
-  // to this target.
-  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum UserRole {
@@ -50,10 +44,13 @@ enum RemoteWalletStatus {
   ACTIVE
   DISABLED
   REVOKED
-  /// Terminal "archived" state for a disposable LNCurl wallet that ran out of
-  /// sats and was destroyed by the provider. The row is kept (with `diedAt`)
-  /// so the user can see its death stats; it can't be bound to anything and
-  /// can be permanently removed.
+  /// "Archived" state, reached two ways: a disposable LNCurl wallet that ran
+  /// out of sats and was destroyed by its provider (probe-confirmed), or ANY
+  /// wallet the listener saw go more than 48h without a single sign of life —
+  /// including one that never completed NWC warmup. The row is kept (with
+  /// `diedAt`) so the user can see its death stats; it can't be bound to
+  /// anything and can be permanently removed. A user can still PATCH it back
+  /// to ACTIVE if their wallet comes back.
   DEAD
 }
 
@@ -85,6 +82,20 @@ enum ActivationTokenStatus {
   CLAIMED
   REVOKED
   EXPIRED
+}
+
+/// Bonus granted (or reserved) during card activation. FREE_ADDRESS is once
+/// per card *and* once per user; SATS is once per card.
+enum CardActivationBonusKind {
+  FREE_ADDRESS
+  SATS
+}
+
+/// RESERVED is claimed but not yet delivered (address not created, or sats
+/// payment still outstanding). REDEEMED is terminal.
+enum CardActivationBonusStatus {
+  RESERVED
+  REDEEMED
 }
 
 enum ActivityCategory {
@@ -206,6 +217,33 @@ enum WebAuthnFlow {
   EXPORT
 }
 
+/// Lifecycle of a stored coupons-protocol voucher. Mirrors the status a
+/// coupon-manager service reports from `GET {claimUrl}?nonce=`
+/// (`minted | claimed | expired | voided`). CLAIMED and VOIDED are terminal:
+/// a burned coupon must never come back to life — see `lib/vouchers/transition.ts`.
+enum VoucherStatus {
+  MINTED
+  /// A transfer is in flight. Set by a conditional MINTED -> TRANSFER_PENDING
+  /// update *before* the outbound request, so an honest double-send cannot
+  /// start; settled to TRANSFERRED or back to MINTED by the outcome.
+  TRANSFER_PENDING
+  /// Swapped away to another holder. Terminal: the nonce on this row was
+  /// burned by the recipient's refresh and buys nothing. The row is kept as
+  /// the only record of where the coupon went.
+  TRANSFERRED
+  CLAIMED
+  EXPIRED
+  VOIDED
+}
+
+/// Who may deposit vouchers to a user's stash via `POST /api/vouchers`.
+/// Every deposit is NIP-98 authenticated regardless; this narrows *which*
+/// signers the recipient accepts.
+enum VoucherDepositPolicy {
+  ANYONE
+  ALLOWLIST
+}
+
 model User {
   id                                 String                             @id
   pubkey                             String                             @unique
@@ -217,8 +255,6 @@ model User {
   remoteWalletNotificationDeliveries RemoteWalletNotificationDelivery[]
   cards                              Card[]
   invoices                           Invoice[]
-  albySubAccount                     AlbySubAccount?
-  albyEnabled                        Boolean                            @default(false)
   role                               UserRole                           @default(USER)
   activityLogs                       ActivityLog[]
   /// The user's preferred Nostr relays (NIP-65-style), as a JSON-stringified
@@ -229,12 +265,37 @@ model User {
   relays                             String?
   /// When `relays` was last set (manual save) or refreshed from NIP-65. Drives
   /// the server-side relay-list cache TTL so nostr.json doesn't re-query relays
-  /// on every request.
+  /// on every request. Only bumped when a relay list is actually found (or the
+  /// user saves one) — NOT on a failed/empty fetch (see `lastRelayFetchAttemptAt`).
   relaysUpdatedAt                    DateTime?
+  /// When a relay fetch was last attempted, regardless of outcome (success,
+  /// confirmed-empty, or failure). Separate from `relaysUpdatedAt` so a fetch
+  /// that found nothing — whether because the user published no NIP-65 list
+  /// OR because every relay failed/timed out (the two are indistinguishable
+  /// here, since `nostr-tools` `querySync` resolves `[]` on failure rather than
+  /// rejecting) — does NOT claim freshness. Drives a short backoff so the
+  /// public `nostr.json` endpoint doesn't fan out to relays on every request
+  /// while still retrying a degraded answer far sooner than the 6h TTL.
+  lastRelayFetchAttemptAt            DateTime?
   passkeyCredentials                 PasskeyCredential[]
   managedNostrKey                    ManagedNostrKey?
   nostrIdentities                    NostrIdentity[]
   walletForwardReceipts              RemoteWalletForwardReceipt[]
+  vouchers                           Voucher[]
+  voucherTransfers                   VoucherTransfer[]
+  /// Who may deposit vouchers to this account. Deposits are always NIP-98
+  /// signed; ALLOWLIST additionally restricts *which* signers are accepted.
+  voucherDepositPolicy               VoucherDepositPolicy               @default(ANYONE)
+  /// Whether this account's lightning address advertises `allowVouchers` and
+  /// accepts LNURL voucher transfers. Off by default and opt-in: a transfer is
+  /// an *anonymous* write into someone's stash, and that surface must not
+  /// appear on every existing address the day the feature ships.
+  allowVouchers                      Boolean                            @default(false)
+  /// Hex pubkeys allowed to deposit while `voucherDepositPolicy` is ALLOWLIST.
+  /// Always stored hex — npub and NIP-05 input is resolved on save so the
+  /// deposit hot path is a plain array membership test.
+  voucherSenderAllowlist             String[]                           @default([])
+  cardActivationBonuses              CardActivationBonus[]
 
   @@index([role])
 }
@@ -271,7 +332,7 @@ model PasskeyCredential {
   /// Signature counter (uint32; BigInt to avoid overflow). Platform passkeys
   /// (iCloud/Google) legitimately always report 0.
   counter    BigInt    @default(0)
-  /// JSON string[] of AuthenticatorTransportFuture values.
+  /// JSON string[] of AuthenticatorTransport values.
   transports String?
   /// 'singleDevice' | 'multiDevice'
   deviceType String
@@ -395,17 +456,22 @@ model RemoteWallet {
   name                 String
   type                 RemoteWalletType
   config               Json
-  /// Set after an NWC config has been encrypted with NWC_VAULT_SECRET. The
-  /// envelope itself remains inside config.connectionString so other
-  /// driver-specific config fields stay queryable.
+  /// Set after an NWC config has been encrypted with NWC_VAULT_SECRET as
+  /// `lwrw1:` inside config.connectionString. Other driver-specific fields
+  /// stay queryable.
   nwcConfigEncryptedAt DateTime?
   status               RemoteWalletStatus @default(ACTIVE)
   isDefault            Boolean            @default(false)
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
-  /// When a disposable LNCurl wallet was detected dead and archived (status
-  /// DEAD). Null for every other wallet. Drives the "graveyard" death stats.
+  /// When the wallet was archived (status DEAD) — either a disposable LNCurl
+  /// wallet detected dead or any wallet idle past the 48h archive window. Null
+  /// for every live wallet. Drives the "graveyard" death stats.
   diedAt               DateTime?
+  /// Why it was archived, as reported by the listener: `unresponsive`
+  /// (probe-confirmed silence with relays up), `idle` (>48h with no sign of
+  /// life), `warmup_failed` (>48h and it never completed NWC warmup at all).
+  diedReason           String?
 
   lightningAddresses     LightningAddress[]
   cards                  Card[]
@@ -702,12 +768,13 @@ model Card {
   // in the wallet, but cannot produce payable LNURL-withdraw responses.
   disabledAt          DateTime?
 
-  design           CardDesign            @relation(fields: [designId], references: [id])
-  ntag424          Ntag424?              @relation(fields: [ntag424Cid], references: [cid])
-  user             User?                 @relation(fields: [userId], references: [id])
-  remoteWallet     RemoteWallet?         @relation(fields: [remoteWalletId], references: [id], onDelete: SetNull)
-  activationTokens CardActivationToken[]
-  paymentAttempts  CardPaymentAttempt[]
+  design             CardDesign              @relation(fields: [designId], references: [id])
+  ntag424            Ntag424?                @relation(fields: [ntag424Cid], references: [cid])
+  user               User?                   @relation(fields: [userId], references: [id])
+  remoteWallet       RemoteWallet?           @relation(fields: [remoteWalletId], references: [id], onDelete: SetNull)
+  activationTokens   CardActivationToken[]
+  paymentAttempts    CardPaymentAttempt[]
+  activationBonuses  CardActivationBonus[]
 
   @@index([userId])
   @@index([remoteWalletId])
@@ -735,6 +802,29 @@ model CardActivationToken {
   createdAt       DateTime              @default(now())
 
   @@index([cardId])
+  @@index([status])
+}
+
+/// Audit + uniqueness for first-activation bonuses. `@@unique([cardId, kind])`
+/// makes a card's free Lightning Address and sats credit one-shot even after
+/// rescue / re-issue. FREE_ADDRESS is also queried by `userId` so an account
+/// can only redeem that bonus once.
+model CardActivationBonus {
+  id             String                     @id @default(cuid())
+  cardId         String
+  card           Card                       @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind           CardActivationBonusKind
+  status         CardActivationBonusStatus  @default(RESERVED)
+  amountSats     Int?
+  /// RemoteWallet.id of the admin treasury that funded a SATS bonus.
+  sourceWalletId String?
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+
+  @@unique([cardId, kind])
+  @@index([userId, kind])
   @@index([status])
 }
 
@@ -768,16 +858,6 @@ model CardPaymentAttempt {
   @@unique([walletId, paymentHash])
   @@index([cardId, createdAt])
   @@index([status, updatedAt])
-}
-
-model AlbySubAccount {
-  appId       Int      @id
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id])
-  username    String? // alby sub account username@getalby.com
-  nwcUri      String
-  nostrPubkey String? // nostr pubkey for nip57
-  createdAt   DateTime @default(now())
 }
 
 model Settings {
@@ -821,6 +901,14 @@ model Invoice {
   zapReceiptLeaseOwner     String?
   zapReceiptLeaseExpiresAt DateTime?
   zapReceiptNextRetryAt    DateTime?
+  /// When this invoice may next be polled with `lookup_invoice`. Zap invoices
+  /// are settled by the listener's `payment_received` notification, which a
+  /// wallet is free not to implement — the sweep polls those to settlement
+  /// instead. Doubles as the claim marker: an `updateMany` guarded on
+  /// `<= now` is an atomic claim under Postgres row locking.
+  settlementNextPollAt     DateTime?
+  /// Poll count, used only to widen the sweep's backoff as an invoice ages.
+  settlementPollAttempts   Int            @default(0)
   expiresAt                DateTime
   paidAt                   DateTime?
   createdAt                DateTime       @default(now())
@@ -830,12 +918,15 @@ model Invoice {
   @@index([remoteWalletId])
   @@index([status])
   @@index([status, zapReceiptNextRetryAt])
+  @@index([status, settlementNextPollAt])
   @@index([purpose, status])
 }
 
 /// Singleton operator configuration for the deferred LUD-16 proxy. Secrets
-/// are AES-256-GCM envelopes encrypted with NWC_VAULT_SECRET; neither value
-/// is exposed by the generic Settings API or included in Settings backups.
+/// are the same `lwrw1:` AES-256-GCM envelopes used by RemoteWallet NWC
+/// URIs (`NWC_VAULT_SECRET`). Startup converts leftover `LWPX01` blobs, and
+/// replaces a `receiptNsecCiphertext` the secret cannot open so NIP-57 never
+/// stays down. Neither value is exposed by the Settings API or its backups.
 model ProxyServiceConfig {
   id                    String    @id @default("default")
   enabled               Boolean   @default(false)
@@ -850,6 +941,13 @@ model ProxyServiceConfig {
   lastProbeError        String?
   lastListenerSeenAt    DateTime?
   lastCronAt            DateTime?
+  /// Set when the listener reported the proxy's own NWC wallet dead (>48h with
+  /// no sign of life, or probe-confirmed silence). New proxy intake is disabled
+  /// with it — outstanding settlements still finish, since those read the
+  /// credential regardless of `enabled`. Clearing it re-enables the proxy.
+  archivedAt            DateTime?
+  /// `unresponsive` | `idle` | `warmup_failed` — the listener's reason.
+  archivedReason        String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 }
@@ -1042,4 +1140,112 @@ model PluginRecord {
 
   @@unique([pluginId, kind, key])
   @@index([pluginId, kind])
+}
+
+// A coupon held on a user's behalf, compatible with the lacrypta/coupons
+// protocol (https://github.com/lacrypta/coupons). External coupon-manager
+// services (CMS) mint coupons and deposit them here against a member's npub;
+// the instance stores and displays them, and the merchant's POS burns them.
+//
+// Custodial by construction: the nonce is a bearer credential sitting in this
+// table, and the CMS's own database — not this one — is the authority on
+// whether a coupon has been spent. A future protocol version should carry
+// vouchers as ecash (Cashu, NIP-60/61) so the bearer value is blinded and the
+// operator can't read it. See docs/services/VOUCHERS.md.
+model Voucher {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The coupon code: 22-char base64url nonce, and the *only* credential
+  /// needed to redeem. Unique per issuing service rather than globally —
+  /// two independent CMSs can legitimately mint the same 16 random bytes.
+  nonce          String
+  /// Coupon *definition* id (uuid) on the issuing service. Many vouchers
+  /// share one definition.
+  couponId       String?
+  name           String
+  description    String?
+  imageUrl       String?
+  /// Where to read more about the offer — the merchant's product or campaign
+  /// page. Rendered as a clickable link, so the scheme is constrained to
+  /// http(s) on the way in (`externalUrlSchema`): an `<a href>` executes
+  /// `javascript:` on click.
+  url            String?
+  /// Merchant that accepts this voucher (hex pubkey).
+  merchantPubkey String
+  /// Coupon-manager service that signed the voucher (hex pubkey). Together
+  /// with `nonce` this is the row's natural key.
+  servicePubkey  String
+  /// Service endpoints from the merchant's kind-30078 announcement.
+  /// `claimUrl` is what the status refresh polls; `mintUrl` is stored for
+  /// completeness so a later phase can re-mint or deep-link without a
+  /// second discovery round-trip.
+  claimUrl       String
+  mintUrl        String?
+  /// The protocol `Benefit` plus any extra conditions, verbatim. Opaque on
+  /// purpose: the benefit union grows upstream (percent, fixed, multibuy,
+  /// buyXgetY, freeItems, …) and a new type must not require a migration.
+  metadata       Json?
+  /// The CMS-signed kind-20402 event, stored verbatim as provenance so the
+  /// voucher stays independently verifiable long after deposit. Null when the
+  /// depositor posted plain fields instead of a signed event.
+  voucherEvent   Json?
+
+  status          VoucherStatus @default(MINTED)
+  expiresAt       DateTime?
+  claimedAt       DateTime?
+  /// Last time `claimUrl` was polled. Backs the refresh cooldown so the
+  /// button can't be used to hammer a third-party service.
+  statusCheckedAt DateTime?
+  /// NIP-98 pubkey that deposited this row — audit trail, and what an owner
+  /// needs in order to build a sender allowlist after the fact. Empty for a
+  /// row received by LNURL transfer, which carries no sender identity.
+  depositedBy     String
+  /// Lightning address this coupon was sent to, once TRANSFERRED. The only
+  /// record of where it went — the row is never deleted on send.
+  transferredTo   String?
+  /// The service's refresh endpoint, when it advertised one. Absent means the
+  /// CMS predates refresh and the coupon cannot be transferred.
+  refreshUrl      String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([servicePubkey, nonce])
+  @@index([userId, status])
+  @@index([userId, createdAt])
+}
+
+/// Write-ahead record of an inbound voucher transfer, on the RECEIVING side.
+///
+/// Exists because the CMS refresh is the one irreversible step in a transfer:
+/// it burns the sender's nonce and mints a replacement. If we called it and
+/// then failed to persist the replacement, the coupon would be destroyed —
+/// burned at the service, held by nobody. So the intent is written first: a
+/// failed insert means we never call refresh (a database outage burns
+/// nothing), and a row stuck without `newNonce` is a completed burn we can
+/// replay the refresh for, since refresh is idempotent on `Idempotency-Key`.
+///
+/// The unique key also makes a retried transfer free: the same old nonce from
+/// the same service replays the stored answer without touching the CMS.
+model VoucherTransfer {
+  id             String    @id @default(cuid())
+  /// Account that received the transfer.
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Coupon-manager service that signed the incoming voucher (hex pubkey).
+  servicePubkey  String
+  /// The nonce as it arrived — burned by our refresh, kept as the idempotency key.
+  oldNonce       String
+  /// The replacement. Null until the refresh has returned and been stored.
+  newNonce       String?
+  /// Sent to the CMS so a retried refresh replays instead of re-minting.
+  idempotencyKey String
+  /// The voucher row created once the swap completed.
+  voucherId      String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  @@unique([servicePubkey, oldNonce])
+  @@index([userId, createdAt])
 }

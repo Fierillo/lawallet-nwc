@@ -26,17 +26,59 @@ export async function register() {
       tracesSampler: ({ name }) =>
         name.includes('/api/health') || name.includes('/api/status') ? 0 : 0.2,
       sendDefaultPii: false,
-      beforeSend: event => scrubEvent(event)
+      beforeSend: event => scrubEvent(event),
+      beforeSendTransaction: event => scrubEvent(event)
     })
   }
 
-  const { migrateRemoteWalletNwcConfigs } =
-    await import('@/lib/wallet/migrate-remote-wallet-vault')
-  await migrateRemoteWalletNwcConfigs()
+  try {
+    const { migrateRemoteWalletNwcConfigs } =
+      await import('@/lib/wallet/migrate-remote-wallet-vault')
+    await migrateRemoteWalletNwcConfigs()
+    const { migrateProxyNwcVault } =
+      await import('@/lib/proxy/migrate-nwc-vault')
+    await migrateProxyNwcVault()
+  } catch (error) {
+    const { createLogger } = await import('@/lib/logger')
+    const log = createLogger({ module: 'instrumentation' })
+    log.error({ err: error }, 'instrumentation.migration_failed')
 
-  const { initializeProxyReceiptSigner } =
-    await import('@/lib/proxy/initialize-receipt-signer')
-  await initializeProxyReceiptSigner()
+    if (process.env.SENTRY_DSN) {
+      try {
+        const Sentry = await import('@sentry/nextjs')
+        Sentry.captureException(error, {
+          tags: { phase: 'instrumentation', migration: 'nwc-vault' }
+        })
+      } catch {
+        // Sentry failure must not block startup
+      }
+    }
+
+    throw error
+  }
+
+  try {
+    const { ensureZapReceiptSigner } =
+      await import('@/lib/proxy/initialize-receipt-signer')
+    await ensureZapReceiptSigner()
+  } catch (error) {
+    const { createLogger } = await import('@/lib/logger')
+    const log = createLogger({ module: 'instrumentation' })
+    log.error({ err: error }, 'instrumentation.proxy_signer_init_failed')
+
+    if (process.env.SENTRY_DSN) {
+      try {
+        const Sentry = await import('@sentry/nextjs')
+        Sentry.captureException(error, {
+          tags: { phase: 'instrumentation', init: 'proxy-receipt-signer' }
+        })
+      } catch {
+        // Sentry failure must not block startup
+      }
+    }
+
+    throw error
+  }
 }
 
 export const onRequestError: Instrumentation.onRequestError = async (

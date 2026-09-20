@@ -40,6 +40,7 @@ describe('getOpenApiDocument', () => {
       '/api/cards/{id}',
       '/api/card-designs',
       '/api/lightning-addresses',
+      '/api/lightning-addresses/verify-protocols',
       '/api/lud16/{username}',
       '/api/lud16/{username}/cb',
       '/api/lud16/{username}/verify/{paymentHash}',
@@ -82,6 +83,25 @@ describe('getOpenApiDocument', () => {
 
   it('registers the standard error envelope component', () => {
     expect(doc.components?.schemas?.ErrorEnvelope).toBeDefined()
+  })
+
+  it('emits JSON Schema patterns without JS regex flags', () => {
+    const patterns: string[] = []
+    const walk = (node: unknown) => {
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item)
+        return
+      }
+      if (!node || typeof node !== 'object') return
+      const obj = node as Record<string, unknown>
+      if (typeof obj.pattern === 'string') patterns.push(obj.pattern)
+      for (const value of Object.values(obj)) walk(value)
+    }
+    walk(doc)
+    expect(patterns.length).toBeGreaterThan(0)
+    for (const pattern of patterns) {
+      expect(pattern).not.toMatch(/\/[gimsuy]+$/)
+    }
   })
 
   it('marks public routes with empty security', () => {

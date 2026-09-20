@@ -110,11 +110,10 @@ See [MONTH-6.md](./roadmap/MONTH-6) and the [Month 6 report](./reports/MONTH-6).
   opened (`apps/web/proxy.ts`) with `/api/jwt` deliberately excluded, `/api/events`
   learned to accept a NIP-98-signed query token, and operators gained
   `POST /api/lightning-addresses` to issue addresses on a user's behalf. Two
-  reference apps: [`examples/onboarding`](../../examples/onboarding)
-  (self-service claim incl. the paid path) and
-  [`examples/admin-provisioning`](../../examples/admin-provisioning)
-  (operator-issued, proof-of-npub). Docs at `/docs/sdk`. **Remaining:** flip
-  `private: false` and publish to npm.
+  reference apps, since moved to [lawalletio/sdk](https://github.com/lawalletio/sdk):
+  `example-onboarding` (self-service claim incl. the paid path) and
+  `example-admin-provisioning` (operator-issued, proof-of-npub). Docs at
+  `/docs/sdk`. **Remaining:** flip `private: false` and publish to npm.
 - **WordPress plugin** (`lawallet-wordpress`), **Resend** email adapter, **Nostr scheduler**, threat model + security-audit prep, Vercel / Netlify deploy configs
 
 ---
@@ -183,7 +182,7 @@ Snapshot of what has shipped so far. This grows each month as deliverables land.
 | Auth Backend      | NIP-98 → JWT exchange, dual-method (`Authorization: Nostr` or `Bearer`), RBAC with 4 roles, maintenance mode                                                                                                                                                  |
 | Testing           | 108 unit/integration test files (Vitest + MSW + happy-dom) + 8 Playwright E2E specs, CI-enforced coverage thresholds                                                                                                                                          |
 | Database          | 15 Prisma models incl. `User`, `LightningAddress`, `RemoteWallet`, `Card`, `CardActivationToken`, `CardPaymentAttempt`, `CardDesign`, `Ntag424`, `ActivityLog`, `PluginRecord`, `NostrProfileCache`, `Settings`, `Invoice`                                    |
-| Lightning Address | LUD-12 (comments) + LUD-21 (verify) live; LUD-16 alias / NWC modes; NIP-05 (`.well-known/nostr.json`); LUD-22 webhook _transport_ via listener — full LUD-16/22 + NIP-57 closeout in M7                                                                       |
+| Lightning Address | LUD-12 (comments) + LUD-21 (verify) live; LUD-16 alias / NWC modes; NIP-05 (`.well-known/nostr.json`); LUD-22 webhook _transport_ via listener; NIP-57 zap receipts on every NWC wallet (notification fast path + `lookup_invoice` settlement sweep) — full LUD-16/22 + NIP-57 closeout in M7                                                                       |
 | NFC Cards         | Full NTAG424 encryption, scan, write, OTC activation, BoltCard QR pairing, SIMPLE/ONE_TIME activation tokens                                                                                                                                                  |
 | Backup & Restore  | ADMIN zip export/import of 14 models with optional AES-256-GCM encryption (merge / replace modes)                                                                                                                                                             |
 | Deploy            | Multi-arch Docker Hub images, Umbrel app-store auto-update, published Start9 `.s9pk`, installer CLI                                                                                                                                                           |
@@ -205,7 +204,7 @@ Snapshot of what has shipped so far. This grows each month as deliverables land.
 | Address redirect           | —        | 5     | ✅ Completed                                           |
 | Base Lightning address     | LUD-16   | 4     | ✅ Completed (mode-aware resolver)                     |
 | Webhooks                   | LUD-22   | 6 → 7 | 🟡 Transport shipped via listener; spec closeout in M7 |
-| Zaps                       | NIP-57   | 7     | ⏳ Planned                                             |
+| Zaps                       | NIP-57   | 6 → 7 | 🟡 Receipts ship for every NWC wallet; spec closeout in M7 |
 | Courtesy NWC (Proxy Lite)  | —        | 7     | ⏳ Planned                                             |
 
 ---

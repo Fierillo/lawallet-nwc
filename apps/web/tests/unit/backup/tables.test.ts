@@ -21,8 +21,7 @@ describe('backup tables', () => {
         'remoteWallets',
         'lightningAddresses',
         'cards',
-        'cardActivationTokens',
-        'albySubAccounts'
+        'cardActivationTokens'
       ])
       // Order matches the canonical order filtered to the wanted set.
       const orderIndex = (t: (typeof resolved)[number]) =>
@@ -47,6 +46,40 @@ describe('backup tables', () => {
       expect(resolveTables([])).toEqual([])
       // Unknown category (cast) is ignored via the `?? []` guard.
       expect(resolveTables(['nope' as never])).toEqual([])
+    })
+  })
+
+  describe('partial-unique importsEvenOnSkip declarations', () => {
+    it('declares importsEvenOnSkip=true for the flag-based primary address partial-unique', () => {
+      const pu = TABLE_DESCRIPTORS.lightningAddresses.partialUniques[0]
+      expect(pu.flag).toBe('isPrimary')
+      expect(pu.importsEvenOnSkip).toBe(true)
+    })
+
+    it('declares importsEvenOnSkip=true for the flag-based default wallet partial-unique', () => {
+      const pu = TABLE_DESCRIPTORS.remoteWallets.partialUniques[0]
+      expect(pu.flag).toBe('isDefault')
+      expect(pu.importsEvenOnSkip).toBe(true)
+    })
+
+    it('leaves importsEvenOnSkip unset for the where-flavor pending activation token', () => {
+      const pu = TABLE_DESCRIPTORS.cardActivationTokens.partialUniques[0]
+      expect(pu.flag).toBeUndefined()
+      expect(pu.where).toEqual({ field: 'status', equals: 'PENDING' })
+      expect(pu.importsEvenOnSkip).toBeUndefined()
+    })
+
+    it('every flag-based partial-unique declares importsEvenOnSkip=true', () => {
+      // Locks the invariant: flag-based PUs import on skip (the row is new;
+      // only the flag clashes), so they must declare it for the tally to match
+      // runMerge. A future flag-based PU added without this flag would surface
+      // here rather than silently breaking the wizard preview.
+      for (const table of BACKUP_TABLE_ORDER) {
+        const desc = TABLE_DESCRIPTORS[table]
+        for (const pu of desc.partialUniques) {
+          if (pu.flag) expect(pu.importsEvenOnSkip).toBe(true)
+        }
+      }
     })
   })
 
@@ -107,7 +140,6 @@ describe('backup row-schemas', () => {
     id: 'user-1',
     pubkey: 'a'.repeat(64),
     createdAt: '2026-07-06T12:00:00.000Z',
-    albyEnabled: false,
     role: 'ADMIN',
     relays: null,
     relaysUpdatedAt: null
@@ -134,6 +166,17 @@ describe('backup row-schemas', () => {
     expect(
       ROW_SCHEMAS.users.safeParse({ ...validUser, role: 'SUPERADMIN' }).success
     ).toBe(false)
+  })
+
+  it('strips leftover albyEnabled from older user rows', () => {
+    const result = ROW_SCHEMAS.users.safeParse({
+      ...validUser,
+      albyEnabled: true
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data).not.toHaveProperty('albyEnabled')
+    }
   })
 
   describe('toPrismaData', () => {

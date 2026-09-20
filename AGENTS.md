@@ -10,7 +10,7 @@ LaWallet NWC is an open-source Lightning Address platform with Nostr Wallet Conn
 
 ## Monorepo Structure
 
-pnpm workspaces + Turborepo. Node v22.14.0 (see `.nvmrc`).
+pnpm workspaces + Turborepo. Node v24.21.0 (see `.nvmrc`).
 
 ```
 apps/
@@ -37,6 +37,13 @@ pnpm typecheck                  # Type check all packages
 pnpm test                       # Test all packages
 pnpm format                     # Prettier format all files
 ```
+
+**`pnpm build` does not type check.** `apps/web` sets
+`typescript.ignoreBuildErrors` so `next build` doesn't re-run the compiler over
+a program `pnpm typecheck` already covers. `pnpm typecheck` runs
+`next typegen && tsc --noEmit`, so it checks app code, tests, e2e, _and_ the
+generated `.next/types` route validator. Type errors surface there, not in the
+build.
 
 ### Filtered (single app/package)
 
@@ -98,7 +105,7 @@ ValidationError(400), AuthenticationError(401), AuthorizationError(403), NotFoun
 
 ### Database
 
-PostgreSQL via Prisma. Schema at `apps/web/prisma/schema.prisma`. 8 models: User, Card, CardDesign, Ntag424, LightningAddress, AlbySubAccount, Settings, Invoice. Generated client at `apps/web/lib/generated/prisma`.
+PostgreSQL via Prisma. Schema at `apps/web/prisma/schema.prisma`. Models include User, Card, CardDesign, Ntag424, LightningAddress, Settings, Invoice, RemoteWallet. Generated client at `apps/web/lib/generated/prisma`. Prisma 7 uses the `@prisma/adapter-pg` driver adapter (connection URL lives in `prisma.config.ts`, not the schema).
 
 ### Frontend
 
@@ -122,7 +129,7 @@ NIP-47 (NWC), NIP-05 (Nostr ID), NIP-07/46 (Nostr signing), NIP-57 (Zaps), NIP-9
 
 ## Testing (apps/web/)
 
-Vitest 3.2 + MSW + happy-dom. Config at `apps/web/vitest.config.ts`.
+Vitest 5 + MSW + happy-dom. Config at `apps/web/vitest.config.ts`.
 
 - **Unit tests**: 16 files in `tests/unit/lib/` — auth, config, env, errors, jwt, logger, maintenance, nip98, nostr, permissions, rate-limit, unified-auth, utils, validation, public-URL
 - **Integration tests**: 23 files in `tests/integration/api/` — all API routes (cards, card-designs, users, addresses, settings, invoices, remote-connections, lud16, lud21-verify, jwt, admin-assign) with MSW
@@ -140,7 +147,7 @@ Vitest 3.2 + MSW + happy-dom. Config at `apps/web/vitest.config.ts`.
 
 ### Coverage Thresholds
 
-statements: 60%, branches: 75%, functions: 70%, lines: 60%
+statements: 60%, branches: 70%, functions: 70%, lines: 60%
 
 ## Code Style
 
@@ -148,7 +155,7 @@ Prettier: no semicolons, single quotes, no trailing commas, arrow parens: avoid.
 
 ## Environment Variables (apps/web/.env)
 
-Required: `DATABASE_URL`, `JWT_SECRET` (32+ chars). See `apps/web/.env.example` for all options including `ALBY_API_URL`, `ALBY_BEARER_TOKEN`, `LOG_LEVEL`, `MAINTENANCE_MODE`.
+Required: `DATABASE_URL`, `JWT_SECRET` (32+ chars). See `apps/web/.env.example` for all options including `LOG_LEVEL`, `MAINTENANCE_MODE`.
 
 ## Deployment
 

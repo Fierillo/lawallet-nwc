@@ -25,7 +25,6 @@ export interface AppConfig {
   // Nostr key vault — at-rest encryption of custodied keys (passkey accounts)
   keyVault: {
     secret: string | undefined
-    previousSecrets: string[]
     enabled: boolean
   }
 
@@ -44,14 +43,6 @@ export interface AppConfig {
     /** Dedicated web-to-listener bearer secret when configured. */
     requestSecret: string | undefined
     requestTimeoutMs: number
-  }
-
-  // Alby Integration
-  alby: {
-    apiUrl: string | undefined
-    bearerToken: string | undefined
-    autoGenerateSubAccounts: boolean
-    enabled: boolean
   }
 
   // Server
@@ -141,10 +132,6 @@ export function getConfig(strict: boolean = true): AppConfig {
 
     keyVault: {
       secret: env.KEY_VAULT_SECRET,
-      previousSecrets: (env.KEY_VAULT_SECRET_PREVIOUS ?? '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean),
       enabled: !!env.KEY_VAULT_SECRET
     },
 
@@ -158,17 +145,6 @@ export function getConfig(strict: boolean = true): AppConfig {
       secret: env.LISTENER_AUTH_SECRET,
       requestSecret: env.LISTENER_REQUEST_AUTH_SECRET,
       requestTimeoutMs: env.LISTENER_REQUEST_TIMEOUT_MS
-    },
-
-    alby: {
-      apiUrl: env.ALBY_API_URL,
-      bearerToken: env.ALBY_BEARER_TOKEN,
-      autoGenerateSubAccounts: env.AUTO_GENERATE_ALBY_SUBACCOUNTS,
-      enabled: !!(
-        env.ALBY_API_URL &&
-        env.ALBY_BEARER_TOKEN &&
-        env.AUTO_GENERATE_ALBY_SUBACCOUNTS
-      )
     },
 
     server: {

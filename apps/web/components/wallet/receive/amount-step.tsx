@@ -1,17 +1,16 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import {
-  AmountKeypad,
-  parseKeypadValue
-} from '@/components/wallet/shared/amount-keypad'
+import { AmountKeypad } from '@/components/wallet/shared/amount-keypad'
 import { AmountDisplay } from '@/components/wallet/shared/amount-display'
+import { CurrencyToggle } from '@/components/wallet/shared/currency-toggle'
+import { useAmountCurrencyInput } from '@/components/wallet/shared/use-amount-currency-input'
 import { useApi, invalidateApiPath } from '@/lib/client/hooks/use-api'
 import { useSettings } from '@/lib/client/hooks/use-settings'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -34,23 +33,31 @@ export function ReceiveAmountStep() {
   const { data: settings } = useSettings()
   const effectiveNwc = resolveUserNwc(me)
   const autoCreate = settings?.lncurl_auto_create === 'true'
+  const {
+    value,
+    onAmountChange,
+    currencyCode,
+    onCurrencyChange,
+    canonicalAmount,
+    displayUnit,
+    activeCurrencies,
+    integerOnly,
+    fixedDecimalDigits,
+    maxDecimalDigits
+  } = useAmountCurrencyInput(flow.amountSats)
 
-  const [value, setValue] = useState<string>(
-    flow.amountSats ? String(flow.amountSats) : '0'
-  )
   const [description, setDescription] = useState(flow.description)
   const [loading, setLoading] = useState(false)
+  const noteRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     trackEvent(AnalyticsEvent.WALLET_RECEIVE_STARTED)
   }, [])
 
-  const amount = parseKeypadValue(value)
-
   async function create() {
-    if (amount === null) return
+    if (canonicalAmount === null) return
     setLoading(true)
-    receiveActions.setAmount(amount)
+    receiveActions.setAmount(canonicalAmount)
     receiveActions.setDescription(description)
     try {
       // Auto-create on receive: no wallet yet but the operator auto-creates
@@ -68,7 +75,7 @@ export function ReceiveAmountStep() {
         toast.error('No wallet connected')
         return
       }
-      const invoice = await makeInvoice(nwc, amount, description)
+      const invoice = await makeInvoice(nwc, canonicalAmount, description)
       trackEvent(AnalyticsEvent.WALLET_RECEIVE_INVOICE_GENERATED)
       receiveActions.setInvoice(invoice)
       router.push('/wallet/receive/invoice')
@@ -82,18 +89,38 @@ export function ReceiveAmountStep() {
   }
 
   return (
-    <div className="flex flex-1 flex-col px-4 pb-6">
-      <AmountDisplay value={value} />
+    <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-5">
+      <div className="flex min-h-0 flex-1 flex-col justify-between gap-5">
+        <div className="flex flex-col items-center gap-3">
+          <AmountDisplay
+            value={value}
+            unit={displayUnit}
+            className="py-1 pt-2"
+          />
+          <CurrencyToggle
+            currencies={activeCurrencies}
+            value={currencyCode}
+            onChange={onCurrencyChange}
+          />
+        </div>
 
-      <AmountKeypad
-        value={value}
-        onChange={setValue}
-        integerOnly
-        disabled={loading}
-      />
+        <AmountKeypad
+          value={value}
+          onChange={onAmountChange}
+          integerOnly={integerOnly}
+          fixedDecimalDigits={fixedDecimalDigits}
+          maxDecimalDigits={maxDecimalDigits}
+          disabled={loading}
+          noteRef={noteRef}
+          onSubmit={create}
+          className="min-h-0 flex-1 grid-rows-4 gap-3"
+          buttonClassName="h-full min-h-[58px] rounded-2xl bg-card/90 text-3xl"
+        />
+      </div>
 
-      <div className="pt-6 space-y-3">
+      <div className="flex flex-col gap-3 pt-1">
         <Input
+          ref={noteRef}
           placeholder="Add a note (optional)"
           value={description}
           onChange={e => setDescription(e.target.value)}
@@ -104,7 +131,9 @@ export function ReceiveAmountStep() {
           type="button"
           onClick={create}
           disabled={
-            amount === null || loading || (!effectiveNwc && !autoCreate)
+            canonicalAmount === null ||
+            loading ||
+            (!effectiveNwc && !autoCreate)
           }
           className="h-12 w-full"
         >

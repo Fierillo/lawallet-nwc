@@ -32,9 +32,9 @@ function createPrismaMock(): PrismaClient {
     remoteConnection: createModelMock(),
     remoteWallet: createModelMock(),
     invoice: createModelMock(),
-    albySubAccount: createModelMock(),
     nWCConnection: createModelMock(),
     cardActivationToken: createModelMock(),
+    cardActivationBonus: createModelMock(),
     cardPaymentAttempt: createModelMock(),
     pluginRecord: createModelMock(),
     nostrProfileCache: createModelMock(),
@@ -58,6 +58,8 @@ function createPrismaMock(): PrismaClient {
     remoteWalletNotification: createModelMock(),
     remoteWalletNotificationDelivery: createModelMock(),
     remoteWalletNotificationAttempt: createModelMock(),
+    voucher: createModelMock(),
+    voucherTransfer: createModelMock(),
     $transaction: vi.fn(fn => {
       if (typeof fn === 'function') {
         return fn(prismaMock)
@@ -92,9 +94,9 @@ export function resetPrismaMock() {
     'remoteConnection',
     'remoteWallet',
     'invoice',
-    'albySubAccount',
     'nWCConnection',
     'cardActivationToken',
+    'cardActivationBonus',
     'cardPaymentAttempt',
     'pluginRecord',
     'nostrProfileCache',

@@ -11,20 +11,56 @@ import {
 } from './errors'
 import { getCurrentReqId, withRequestLogging } from '@/lib/logger'
 import { logger } from '@/lib/logger'
+import { redactPathBearerTokens } from '@/lib/observability/pii'
 import { checkMaintenance } from '@/lib/middleware/maintenance'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
-import type { ActivityCategory, ActivityLevel } from '@/lib/generated/prisma'
-import { Prisma } from '@/lib/generated/prisma'
+import {
+  Prisma,
+  type ActivityCategory,
+  type ActivityLevel
+} from '@/lib/generated/prisma'
+import {
+  TransactionTimeoutError,
+  TransactionConnectionError
+} from '@/lib/prisma-transaction'
+
+function isPrismaKnownRequestError(
+  error: unknown
+): error is Error & { code: string } {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+}
+
+function isPrismaClientError(error: unknown): error is Error {
+  return (
+    error instanceof Prisma.PrismaClientValidationError ||
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientInitializationError ||
+    error instanceof Prisma.PrismaClientRustPanicError
+  )
+}
 
 export const toApiError = (error: unknown): ApiError => {
   if (error instanceof ApiError) {
     return error
   }
 
+  // Handle custom transaction errors before generic Prisma errors.
+  // Don't expose timing details (elapsedMs/timeoutMs) in the response.
+  if (error instanceof TransactionTimeoutError) {
+    const e = new ServiceUnavailableError('Database operation timed out')
+    ;(e as any).cause = error
+    return e
+  }
+  if (error instanceof TransactionConnectionError) {
+    const e = new ServiceUnavailableError('Database connection failed')
+    ;(e as any).cause = error
+    return e
+  }
+
   // Prisma error messages embed schema and query details — never serialize
   // them to clients. Map the well-known codes to proper status codes and keep
   // the original error as `cause` for logs/Sentry.
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+  if (isPrismaKnownRequestError(error)) {
     if (error.code === 'P2002') {
       return new ConflictError('A record with this value already exists')
     }
@@ -33,12 +69,7 @@ export const toApiError = (error: unknown): ApiError => {
     }
     return new InternalServerError('Database error', { cause: error })
   }
-  if (
-    error instanceof Prisma.PrismaClientValidationError ||
-    error instanceof Prisma.PrismaClientUnknownRequestError ||
-    error instanceof Prisma.PrismaClientInitializationError ||
-    error instanceof Prisma.PrismaClientRustPanicError
-  ) {
+  if (isPrismaClientError(error)) {
     return new InternalServerError('Database error', { cause: error })
   }
 
@@ -138,6 +169,15 @@ export const handleApiError = (
     'api.error'
   )
 
+  // Compute the pathname once, with bearer-token segments masked out. Used
+  // for both the Sentry `tags.path` capture and the ActivityLog `pathname`
+  // field so neither sink persists bearer tokens to a third party or to the
+  // operator's own audit table. See `redactPathBearerTokens` for which
+  // routes are masked.
+  const redactedPath =
+    request instanceof Request
+      ? redactPathBearerTokens(safePathname(request.url))
+      : undefined
   // Forward 5xx to Sentry when configured. withErrorHandling swallows the
   // throw (Next's onRequestError never fires for these routes), so this is
   // THE server capture seam. Fire-and-forget: a Sentry failure must never
@@ -155,10 +195,11 @@ export const handleApiError = (
             tags: {
               reqId: getCurrentReqId(),
               code: apiError.code,
-              path:
-                request instanceof Request
-                  ? safePathname(request.url)
-                  : undefined
+              // Use the redacted route-pattern, never the raw pathname —
+              // dynamic segments on /api/cards/otc/[otc] and
+              // /api/remote-connections/[externalDeviceKey] are bearer tokens
+              // and would otherwise leak to Sentry via tags.path.
+              path: redactedPath
             }
           })
         )
@@ -176,29 +217,28 @@ export const handleApiError = (
   if (shouldLog) {
     const isServerError = statusCode >= 500
     const isDbError =
-      error instanceof Prisma.PrismaClientKnownRequestError ||
-      error instanceof Prisma.PrismaClientValidationError ||
-      error instanceof Prisma.PrismaClientUnknownRequestError ||
-      error instanceof Prisma.PrismaClientRustPanicError
+      isPrismaKnownRequestError(error) ||
+      isPrismaClientError(error) ||
+      error instanceof TransactionTimeoutError ||
+      error instanceof TransactionConnectionError
     const category: ActivityCategory = isDbError
       ? 'SERVER'
-      : inferCategoryFromPath(
-          request instanceof Request ? safePathname(request.url) : undefined
-        )
+      : inferCategoryFromPath(redactedPath)
     const level: ActivityLevel = isServerError ? 'ERROR' : 'WARN'
     const method = request instanceof Request ? request.method : undefined
-    const pathname =
-      request instanceof Request ? safePathname(request.url) : undefined
+    // Persist the redacted route-pattern (not the raw pathname) for the same
+    // reason as `tags.path` above — bearer tokens must not reach the audit
+    // log either. Both sinks get the same redacted value here.
     logActivity.fireAndForget({
       category,
       event: eventCodeForError(category, isServerError, isDbError),
       level,
-      message: `${method ?? 'REQUEST'} ${pathname ?? '?'} failed: ${apiError.message}`,
+      message: `${method ?? 'REQUEST'} ${redactedPath ?? '?'} failed: ${apiError.message}`,
       metadata: {
         statusCode,
         code: apiError.code,
         method,
-        pathname
+        pathname: redactedPath
       }
     })
   }

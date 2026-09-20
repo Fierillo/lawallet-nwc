@@ -3,7 +3,13 @@ import pino from 'pino'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type pg from 'pg'
 import type { ListenerEnv } from '../src/env'
-import { signWebhook, WebhookDispatcher } from '../src/webhook'
+import {
+  inlineDispatchMaxDurationMs,
+  signWebhook,
+  sweepOlderThanMs,
+  WEBHOOK_POST_TIMEOUT_MS,
+  WebhookDispatcher
+} from '../src/webhook'
 import type { StoredEvent } from '../src/store'
 
 const SECRET = 'listener-shared-secret-0123456789abcdef'
@@ -78,7 +84,196 @@ const freshMetrics = () => ({
   catchupErrors: 0,
   deadProbesRun: 0,
   deadProbesTimedOut: 0,
-  walletsDeclaredDead: 0
+  walletsDeclaredDead: 0,
+  walletsArchiveRequested: 0
+})
+
+describe('WebhookDispatcher.sendWalletDead', () => {
+  const makeDispatcher = () =>
+    new WebhookDispatcher({
+      env,
+      log: pino({ level: 'silent' }),
+      pool: { query: vi.fn() } as unknown as pg.Pool,
+      metrics: freshMetrics()
+    })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('carries the archive reason and pool state for a warmup-stuck wallet', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      makeDispatcher().sendWalletDead('wallet-1', 48 * 3600, {
+        reason: 'warmup_failed',
+        relaysConnected: false,
+        lastState: 'error',
+        everReady: false
+      })
+    ).resolves.toEqual({ delivered: true, applied: true, outcome: null })
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body).toMatchObject({
+      type: 'wallet_dead',
+      walletId: 'wallet-1',
+      unresponsiveSeconds: 48 * 3600,
+      reason: 'warmup_failed',
+      // A wallet that never warmed up has no relay connection to report.
+      relaysConnected: false,
+      lastState: 'error',
+      everReady: false
+    })
+  })
+
+  it('defaults to the probe-confirmed shape (relays up) when told nothing', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await makeDispatcher().sendWalletDead('wallet-1', 4 * 3600)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body).toMatchObject({
+      reason: 'unresponsive',
+      relaysConnected: true
+    })
+  })
+
+  it('uses a reason-scoped event key so an idle report is not a dedup hit', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const dispatcher = makeDispatcher()
+    await dispatcher.sendWalletDead('wallet-1', 4 * 3600, {
+      reason: 'unresponsive',
+      relaysConnected: true
+    })
+    await dispatcher.sendWalletDead('wallet-1', 48 * 3600, {
+      reason: 'idle',
+      relaysConnected: true
+    })
+
+    const keys = fetchMock.mock.calls.map(
+      ([, init]) => JSON.parse(init.body as string).eventKey
+    )
+    expect(keys[0]).not.toBe(keys[1])
+  })
+
+  // A 2xx only means web accepted the report. Web re-checks the product rules
+  // (48h window, provider, its own record of recent payments) and refuses ones
+  // that don't meet them — the prober must not read that as an archive.
+  it.each([
+    ['archived', true],
+    ['noop', true],
+    ['ignored', false],
+    ['unknown_wallet', false]
+  ] as const)('maps outcome %s to applied=%s', async (outcome, applied) => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ received: true, walletDeadOutcome: outcome }),
+            { status: 200 }
+          )
+        )
+    )
+
+    await expect(
+      makeDispatcher().sendWalletDead('wallet-1', 72 * 3600, {
+        reason: 'idle',
+        relaysConnected: true
+      })
+    ).resolves.toEqual({ delivered: true, applied, outcome })
+  })
+
+  it('never reads an undelivered report as applied', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('nope', { status: 500 }))
+    )
+
+    await expect(
+      makeDispatcher().sendWalletDead('wallet-1', 72 * 3600, {
+        reason: 'idle',
+        relaysConnected: true
+      })
+    ).resolves.toEqual({ delivered: false, applied: false, outcome: null })
+  })
+
+  it('falls back to applied when the ack body is unreadable', async () => {
+    // An HTML error page from a proxy, or a body already consumed: the webhook
+    // still landed, so treat it like the pre-contract 2xx it looks like rather
+    // than re-reporting forever.
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(new Response('<html>ok</html>', { status: 200 }))
+    )
+
+    await expect(
+      makeDispatcher().sendWalletDead('wallet-1', 72 * 3600, {
+        reason: 'idle',
+        relaysConnected: true
+      })
+    ).resolves.toEqual({ delivered: true, applied: true, outcome: null })
+  })
+
+  it('ignores an outcome value it does not understand', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ walletDeadOutcome: 'quarantined' }), {
+          status: 200
+        })
+      )
+    )
+
+    await expect(
+      makeDispatcher().sendWalletDead('wallet-1', 72 * 3600, {
+        reason: 'idle',
+        relaysConnected: true
+      })
+    ).resolves.toEqual({ delivered: true, applied: true, outcome: null })
+  })
+
+  it('does not read the ack body for payment webhooks', async () => {
+    // `dispatch()` only needs the status; consuming the body would be wasted
+    // work on the hot payment path.
+    const json = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await makeDispatcher().sendListenerError('wallet-1', 'code', 'message')
+    expect(json).not.toHaveBeenCalled()
+  })
+})
+
+describe('sweepOlderThanMs', () => {
+  it('exceeds the worst-case inline retry loop, including the old 2-minute gate', () => {
+    // Default WEBHOOK_MAX_ATTEMPTS=5: 5×10s timeouts + (1+5+25+60)s sleeps.
+    expect(WEBHOOK_POST_TIMEOUT_MS).toBe(10_000)
+    expect(inlineDispatchMaxDurationMs(5)).toBe(141_000)
+    expect(sweepOlderThanMs(5)).toBeGreaterThan(inlineDispatchMaxDurationMs(5))
+    expect(sweepOlderThanMs(5)).toBeGreaterThan(2 * 60 * 1000)
+  })
+
+  it('scales with WEBHOOK_MAX_ATTEMPTS, using the last backoff once delays run out', () => {
+    expect(inlineDispatchMaxDurationMs(1)).toBe(WEBHOOK_POST_TIMEOUT_MS)
+    expect(inlineDispatchMaxDurationMs(3)).toBe(3 * 10_000 + 1000 + 5000)
+    expect(inlineDispatchMaxDurationMs(6)).toBe(
+      inlineDispatchMaxDurationMs(5) + WEBHOOK_POST_TIMEOUT_MS + 120_000
+    )
+  })
 })
 
 describe('signWebhook', () => {
@@ -225,6 +420,18 @@ describe('WebhookDispatcher.dispatch', () => {
       expect(payload.payment.feesPaidMsats).toBeUndefined()
     }
   })
+
+  it('does not increment delivered when another writer already claimed the row', async () => {
+    query.mockResolvedValue({ rows: [], rowCount: 0 })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    )
+
+    await dispatcher.dispatch(storedEvent)
+
+    expect(metrics.webhooksDelivered).toBe(0)
+  })
 })
 
 describe('WebhookDispatcher.sweep', () => {
@@ -305,5 +512,36 @@ describe('WebhookDispatcher.sweep', () => {
     await dispatcher.sweep()
 
     expect(metrics.webhooksPending).toBe(3)
+  })
+
+  it('selects only events older than the inline retry loop', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce(backlogRow(0, null))
+
+    await dispatcher.sweep()
+
+    const select = query.mock.calls.find(([sql]) =>
+      String(sql).includes("webhook_status <> 'delivered'")
+    )
+    expect(select?.[1][0]).toBe(sweepOlderThanMs(env.WEBHOOK_MAX_ATTEMPTS))
+    expect(select?.[1][0]).toBeGreaterThan(
+      inlineDispatchMaxDurationMs(env.WEBHOOK_MAX_ATTEMPTS)
+    )
+  })
+
+  it('does not increment recovered metrics when the row is already delivered', async () => {
+    query
+      .mockResolvedValueOnce({ rows: [rowFor(failed)] })
+      .mockResolvedValueOnce({ rowCount: 0 })
+      .mockResolvedValueOnce(backlogRow(0, null))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    )
+
+    await dispatcher.sweep()
+
+    expect(metrics.webhooksDelivered).toBe(0)
   })
 })

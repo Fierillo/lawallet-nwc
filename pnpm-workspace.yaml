@@ -1,7 +1,6 @@
 packages:
   - 'apps/*'
   - 'packages/*'
-  - 'examples/*'
 
 # Supply-chain hardening (pnpm 11)
 minimumReleaseAge: 4320
@@ -31,7 +30,7 @@ trustPolicyExclude:
 #   esbuild / sharp / unrs-resolver  load prebuilt binaries from their
 #     @esbuild-*, @img-* and @unrs-* platform packages; the scripts only
 #     re-verify them (sharp's falls back to a node-gyp compile, which would
-#     fail in the toolchain-free node:22-trixie-slim build image).
+#     fail in the toolchain-free node:24-trixie-slim build image).
 #   bufferutil / utf-8-validate / secp256k1  ship node-gyp-build prebuilds and
 #     resolve them at require() time; they are optional accelerators.
 #   @prisma/engines  ships its query/schema engines in the npm tarball, and
@@ -39,7 +38,32 @@ trustPolicyExclude:
 #     projects always run their scripts, so client generation is unaffected.
 #   msw  is used node-only (setupServer from msw/node); its script only stubs
 #     the browser service worker, which this repo does not use.
+#   @sentry/cli  downloads a platform binary for source-map upload; we
+#     never invoke it from this repo (Sentry is initialized at runtime).
 #   es5-ext / vue-demi / prisma  are no-op message scripts or version guards.
+#
+# Two keys because pnpm renamed the setting: 10.x reads
+# `ignoredBuiltDependencies`, 11.x reads `allowBuilds`. The repo pins pnpm
+# 11.26.0 via packageManager; both lists stay in sync so a 10.x checkout
+# neither silently enables all 12 nor hard-fails the install. Re-enabling one
+# is a supply-chain decision: flip it in BOTH lists, or the two versions
+# disagree.
+
+# pnpm 10.x
+ignoredBuiltDependencies:
+  - '@prisma/client'
+  - '@prisma/engines'
+  - '@sentry/cli'
+  - bufferutil
+  - es5-ext
+  - esbuild
+  - msw
+  - prisma
+  - secp256k1
+  - sharp
+  - unrs-resolver
+  - utf-8-validate
+  - vue-demi
 
 # pnpm 11.x
 allowBuilds:
@@ -95,21 +119,25 @@ overrides:
   postcss@<8.5.18: 8.5.23
   # GHSA-f88m-g3jw-g9cj (high): sharp <0.35.0 inherits four libvips CVEs
   # (CVE-2026-33327/33328/35590/35591) in the GIF, TIFF and VIPS decoders.
-  # next@16.2.11 caret-pins `sharp: ^0.34.5` as an optionalDependency, which
-  # cannot reach the 0.35.0 patch line. next@16.3.0 already declares ^0.35.3
-  # on canary/preview, so this override stands aside on its own once 16.3 lands.
-  sharp@<0.35.0: 0.35.3
+  # GHSA-rgj7-g3m4-5g8c (high, 2026-08): libheif overflows (GHSA-g89c-p67h-r497
+  # and GHSA-2jg2-4ch7-h545) remain in <0.35.4. next@16.3.4 caret-pins
+  # `sharp: ^0.35.3`, which still accepts the vulnerable 0.35.3 line, so the
+  # override stays until next asks for ^0.35.4.
+  sharp@<0.35.4: 0.35.4
   # GHSA-4x5r-pxfx-6jf8 (low): arbitrary file read via sourceMappingURL.
   # Reached through next > styled-jsx, which pins @babel/core loosely enough
   # that a patched 7.x satisfies it. Build-time only.
   '@babel/core@<7.29.6': 7.29.7
-  esbuild: 0.28.1
-  vite: 6.4.3
+  esbuild: 0.28.2
+  vite: 8.3.0
   ws: 8.21.0
   # GHSA-5p4m-2wfm-xmqj (high): quadratic CPU in !!omap resolution on js-yaml
   # 3.x/4.x; the CVE-2026-59870 fix was only shipped as 4.3.1. Reached via
   # apps/docs > fumadocs-mdx.
-  js-yaml@<4.3.1: 4.3.1
+  # GHSA-2883-xcg3-v3hh (high, 2026-08): maxTotalMergeKeys does not bound CPU
+  # for empty merge sources on >=4.0.0 <4.3.2. Patched in 4.3.2; range
+  # widened so the old 4.3.1 pin does not sit inside the new window.
+  js-yaml@<4.3.2: 4.3.2
   # GHSA-28wg-ghj8-5hjv / GHSA-2v37-7h3g-55p8 (high): nanoid generators loop
   # indefinitely on negative/zero sizes. The 3.x advisory widened after the
   # first fix — GHSA-2v37 now reports `<3.3.18`, so the old 3.3.17 pin landed
@@ -118,7 +146,39 @@ overrides:
   # apps/web > @scalar/api-reference-react (5.x).
   nanoid@<3.3.18: 3.3.18
   nanoid@>=4.0.0 <5.1.16: 5.1.16
+  # GHSA-ggr8-5vv4-36mx (high, 2026-08-17): stack exhaustion when merging a
+  # recursive object graph. Patched in 8.0.0. Reached through
+  # apps/web > @prisma/client > prisma > @prisma/config, which pins the exact
+  # version 7.1.5, so the override is the only way up. 8.x keeps the same dual
+  # import/require exports map, so it is a drop-in for @prisma/config's CJS
+  # build; range-scoped so it retires once Prisma ships a patched pin.
+  deepmerge-ts@<8.0.0: 8.0.1
+  # GHSA-5jgf-p345-68v8 / GHSA-f65p-4m7j-42xc / GHSA-fph4-wmhf-6fwf /
+  # GHSA-jqff-g426-hqxp (high, patched in 3.1.6) plus GHSA-qw65-cvwx-89v3 /
+  # GHSA-58mr-gqgx-xq4g (high, 2026-09-02): host confusion / authority
+  # injection still present on 3.1.6. Reached via apps/web > @sentry/nextjs >
+  # @sentry/webpack-plugin > webpack > schema-utils > ajv. Range-scoped so
+  # it retires once parents request a patched range.
+  fast-uri@<3.1.7: 3.1.7
+  # GHSA-c83g-rgw3-j3cx / GHSA-73wf-gq98-2v4g (high): unbounded query-cache
+  # growth and a prototype-write crash in browserslist <=4.28.6. Reached via
+  # apps/docs > next > styled-jsx > @babel/core.
+  browserslist@<4.28.7: 4.28.7
+  # GHSA-3f6p-5ww8-9rcr (high): MySQL2 auth-plugin downgrade can leak plaintext
+  # credentials. Reached via apps/web > @prisma/client > prisma > mysql2.
+  # This repo uses Postgres only; Prisma CLI still vendors mysql2. Range-scoped
+  # so it retires once Prisma ships a patched pin.
+  mysql2@<3.22.0: 3.22.0
   # GHSA-w3rx-r6r6-pgpr / GHSA-5p2g-fcmc-qvqq (high, image-size ICNS/JXL/HEIF
   # DoS) have NO published fix ("Patched versions: <0.0.0", latest is 2.0.2).
   # Resolved by bumping fumadocs-core to 16.8.0 in apps/docs, which drops the
   # image-size dependency entirely — no override is possible here.
+
+minimumReleaseAgeExclude:
+  - autoprefixer@10.5.6
+  - fumadocs-core@16.15.9
+  - fumadocs-ui@16.15.9
+  - happy-dom@20.14.3
+  - lucide-react@1.44.0
+  - vite@8.3.0
+  - zod@4.6.1

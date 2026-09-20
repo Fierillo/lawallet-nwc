@@ -49,8 +49,7 @@ vi.mock('light-bolt11-decoder', () => ({
 
 import { POST } from '@/app/api/invoices/route'
 import { getSettings } from '@/lib/settings'
-
-const originalFetch = global.fetch
+import { stubFetch } from '@/tests/helpers/stub-fetch'
 
 beforeEach(() => {
   resetPrismaMock()
@@ -62,7 +61,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  global.fetch = originalFetch
+  vi.unstubAllGlobals()
 })
 
 describe('POST /api/invoices', () => {
@@ -170,7 +169,7 @@ describe('POST /api/invoices', () => {
     } as any)
 
     // Two fetches: LUD-16 metadata + callback
-    global.fetch = vi.fn(async (input: string | URL | Request) => {
+    stubFetch(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString()
       if (url.includes('/.well-known/lnurlp/')) {
         return {
@@ -221,7 +220,7 @@ describe('POST /api/invoices', () => {
     )
   })
 
-  it('fails with validation error when LUD-16 lookup fails', async () => {
+  it('fails with 503 when LUD-16 lookup fails', async () => {
     vi.mocked(getSettings).mockResolvedValue({
       registration_ln_address: 'admin@bad-domain.com',
       registration_price: '21',
@@ -229,7 +228,7 @@ describe('POST /api/invoices', () => {
     })
     vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue(null)
 
-    global.fetch = vi.fn(async () => ({ ok: false, status: 404 }) as any)
+    stubFetch(async () => ({ ok: false, status: 404 }))
 
     const req = createNextRequest('/api/invoices', {
       method: 'POST',
@@ -237,7 +236,9 @@ describe('POST /api/invoices', () => {
     })
     const res = await POST(req)
 
-    expect(res.status).toBe(400)
+    // The caller's request was fine — the instance's own payment provider is
+    // what failed, so this is 503 (retryable) rather than a client 4xx.
+    expect(res.status).toBe(503)
     expect(prismaMock.invoice.create).not.toHaveBeenCalled()
   })
 
@@ -255,7 +256,8 @@ describe('POST /api/invoices', () => {
     })
     const res = await POST(req)
 
-    expect(res.status).toBe(400)
+    // Operator misconfiguration, not a bad request from the caller.
+    expect(res.status).toBe(503)
   })
 
   it('mints an invoice with purpose WALLET_ADDRESS for secondary-address flow', async () => {
@@ -273,7 +275,7 @@ describe('POST /api/invoices', () => {
       expiresAt: new Date('2026-04-22T00:00:00Z')
     } as any)
 
-    global.fetch = vi.fn(async (input: string | URL | Request) => {
+    stubFetch(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString()
       if (url.includes('/.well-known/lnurlp/')) {
         return {
@@ -315,7 +317,7 @@ describe('POST /api/invoices', () => {
     )
   })
 
-  it('rejects (400) and does not persist when provider omits LUD-21 verify', async () => {
+  it('rejects (503) and does not persist when provider omits LUD-21 verify', async () => {
     vi.mocked(getSettings).mockResolvedValue({
       registration_ln_address: 'admin@regressed-provider.com',
       registration_price: '21',
@@ -323,7 +325,7 @@ describe('POST /api/invoices', () => {
     })
     vi.mocked(prismaMock.lightningAddress.findUnique).mockResolvedValue(null)
 
-    global.fetch = vi.fn(async (input: string | URL | Request) => {
+    stubFetch(async (input: string | URL | Request) => {
       const url = typeof input === 'string' ? input : input.toString()
       if (url.includes('/.well-known/lnurlp/')) {
         return {
@@ -348,7 +350,7 @@ describe('POST /api/invoices', () => {
     })
     const res = await POST(req)
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(503)
     const body: any = await res.json()
     expect(body.error.message).toMatch(/LUD-21/)
     expect(prismaMock.invoice.create).not.toHaveBeenCalled()
