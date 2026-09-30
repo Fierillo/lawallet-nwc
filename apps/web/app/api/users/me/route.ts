@@ -11,8 +11,12 @@ import { decryptRemoteWalletConfig } from '@/lib/wallet/remote-wallet-vault'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { validateBody } from '@/lib/validation/middleware'
 import { updateUserCurrencyPrefsSchema } from '@/lib/validation/schemas'
-import { replaceDeadLncurlPrimaryWallet } from '@/lib/wallet/lncurl-wallet'
+import {
+  mintCourtesyLncurlWallet,
+  replaceDeadLncurlPrimaryWallet
+} from '@/lib/wallet/lncurl-wallet'
 import { eventBus } from '@/lib/events/event-bus'
+import { logger } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -72,6 +76,36 @@ export const GET = withErrorHandling(async (request: Request) => {
     eventBus.emit({ type: 'listener:updated', timestamp: Date.now() })
     eventBus.emit({ type: 'addresses:updated', timestamp: Date.now() })
     eventBus.emit({ type: 'users:updated', timestamp: Date.now() })
+  }
+
+  // A claim that finished before a courtesy wallet existed is stored as IDLE
+  // and only publishes NIP-05. When auto-create is on and the account still
+  // has no ACTIVE wallet, mint one and bind this primary address now.
+  if (
+    primaryAddress &&
+    primaryAddress.mode === 'IDLE' &&
+    !primaryAddress.remoteWalletId
+  ) {
+    try {
+      const minted = await mintCourtesyLncurlWallet(user.id, {
+        bindPrimary: true
+      })
+      if (minted) {
+        const refreshed = await prisma.lightningAddress.findUnique({
+          where: { username: primaryAddress.username },
+          include: { remoteWallet: true }
+        })
+        if (refreshed) primaryAddress = refreshed
+        eventBus.emit({ type: 'listener:updated', timestamp: Date.now() })
+        eventBus.emit({ type: 'addresses:updated', timestamp: Date.now() })
+        eventBus.emit({ type: 'users:updated', timestamp: Date.now() })
+      }
+    } catch (err) {
+      logger.error(
+        { userId: user.id, err: String(err) },
+        'LNCurl auto-create failed for an unconfigured primary address'
+      )
+    }
   }
   const lightningAddress = primaryAddress?.username
     ? `${primaryAddress.username}@${addressDomain}`
