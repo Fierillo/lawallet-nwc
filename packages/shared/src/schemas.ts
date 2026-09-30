@@ -1,4 +1,7 @@
+import { CURRENCY_CODES } from './currencies'
 import { z } from './zod'
+
+export { CURRENCY_CODES }
 
 // ── Common ──────────────────────────────────────────────────────────────────
 
@@ -159,16 +162,27 @@ export const updateCardSchema = z
     message: 'No fields to update'
   })
 
+/**
+ * Owner-scoped card update. Exactly one action per request:
+ *   - `enabled` — reversible enable/disable.
+ *   - `linkDefaultWallet: true` — bind to the caller's primary wallet.
+ *   - `remoteWalletId` — bind to that wallet, or `null` to unbind. The
+ *     wallet must belong to the caller and must not be REVOKED or DEAD
+ *     (enforced in the route; it depends on database state).
+ *   - `kind` — promote/demote the caller's MASTER card.
+ */
 export const updateWalletCardSchema = z
   .object({
     enabled: z.boolean().optional(),
     linkDefaultWallet: z.boolean().optional(),
+    remoteWalletId: z.string().min(1).nullable().optional(),
     kind: cardKindSchema.optional()
   })
   .refine(
     v =>
       (v.enabled !== undefined ? 1 : 0) +
         (v.linkDefaultWallet === true ? 1 : 0) +
+        (v.remoteWalletId !== undefined ? 1 : 0) +
         (v.kind !== undefined ? 1 : 0) ===
       1,
     { message: 'Provide exactly one card update action' }
@@ -230,9 +244,8 @@ export const cardScanCallbackQuerySchema =
 export const cardScanActionSchema = z.enum(['pay', 'new-otc'])
 export type CardScanAction = z.infer<typeof cardScanActionSchema>
 
-/** LUD-03 limits advertised by /scan and enforced again by /scan/cb. */
+/** Smallest BoltCard spend the callback will accept, in millisatoshis. */
 export const CARD_MIN_WITHDRAWABLE_MSATS = 1
-export const CARD_MAX_WITHDRAWABLE_MSATS = 10_000_000
 
 export const otcParam = z.object({
   otc: z.string().min(1, 'OTC parameter is required')
@@ -454,33 +467,20 @@ export const updateUserRelaysSchema = z.object({
     })
 })
 
-export const CURRENCY_CODES = [
-  'SAT',
-  'BTC',
-  'ARS',
-  'BRL',
-  'CLP',
-  'COP',
-  'EUR',
-  'GBP',
-  'JPY',
-  'MXN',
-  'PEN',
-  'USD',
-  'UYU',
-  'VES'
-] as const
-
 export const currencyPrefsSchema = z
   .object({
-    active: z.array(z.enum(CURRENCY_CODES)).min(1),
+    active: z.array(z.enum(CURRENCY_CODES)).min(1).max(CURRENCY_CODES.length),
     selected: z.enum(CURRENCY_CODES)
   })
-  .refine(prefs => prefs.active.includes('SAT'), {
+  .refine(prefs => new Set(prefs.active).size === prefs.active.length, {
+    message: 'Active currencies must be unique',
+    path: ['active']
+  })
+  .refine(prefs => prefs.active.some(code => code === 'SAT'), {
     message: 'SAT must remain in the active list',
     path: ['active']
   })
-  .refine(prefs => prefs.active.includes(prefs.selected), {
+  .refine(prefs => prefs.active.some(code => code === prefs.selected), {
     message: 'Selected currency must be in the active list',
     path: ['selected']
   })

@@ -612,6 +612,13 @@
           "linkDefaultWallet": {
             "type": "boolean"
           },
+          "remoteWalletId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -620,7 +627,7 @@
             ]
           }
         },
-        "description": "Owner-scoped card update. Provide exactly one action: set `enabled` to enable or disable the card, set `linkDefaultWallet` to true to bind it to the caller’s primary remote wallet, or set `kind` to designate this card as the caller’s MASTER (account-recovery) card — which demotes whichever card previously held that designation."
+        "description": "Owner-scoped card update. Provide exactly one action: set `enabled` to enable or disable the card, set `linkDefaultWallet` to true to bind it to the caller’s primary remote wallet, set `remoteWalletId` to bind a specific wallet the caller owns (or null to unbind), or set `kind` to designate this card as the caller’s MASTER (account-recovery) card — which demotes whichever card previously held that designation."
       },
       "UserRoleUpdateRequest": {
         "type": "object",
@@ -637,6 +644,118 @@
         },
         "required": [
           "role"
+        ]
+      },
+      "CurrencyPrefs": {
+        "type": "object",
+        "properties": {
+          "active": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "SAT",
+                "BTC",
+                "ARS",
+                "BRL",
+                "CLP",
+                "COP",
+                "EUR",
+                "GBP",
+                "JPY",
+                "MXN",
+                "PEN",
+                "USD",
+                "UYU",
+                "VES"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 14
+          },
+          "selected": {
+            "type": "string",
+            "enum": [
+              "SAT",
+              "BTC",
+              "ARS",
+              "BRL",
+              "CLP",
+              "COP",
+              "EUR",
+              "GBP",
+              "JPY",
+              "MXN",
+              "PEN",
+              "USD",
+              "UYU",
+              "VES"
+            ]
+          }
+        },
+        "required": [
+          "active",
+          "selected"
+        ]
+      },
+      "UserCurrencyPrefsUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "currencyPrefs": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "SAT",
+                    "BTC",
+                    "ARS",
+                    "BRL",
+                    "CLP",
+                    "COP",
+                    "EUR",
+                    "GBP",
+                    "JPY",
+                    "MXN",
+                    "PEN",
+                    "USD",
+                    "UYU",
+                    "VES"
+                  ]
+                },
+                "minItems": 1,
+                "maxItems": 14
+              },
+              "selected": {
+                "type": "string",
+                "enum": [
+                  "SAT",
+                  "BTC",
+                  "ARS",
+                  "BRL",
+                  "CLP",
+                  "COP",
+                  "EUR",
+                  "GBP",
+                  "JPY",
+                  "MXN",
+                  "PEN",
+                  "USD",
+                  "UYU",
+                  "VES"
+                ]
+              }
+            },
+            "required": [
+              "active",
+              "selected"
+            ]
+          }
+        },
+        "required": [
+          "currencyPrefs"
         ]
       },
       "SettingsBody": {
@@ -4710,7 +4829,7 @@
           "Cards"
         ],
         "summary": "Update a card.",
-        "description": "Rebinds the card’s spending wallet and/or changes its kind. Setting `kind` to MASTER designates the card as its holder’s account-recovery card and demotes whichever of their cards previously held that designation; the card must be paired (400 otherwise) and not blocked (409 otherwise). Cardholders can set their own via PATCH /api/wallet/cards/{id}.",
+        "description": "Rebinds the card’s spending wallet and/or changes its kind. Setting `kind` to MASTER designates the card as its holder’s account-recovery card and demotes whichever of their cards previously held that designation; the card must be paired (400 otherwise) and not blocked (409 otherwise). Cardholders rebind their own card’s wallet and set their own master card via PATCH /api/wallet/cards/{id}.",
         "operationId": "cards.update",
         "security": [
           {
@@ -5455,7 +5574,7 @@
           "Cards"
         ],
         "summary": "Resolve a scanned card and return the LNURL-withdraw flow entry point.",
-        "description": "The first LNURL request on tap. Send the request header `x-request-action: info` to get the card’s public status JSON (design, image, owner, paired/used) instead of the LNURL withdraw request — so a client can show the card identity without running the withdraw flow. Non-sensitive only (never keys/OTC/SUN params).",
+        "description": "The first LNURL request on tap (LUD-03). `maxWithdrawable` is the bound wallet’s spendable balance in millisatoshis. When that balance cannot be read in time, the response advertises a high ceiling so a point of sale will not refuse a normal invoice; the callback does not impose a fixed sats cap. A receivable card also includes LUD-19 `payLink`, a raw LUD-17 `lnurlp://` URL (not bech32) whose payRequest mints an invoice on the card’s RemoteWallet — BoltCard SPEC’s optional pay-link extension (https://github.com/boltcard/boltcard/blob/main/docs/SPEC.md, https://github.com/lnurl/luds/blob/luds/19.md). Send the request header `x-request-action: info` to get the card’s public status JSON (design, image, owner, paired/used) instead of the LNURL withdraw request — so a client can show the card identity without running the withdraw flow. Non-sensitive only (never keys/OTC/SUN params).",
         "operationId": "cards.scan",
         "security": [],
         "parameters": [
@@ -5518,6 +5637,10 @@
                           "enum": [
                             "withdrawRequest"
                           ]
+                        },
+                        "payLink": {
+                          "type": "string",
+                          "description": "LUD-19 raw LUD-17 LNURL-pay URL (`lnurlp://…`, not bech32) for topping up the card’s RemoteWallet. Omitted when the card is unpaired, blocked, disabled, or has no receivable wallet. See https://github.com/lnurl/luds/blob/luds/19.md and the BoltCard SPEC optional LUD-19 extension."
                         }
                       },
                       "required": [
@@ -5770,6 +5893,248 @@
           },
           "400": {
             "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cards/{id}/lnurlp": {
+      "get": {
+        "x-required-role": "PUBLIC",
+        "tags": [
+          "Cards"
+        ],
+        "summary": "LUD-19 pay link: LUD-06 payRequest for a card top-up.",
+        "description": "Target of the raw LUD-17 `payLink` advertised on `GET /api/cards/{id}/scan`. Returns a LUD-06 payRequest whose callback mints a BOLT11 invoice on the card’s RemoteWallet (NWC `make_invoice`). This is not the owner’s Lightning Address. Unpaired, blocked, disabled, or non-receivable cards return `{ status: \"ERROR\", reason }`. Specs: LUD-06, LUD-17, LUD-19, BoltCard SPEC optional LUD-19.",
+        "operationId": "cards.lnurlp",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "LUD-06 payRequest, or an LNURL ERROR when the card cannot receive.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "tag": {
+                          "type": "string",
+                          "enum": [
+                            "payRequest"
+                          ]
+                        },
+                        "callback": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "minSendable": {
+                          "type": "integer"
+                        },
+                        "maxSendable": {
+                          "type": "integer"
+                        },
+                        "metadata": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "tag",
+                        "callback",
+                        "minSendable",
+                        "maxSendable",
+                        "metadata"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ERROR"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/cards/{id}/lnurlp/cb": {
+      "get": {
+        "x-required-role": "PUBLIC",
+        "tags": [
+          "Cards"
+        ],
+        "summary": "LUD-06 callback that mints a card top-up invoice.",
+        "description": "Creates a BOLT11 invoice on the card’s bound RemoteWallet (or the owner’s primary-address wallet when the card has no explicit binding) and stores it with purpose `CARD_TOPUP`. Paying the invoice credits that wallet. Amount is millisatoshis, within the payRequest min/max. An optional LUD-12 `comment` is appended to the invoice description.",
+        "operationId": "cards.lnurlp.callback",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "amount",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "required": false,
+            "name": "comment",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "required": false,
+            "name": "nostr",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "BOLT11 invoice, or an LNURL ERROR when the card cannot receive or the amount is rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "pr": {
+                          "type": "string"
+                        },
+                        "routes": {
+                          "type": "array",
+                          "items": {}
+                        }
+                      },
+                      "required": [
+                        "pr",
+                        "routes"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "ERROR"
+                          ]
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "status",
+                        "reason"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9196,7 +9561,7 @@
           "Wallet"
         ],
         "summary": "Update one of the caller’s cards.",
-        "description": "Enables or disables an owner-scoped card, or binds it to the caller’s active primary remote wallet. Blocked cards cannot be updated.",
+        "description": "Enables or disables an owner-scoped card, binds it to one of the caller’s wallets (`remoteWalletId`, or null to unbind), or binds it to the caller’s active primary remote wallet. The target wallet must belong to the caller and must not be REVOKED or DEAD. Blocked cards cannot be updated.",
         "operationId": "wallet.cards.update",
         "security": [
           {
@@ -10220,16 +10585,117 @@
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "currencyPrefs": {
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/CurrencyPrefs"
+                        },
+                        {
+                          "type": [
+                            "object",
+                            "null"
+                          ]
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "id",
                     "pubkey",
                     "role",
-                    "createdAt"
+                    "createdAt",
+                    "currencyPrefs"
                   ],
                   "additionalProperties": {},
                   "description": "User record."
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users/me/currency-prefs": {
+      "put": {
+        "x-required-role": "USER",
+        "tags": [
+          "Users"
+        ],
+        "summary": "Save the current user’s display currency preferences.",
+        "operationId": "users.me.currencyPrefs.set",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCurrencyPrefsUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Currency preferences saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "currencyPrefs": {
+                      "$ref": "#/components/schemas/CurrencyPrefs"
+                    }
+                  },
+                  "required": [
+                    "currencyPrefs"
+                  ]
                 }
               }
             }

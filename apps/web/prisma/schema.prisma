@@ -18,6 +18,9 @@ enum InvoicePurpose {
   REGISTRATION
   WALLET_ADDRESS
   LUD16_PAYMENT
+  /// BoltCard LUD-19 top-up: an invoice minted on the card's RemoteWallet
+  /// via the card-scoped LNURL-pay (`GET /api/cards/[id]/lnurlp`).
+  CARD_TOPUP
 }
 
 enum InvoiceStatus {
@@ -845,7 +848,9 @@ model CardPaymentAttempt {
   walletId      String
   paymentHash   String
   bolt11        String
-  amountMsats   Int
+  /// Invoice amount in millisatoshis. BIGINT so a recorded tap is not limited
+  /// by the 32-bit integer ceiling (~2.1M sats).
+  amountMsats   BigInt
   transport     CardPaymentTransport
   status        CardPaymentStatus    @default(PENDING)
   preimage      String?
