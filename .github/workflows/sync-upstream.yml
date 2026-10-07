@@ -1,0 +1,81 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [automation/sync-upstream]
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    if: github.repository == 'Fierillo/lawallet-nwc' && github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Merge upstream into the review branch
+        id: merge
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          bash scripts/sync-upstream.sh
+      - name: Open or reuse the pull request
+        if: steps.merge.outputs.has_updates == 'true'
+        run: |
+          pr=$(gh pr list --head automation/sync-upstream --base main --state open --json number --jq '.[0].number // empty')
+          if [ -z "$pr" ]; then
+            gh pr create --head automation/sync-upstream --base main \
+              --title 'chore: merge official LaWallet updates' \
+              --body 'Upstream updates from lawalletio/lawallet-nwc, merged without replacing fork commits. Review the diff and the CI run on automation/sync-upstream before merging. No automatic merge or production deployment is performed.'
+          fi
+      # GITHUB_TOKEN-created PRs do not trigger pull_request workflows.
+      # workflow_dispatch does trigger CI, without a personal access token.
+      - name: Run CI on the merged branch
+        if: steps.merge.outputs.has_updates == 'true'
+        run: gh workflow run ci.yml --ref automation/sync-upstream
+
+  notify:
+    needs: sync
+    if: >-
+      always() && github.repository == 'Fierillo/lawallet-nwc' &&
+      (needs.sync.result == 'failure' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure'))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report failure and mention the owner
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = 'Upstream sync needs attention';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              ...context.repo, state: 'open', creator: 'github-actions[bot]', per_page: 100
+            });
+            if (issues.some(issue => !issue.pull_request && issue.title === title)) return;
+            const url = context.payload.workflow_run?.html_url
+              ?? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              ...context.repo, title,
+              body: `@${context.repo.owner} automatic upstream synchronization or its CI checks failed.\n\nCheck the logs for conflicts, permissions, or failing checks: ${url}\n\nMain was not updated by the sync. Resolve the problem on automation/sync-upstream and rerun the workflow; do not replace your fork with upstream.\n\nClose this issue once resolved. Further failures reuse this open alert instead of creating duplicate issues.`
+            });
