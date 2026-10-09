@@ -25,12 +25,15 @@ export function ActivationSuccess({
   imageUrl,
   title,
   nextPath = '/wallet',
-  claimAddress = false
+  claimAddress = false,
+  bonusSats = null
 }: {
   imageUrl?: string | null
   title?: string
   nextPath?: string
   claimAddress?: boolean
+  /** Sats the claim route actually paid. Omitted when the bonus is off. */
+  bonusSats?: number | null
 }) {
   const router = useRouter()
 
@@ -108,20 +111,25 @@ export function ActivationSuccess({
       <h1 className="animate-fade-in text-2xl font-semibold text-foreground">
         Card activated!
       </h1>
-      <p className="animate-fade-in mt-2 max-w-xs text-sm text-muted-foreground">
-        {claimAddress
-          ? title
-            ? `${title} is linked to your wallet. Pick a Lightning address so you can receive right away.`
-            : 'Your card is linked to your wallet. Pick a Lightning address so you can receive right away.'
-          : title ? (
+      {(!claimAddress || (bonusSats != null && bonusSats > 0)) && (
+        <p className="animate-fade-in mt-2 max-w-xs text-sm text-muted-foreground">
+          {!claimAddress &&
+            (title ? (
               <>
                 <span className="font-medium text-foreground">{title}</span> is
                 now linked to your wallet and ready to tap-to-pay.
               </>
             ) : (
               'Your card is now linked to your wallet and ready to tap-to-pay.'
-            )}
-      </p>
+            ))}
+          {bonusSats != null && bonusSats > 0 && (
+            <span className="mt-2 block font-medium text-foreground">
+              {bonusSats.toLocaleString('en-US')} sats are already in your
+              balance.
+            </span>
+          )}
+        </p>
+      )}
 
       <div className="my-8 scale-90">
         <Card3D imageUrl={imageUrl} title={title} glow={false} />

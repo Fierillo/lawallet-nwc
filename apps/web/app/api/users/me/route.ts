@@ -11,7 +11,7 @@ import { decryptRemoteWalletConfig } from '@/lib/wallet/remote-wallet-vault'
 import { currencyPrefsSchema } from '@/lib/validation/schemas'
 import {
   mintCourtesyLncurlWallet,
-  replaceDeadLncurlPrimaryWallet
+  reviveDeadCourtesyWallet
 } from '@/lib/wallet/lncurl-wallet'
 import { eventBus } from '@/lib/events/event-bus'
 import { logger } from '@/lib/logger'
@@ -57,29 +57,6 @@ export const GET = withErrorHandling(async (request: Request) => {
   // two concerns.
   const addressDomain = await resolveAddressDomain(request)
   let primaryAddress = user.lightningAddresses[0]
-  const boundWallet = primaryAddress?.remoteWallet
-  const replaced =
-    primaryAddress && boundWallet?.status === 'DEAD' && boundWallet.id
-      ? await replaceDeadLncurlPrimaryWallet({
-          userId: user.id,
-          mode: primaryAddress.mode,
-          boundWallet: {
-            id: boundWallet.id,
-            status: boundWallet.status,
-            config: boundWallet.config
-          }
-        })
-      : null
-  if (replaced && primaryAddress) {
-    primaryAddress = {
-      ...primaryAddress,
-      remoteWalletId: replaced.id,
-      remoteWallet: replaced
-    }
-    eventBus.emit({ type: 'listener:updated', timestamp: Date.now() })
-    eventBus.emit({ type: 'addresses:updated', timestamp: Date.now() })
-    eventBus.emit({ type: 'users:updated', timestamp: Date.now() })
-  }
 
   // A paid claim that ran when the account had no address used to insert a
   // non-primary row. The account then has names and no primary, so nothing
@@ -96,6 +73,18 @@ export const GET = withErrorHandling(async (request: Request) => {
         data: { isPrimary: true }
       })
       primaryAddress = { ...stray, isPrimary: true }
+    }
+  }
+
+  // Promote legacy addresses before the official recovery looks up the primary.
+  const revived = await reviveDeadCourtesyWallet(user.id)
+  if (revived && primaryAddress) {
+    primaryAddress = {
+      ...primaryAddress,
+      mode: 'CUSTOM_NWC',
+      redirect: null,
+      remoteWalletId: revived.id,
+      remoteWallet: revived
     }
   }
 
@@ -136,7 +125,7 @@ export const GET = withErrorHandling(async (request: Request) => {
   // CUSTOM_NWC binding. The legacy/display isDefault flag is synchronized from
   // that link, but is no longer the source of truth.
   const primaryWallet =
-    replaced ?? (await getPrimaryRemoteWalletForUser(user.id))
+    revived ?? (await getPrimaryRemoteWalletForUser(user.id))
   const primaryWalletConfig = primaryWallet
     ? decryptRemoteWalletConfig(
         primaryWallet.id,

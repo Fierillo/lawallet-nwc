@@ -1,6 +1,12 @@
 'use client'
 
-import { useEffect, useState, type MouseEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent
+} from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import {
@@ -9,7 +15,8 @@ import {
   LayoutDashboard,
   LogOut,
   QrCode,
-  Sparkles
+  Sparkles,
+  X
 } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { useSettings } from '@/lib/client/hooks/use-settings'
@@ -54,11 +61,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { NavTabbar } from '@/components/wallet/shared/nav-tabbar'
 import { RelayErrorBadge } from '@/components/wallet/shared/relay-error-badge'
 import { TransactionRow } from '@/components/wallet/shared/transaction-row'
-import { AddressShareDialog } from '@/components/wallet/home/address-share-dialog'
 import {
   activityDetailHref,
   demoActivityTransactions
 } from '@/lib/client/activity-detail'
+import {
+  dismissActivationBonus,
+  readActivationBonus,
+  serverActivationBonus,
+  subscribeActivationBonus
+} from '@/lib/client/activation-bonus-notice'
 import { cn } from '@/lib/utils'
 
 interface UserMeResponse {
@@ -129,12 +141,27 @@ export function HomeScreen() {
 
   const currencyCode = useSelectedCurrencyCode()
   const [balanceHidden, setBalanceHidden] = useState(false)
-  const [shareOpen, setShareOpen] = useState(false)
+  // Server snapshot is null so hydration matches. The client snapshot reads
+  // the amount stashed when the claim route actually paid the instance bonus.
+  const bonusSats = useSyncExternalStore(
+    subscribeActivationBonus,
+    readActivationBonus,
+    serverActivationBonus
+  )
+  const bonusRefetched = useRef(false)
   const [pendingAction, setPendingAction] = useState<'receive' | 'send' | null>(
     null
   )
 
   const avatarSrc = profile?.picture || isotypo
+
+  // Refetch once so a payment that settled during claim is not stuck at the
+  // pre-credit number. No note is shown when the instance bonus is off.
+  useEffect(() => {
+    if (bonusSats == null || bonusRefetched.current) return
+    bonusRefetched.current = true
+    void refetch()
+  }, [bonusSats, refetch])
 
   // Snap back to the first active currency if the user removes the one
   // currently displayed (otherwise we'd render `—` forever).
@@ -285,6 +312,23 @@ export function HomeScreen() {
           </div>
         </div>
 
+        {bonusSats != null && (
+          <p className="flex max-w-xs items-start gap-2 text-center text-xs text-muted-foreground">
+            <span>
+              Includes {bonusSats.toLocaleString('en-US')} sats from activating
+              your card.
+            </span>
+            <button
+              type="button"
+              onClick={dismissActivationBonus}
+              aria-label="Dismiss card bonus note"
+              className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          </p>
+        )}
+
         <CurrencyChips
           currencies={activeCurrencies}
           value={activeCode}
@@ -330,34 +374,20 @@ export function HomeScreen() {
       </div>
 
       {hasAddress && me?.lightningAddress && (
-        <>
-          <button
-            type="button"
-            onClick={() => setShareOpen(true)}
-            className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-accent/40"
-          >
-            <div className="flex min-w-0 flex-1 flex-col">
-              <span className="text-xs text-muted-foreground">Address</span>
-              <span className="truncate text-base font-semibold text-foreground">
-                {me.lightningAddress}
-              </span>
-            </div>
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
-              <QrCode className="size-5" />
+        <Link
+          href="/wallet/receive"
+          className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-accent/40"
+        >
+          <div className="flex min-w-0 flex-1 flex-col">
+            <span className="text-xs text-muted-foreground">Address</span>
+            <span className="truncate text-base font-semibold text-foreground">
+              {me.lightningAddress}
             </span>
-          </button>
-
-          <AddressShareDialog
-            open={shareOpen}
-            onOpenChange={setShareOpen}
-            lightningAddress={me.lightningAddress}
-            // Only inset the avatar when the user actually has a Nostr
-            // profile picture. Falling back to the community isotype here
-            // would overlay every QR with a generic LaWallet mark — keeps
-            // the QR clean and uninterrupted in that case.
-            avatarSrc={profile?.picture || undefined}
-          />
-        </>
+          </div>
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground">
+            <QrCode className="size-5" />
+          </span>
+        </Link>
       )}
 
       {!hasAddress && !meLoading && (

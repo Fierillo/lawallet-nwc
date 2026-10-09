@@ -33,8 +33,11 @@ vi.mock('@/lib/middleware/request-limits', () => ({
   checkRequestLimits: vi.fn()
 }))
 
+const reviveDeadCourtesyWallet = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown | null>>(async () => null)
+)
 vi.mock('@/lib/wallet/lncurl-wallet', () => ({
-  replaceDeadLncurlPrimaryWallet: vi.fn(),
+  reviveDeadCourtesyWallet,
   mintCourtesyLncurlWallet: vi.fn(async () => null)
 }))
 
@@ -47,10 +50,7 @@ import { PUT } from '@/app/api/users/me/currency-prefs/route'
 import { authenticate } from '@/lib/auth/unified-auth'
 import { createNewUser } from '@/lib/user'
 import { getSettings } from '@/lib/settings'
-import {
-  mintCourtesyLncurlWallet,
-  replaceDeadLncurlPrimaryWallet
-} from '@/lib/wallet/lncurl-wallet'
+import { mintCourtesyLncurlWallet } from '@/lib/wallet/lncurl-wallet'
 
 const mockPubkey = 'a'.repeat(64)
 
@@ -70,6 +70,7 @@ beforeEach(() => {
   resetPrismaMock()
   vi.clearAllMocks()
   vi.mocked(mintCourtesyLncurlWallet).mockResolvedValue(null)
+  reviveDeadCourtesyWallet.mockResolvedValue(null)
 })
 
 describe('GET /api/users/me', () => {
@@ -331,6 +332,46 @@ describe('GET /api/users/me', () => {
     expect(body.effectiveNwcString).toBeNull()
   })
 
+  it('replaces a dead courtesy wallet before returning the connection string', async () => {
+    mockAuth()
+    const freshUri = 'nostr+walletconnect://fresh-lncurl'
+    const user = createUserFixture({
+      pubkey: mockPubkey,
+      lightningAddresses: [
+        {
+          username: 'alice',
+          isPrimary: true,
+          mode: 'IDLE',
+          redirect: null,
+          remoteWalletId: null,
+          remoteWallet: null
+        }
+      ]
+    })
+    vi.mocked(prismaMock.user.findUnique).mockResolvedValue(user as any)
+    vi.mocked(getSettings).mockResolvedValue({ domain: 'test.com' })
+    reviveDeadCourtesyWallet.mockResolvedValue({
+      id: 'fresh-wallet',
+      type: 'NWC',
+      status: 'ACTIVE',
+      isDefault: true,
+      updatedAt: new Date('2026-01-02T00:00:00Z'),
+      config: {
+        connectionString: freshUri,
+        mode: 'SEND_RECEIVE',
+        provider: 'lncurl'
+      }
+    })
+
+    const res = await GET(createNextRequest('/api/users/me'))
+    const body: any = await assertResponse(res, 200)
+
+    expect(reviveDeadCourtesyWallet).toHaveBeenCalledWith(user.id)
+    expect(body.primaryAddressMode).toBe('CUSTOM_NWC')
+    expect(body.nwcString).toBe(freshUri)
+    expect(body.effectiveNwcString).toBe(freshUri)
+  })
+
   it('CUSTOM_NWC primary: effectiveNwcString = the address-bound wallet', async () => {
     mockAuth()
     const user = createUserFixture({
@@ -389,7 +430,7 @@ describe('GET /api/users/me', () => {
     })
     vi.mocked(prismaMock.user.findUnique).mockResolvedValue(user as any)
     vi.mocked(getSettings).mockResolvedValue({ domain: 'test.com' })
-    vi.mocked(replaceDeadLncurlPrimaryWallet).mockResolvedValue({
+    reviveDeadCourtesyWallet.mockResolvedValue({
       id: 'fresh-wallet',
       type: 'NWC',
       status: 'ACTIVE',
@@ -400,15 +441,7 @@ describe('GET /api/users/me', () => {
     const res = await GET(createNextRequest('/api/users/me'))
     const body: any = await assertResponse(res, 200)
 
-    expect(replaceDeadLncurlPrimaryWallet).toHaveBeenCalledWith({
-      userId: user.id,
-      mode: 'CUSTOM_NWC',
-      boundWallet: {
-        id: 'dead-wallet',
-        status: 'DEAD',
-        config: deadConfig
-      }
-    })
+    expect(reviveDeadCourtesyWallet).toHaveBeenCalledWith(user.id)
     expect(body.effectiveNwcString).toBe(freshUri)
     expect(body.nwcString).toBe(freshUri)
   })
@@ -508,6 +541,54 @@ describe('GET /api/users/me', () => {
     })
     expect(body.primaryAddressMode).toBe('CUSTOM_NWC')
     expect(body.primaryUsername).toBe('alice')
+  })
+
+  it('promotes a legacy address and exposes its revived wallet on the home screen', async () => {
+    mockAuth()
+    const user = createUserFixture({
+      pubkey: mockPubkey,
+      lightningAddresses: []
+    })
+    const freshUri = 'nostr+walletconnect://revived-primary'
+    vi.mocked(prismaMock.user.findUnique).mockResolvedValue(user as any)
+    vi.mocked(getSettings).mockResolvedValue({ domain: 'test.com' })
+    vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue({
+      username: 'alice',
+      isPrimary: false,
+      mode: 'CUSTOM_NWC',
+      redirect: null,
+      remoteWalletId: 'dead-wallet',
+      remoteWallet: {
+        id: 'dead-wallet',
+        type: 'NWC',
+        status: 'DEAD',
+        config: {
+          provider: 'lncurl',
+          connectionString: 'nostr+walletconnect://dead'
+        }
+      }
+    } as any)
+    reviveDeadCourtesyWallet.mockResolvedValue({
+      id: 'fresh-wallet',
+      type: 'NWC',
+      status: 'ACTIVE',
+      updatedAt: new Date(),
+      config: { provider: 'lncurl', connectionString: freshUri }
+    })
+
+    const res = await GET(createNextRequest('/api/users/me'))
+    const body: any = await assertResponse(res, 200)
+
+    expect(prismaMock.lightningAddress.update).toHaveBeenCalledWith({
+      where: { username: 'alice' },
+      data: { isPrimary: true }
+    })
+    expect(
+      prismaMock.lightningAddress.update.mock.invocationCallOrder[0]
+    ).toBeLessThan(reviveDeadCourtesyWallet.mock.invocationCallOrder[0])
+    expect(body.lightningAddress).toBe('alice@test.com')
+    expect(body.primaryUsername).toBe('alice')
+    expect(body.effectiveNwcString).toBe(freshUri)
   })
 
   it('no primary address: every primary* field is null', async () => {

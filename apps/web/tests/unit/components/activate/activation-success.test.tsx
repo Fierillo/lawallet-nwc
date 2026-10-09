@@ -35,6 +35,7 @@ describe('ActivationSuccess', () => {
     expect(
       screen.getByRole('button', { name: 'Claim your address' })
     ).toBeTruthy()
+    expect(screen.queryByText(/Pick a Lightning address/i)).toBeNull()
 
     await act(async () => {
       vi.advanceTimersByTime(3000)
@@ -61,5 +62,15 @@ describe('ActivationSuccess', () => {
     vi.useRealTimers()
     await userEvent.click(screen.getByRole('button', { name: 'Open wallet' }))
     expect(pushMock).toHaveBeenCalledWith('/wallet')
+  })
+
+  it('mentions credited sats only when a bonus was actually paid', () => {
+    const { rerender } = render(<ActivationSuccess bonusSats={1000} />)
+    expect(
+      screen.getByText(/1,000 sats are already in your balance/)
+    ).toBeTruthy()
+
+    rerender(<ActivationSuccess />)
+    expect(screen.queryByText(/sats are already in your balance/)).toBeNull()
   })
 })
