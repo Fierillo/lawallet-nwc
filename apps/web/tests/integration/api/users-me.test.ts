@@ -584,7 +584,7 @@ describe('GET /api/users/me', () => {
       data: { isPrimary: true }
     })
     expect(
-      prismaMock.lightningAddress.update.mock.invocationCallOrder[0]
+      vi.mocked(prismaMock.lightningAddress.update).mock.invocationCallOrder[0]
     ).toBeLessThan(reviveDeadCourtesyWallet.mock.invocationCallOrder[0])
     expect(body.lightningAddress).toBe('alice@test.com')
     expect(body.primaryUsername).toBe('alice')
