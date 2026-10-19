@@ -1,5 +1,20 @@
 # Walletilla upstream updates
 
+## Fork automation
+
+Walletilla keeps four workflows: `CI` (including downloadable coverage reports),
+`E2E`, `Security`, and `Sync upstream`. Codecov uploads, automatic benchmarks,
+the duplicate security audit, and the upstream Release, Docker Publish, and
+Fly.io deployment workflows are intentionally removed. This does not stop any
+running service or change Vercel's Git integration.
+
+Review workflow changes during upstream merges to avoid reintroducing these
+integrations. The inherited `pnpm release` and `scripts/release-local.sh` publishing
+commands depend on the removed workflows and are not part of Walletilla's
+deployment process.
+
+## Reviewing official updates
+
 `Sync upstream` checks `lawalletio/lawallet-nwc/main` daily at 12:00 UTC
 (09:00 Argentina), or manually from GitHub Actions. GitHub may delay scheduled runs.
 The workflow runs only in `Fierillo/lawallet-nwc`.
