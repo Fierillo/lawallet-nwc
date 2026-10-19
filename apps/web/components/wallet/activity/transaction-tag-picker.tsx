@@ -16,9 +16,11 @@ import { Input } from '@/components/ui/input'
 
 export function TransactionTagPicker({
   paymentHash,
+  tag,
   onSaved
 }: {
   paymentHash: string
+  tag?: string | null
   onSaved: (tag: string | null) => void
 }) {
   const { apiClient } = useAuth()
@@ -83,14 +85,28 @@ export function TransactionTagPicker({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
-          aria-label="Choose tag"
-          className="group size-11 shrink-0"
+          size={tag ? 'sm' : 'icon'}
+          aria-label={tag ? `Choose tag: ${tag}` : 'Choose tag'}
+          title={tag || 'Choose tag'}
+          className={
+            tag
+              ? 'mx-1 h-auto min-h-11 min-w-0 max-w-28 shrink px-1.5'
+              : 'group relative size-11 shrink-0'
+          }
         >
-          <Tag
-            aria-hidden="true"
-            className="transition-transform group-hover:-rotate-12 group-hover:scale-110 group-focus-visible:-rotate-12 motion-reduce:transform-none motion-reduce:transition-none"
-          />
+          {tag ? (
+            <span className="truncate rounded-md bg-secondary px-2 py-1 text-xs font-medium text-secondary-foreground">
+              {tag}
+            </span>
+          ) : (
+            <>
+              <Tag aria-hidden="true" className="size-4" />
+              <Plus
+                aria-hidden="true"
+                className="absolute right-1 top-1 size-3 scale-75 opacity-0 transition-[opacity,transform] group-hover:scale-100 group-hover:opacity-100 group-focus-visible:scale-100 group-focus-visible:opacity-100 motion-reduce:transition-none"
+              />
+            </>
+          )}
         </Button>
       </PopoverTrigger>
       <PopoverContent

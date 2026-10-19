@@ -125,6 +125,28 @@ beforeEach(() => {
 })
 
 describe('ActivityScreen quick transaction information', () => {
+  it('replaces the empty icon with the selected tag and returns to it after removal', async () => {
+    labelState.label = null
+    saveTagMock.mockImplementation(
+      async (_path: string, body: { label: string }) => {
+        labelState.label = body.label || null
+        return { label: labelState.label }
+      }
+    )
+    render(<ActivityScreen />)
+    const trigger = await screen.findByRole('button', { name: 'Choose tag' })
+    expect(trigger).toHaveTextContent('')
+    await userEvent.click(trigger)
+    await userEvent.click(screen.getByRole('button', { name: 'Travel' }))
+    expect(trigger).toHaveTextContent('Travel')
+    expect(screen.getAllByText('Travel')).toHaveLength(1)
+    await userEvent.click(trigger)
+    await userEvent.click(screen.getByRole('button', { name: 'Remove tag' }))
+    expect(trigger).toHaveAccessibleName('Choose tag')
+    expect(trigger).toHaveTextContent('')
+    expect(screen.queryByText('Travel')).not.toBeInTheDocument()
+    expect(recallActivityTx(hash)).toBeNull()
+  })
   it('offers removal from the transaction without a separate tag deletion button', async () => {
     render(<ActivityScreen />)
     await userEvent.click(
@@ -145,7 +167,12 @@ describe('ActivityScreen quick transaction information', () => {
     const row = await screen.findByRole('link', {
       name: /A long payment message/
     })
-    expect(within(row).getByText('Groceries')).toBeInTheDocument()
+    expect(within(row).queryByText('Groceries')).not.toBeInTheDocument()
+    expect(
+      within(screen.getByRole('button', { name: /Choose tag/ })).getByText(
+        'Groceries'
+      )
+    ).toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: /Expand transaction information/ })
     ).toHaveAttribute('aria-expanded', 'false')
@@ -255,11 +282,7 @@ describe('ActivityScreen quick transaction information', () => {
       screen.getByRole('button', { name: /Expand transaction information/ })
     ).toHaveAttribute('aria-expanded', 'false')
     expect(recallActivityTx(hash)).toBeNull()
-    expect(
-      within(
-        screen.getByRole('link', { name: /A long payment message/ })
-      ).getByText('Travel')
-    ).toBeInTheDocument()
+    expect(within(trigger).getByText('Travel')).toBeInTheDocument()
     await userEvent.click(
       screen.getByRole('button', { name: /Expand transaction information/ })
     )

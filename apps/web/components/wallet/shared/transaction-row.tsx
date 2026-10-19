@@ -6,21 +6,14 @@ import { useLocale, useT, type Dict } from '@/lib/client/i18n'
 import { cn } from '@/lib/utils'
 import type { NwcTransaction } from '@/lib/client/nwc/transactions'
 import { rememberActivityTx } from '@/lib/client/activity-detail-store'
-import { Badge } from '@/components/ui/badge'
 
 interface TransactionRowProps {
   tx: NwcTransaction
   href?: string
   className?: string
-  tag?: string | null
 }
 
-export function TransactionRow({
-  tx,
-  href,
-  className,
-  tag
-}: TransactionRowProps) {
+export function TransactionRow({ tx, href, className }: TransactionRowProps) {
   const t = useT()
   const locale = useLocale()
   const incoming = tx.type === 'incoming'
@@ -58,15 +51,6 @@ export function TransactionRow({
         <span className="text-xs text-muted-foreground">
           {formatRelative(timestamp, t, locale)}
         </span>
-        {tag ? (
-          <Badge
-            variant="secondary"
-            title={tag}
-            className="mt-1 w-fit max-w-full truncate"
-          >
-            {tag}
-          </Badge>
-        ) : null}
       </div>
 
       <div className="text-right tabular-nums">
@@ -93,7 +77,7 @@ export function TransactionRow({
         prefetch={false}
         onClick={remember}
         onPointerDown={remember}
-        aria-label={`${title}, ${incoming ? '+' : '−'}${tx.amountSats.toLocaleString()} sats${tag ? `, Tag: ${tag}` : ''}`}
+        aria-label={`${title}, ${incoming ? '+' : '−'}${tx.amountSats.toLocaleString()} sats`}
         className={classNames}
       >
         {body}
