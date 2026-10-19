@@ -48,17 +48,13 @@ export function ActivityTransactionRow({
   return (
     <div>
       <div className="flex items-center">
-        <TransactionRow
-          tx={tx}
-          href={href}
-          tag={currentTag}
-          className="min-w-0 flex-1"
-        />
+        <TransactionRow tx={tx} href={href} className="min-w-0 flex-1" />
         {!isActivityPreviewRequested() &&
         /^[0-9a-fA-F]{64}$/.test(tx.paymentHash || '') ? (
           <TransactionTagPicker
             key={`${pubkey}:${tx.paymentHash}`}
             paymentHash={tx.paymentHash.toLowerCase()}
+            tag={currentTag}
             onSaved={tag => setSavedTag({ pubkey, tag })}
           />
         ) : null}
