@@ -3,57 +3,38 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import { SpeedInsights } from '@vercel/speed-insights/next'
 import { Providers } from './providers'
-import { GoogleAnalytics } from '@/components/analytics/google-analytics'
 import { DevBanner } from '@/components/dev-banner'
-import { TreasureChestPreload } from '@/components/treasure-chest-preload'
-import { getSettings } from '@/lib/settings'
+import { themeBootScript } from '@/lib/client/theme-presets'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'LaWallet NWC',
-  description: 'Lightning Addresses for Everyone'
+  description: 'Lightning Addresses for Everyone',
+  // Page translators (Chrome/Google Translate) rewrap React-owned text nodes
+  // in <font>, so React's next commit throws NotFoundError on insertBefore /
+  // removeChild and the wallet crashes on navigation. The wallet ships its own
+  // translations instead (lib/client/i18n).
+  other: { google: 'notranslate' }
 }
 
-// The Google Tag ID lives in the DB so admins can set it without a redeploy.
-// Failures here (transient outage, etc.) just mean we skip the analytics tag —
-// the rest of the layout must keep rendering.
-async function loadGtagId(): Promise<string | null> {
-  // `next build` prerenders this layout with no DB reachable. Skip the query
-  // outright during the build phase so it doesn't spam connection errors into
-  // the build log — the real value is fetched per-request at runtime.
-  if (process.env.NEXT_PHASE === 'phase-production-build') return null
-  try {
-    const settings = await getSettings(['gtag_id'])
-    return settings.gtag_id?.trim() || null
-  } catch {
-    return null
-  }
-}
-
-export default async function RootLayout({
+export default function RootLayout({
   children
 }: {
   children: React.ReactNode
 }) {
-  const gtagId = await loadGtagId()
-
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" translate="no" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Brand colour before first paint — see themeBootScript. */}
+        <script dangerouslySetInnerHTML={{ __html: themeBootScript() }} />
+      </head>
       <body
         className={`flex h-dvh flex-col overflow-y-auto bg-background ${inter.className}`}
       >
         {/* Visible only outside production (local `next dev`). */}
-        <link
-          rel="preload"
-          href="/animations/treasure-chest.lottie"
-          as="fetch"
-          crossOrigin="anonymous"
-        />
         {process.env.NODE_ENV !== 'production' && <DevBanner />}
-        <TreasureChestPreload />
-        <GoogleAnalytics gtagId={gtagId} />
         <Providers>{children}</Providers>
         <SpeedInsights />
       </body>

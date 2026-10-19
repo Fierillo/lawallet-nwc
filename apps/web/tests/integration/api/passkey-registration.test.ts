@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   generateSecretKey,
@@ -14,10 +15,19 @@ vi.mock('@/lib/config', () => ({
     maintenance: { enabled: false },
     rateLimit: { enabled: false },
     requestLimits: { maxJsonSize: 102400, maxBodySize: 1048576 },
+    android: {
+      packageName: 'io.lawallet.wallet',
+      certFingerprints: [
+        '14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5'
+      ]
+    },
     isDevelopment: false,
     isTest: true
   }))
 }))
+
+const { captureException } = vi.hoisted(() => ({ captureException: vi.fn() }))
+vi.mock('@sentry/nextjs', () => ({ captureException }))
 
 vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -102,6 +112,7 @@ import { linkPubkeyToAccount } from '@/lib/account/merge'
 import { createNewUser } from '@/lib/user'
 import { getSettings } from '@/lib/settings'
 import { Role } from '@/lib/auth/permissions'
+import { logger } from '@/lib/logger'
 
 const CHALLENGE = 'x'.repeat(43)
 
@@ -232,6 +243,44 @@ describe('POST /api/auth/passkey/registration/options', () => {
     }
   })
 
+  it('binds the RP to the page origin when it is this host, not the endpoint', async () => {
+    // endpoint (resolveApiUrl) says localhost:3000, but the page runs on
+    // wallet.example.com — login asserts with that hostname, so must we.
+    const response = await optionsRoute(
+      createNextRequest('/api/auth/passkey/registration/options', {
+        method: 'POST',
+        body: {},
+        headers: {
+          origin: 'https://wallet.example.com',
+          'x-forwarded-host': 'wallet.example.com'
+        }
+      })
+    )
+    const body = await response.json()
+    expect(body.options.rp.id).toBe('wallet.example.com')
+    expect(prismaMock.webAuthnChallenge.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        rpId: 'wallet.example.com',
+        origin: 'https://wallet.example.com'
+      })
+    })
+  })
+
+  it('ignores an Origin from another host and keeps the endpoint', async () => {
+    const response = await optionsRoute(
+      createNextRequest('/api/auth/passkey/registration/options', {
+        method: 'POST',
+        body: {},
+        headers: { origin: 'https://evil.example', host: 'localhost:3000' }
+      })
+    )
+    const body = await response.json()
+    expect(body.options.rp.id).toBe('localhost')
+    expect(prismaMock.webAuthnChallenge.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ origin: 'http://localhost:3000' })
+    })
+  })
+
   it('does not request community_name through the hot settings cache', async () => {
     await optionsRoute(
       createNextRequest('/api/auth/passkey/registration/options', {
@@ -277,6 +326,27 @@ describe('POST /api/auth/passkey/registration/verify — signup', () => {
     })
   })
 
+  it('accepts the web origin plus the Android apk-key-hash origins', async () => {
+    vi.mocked(resolveAccountByPubkey).mockResolvedValue(null)
+
+    const response = await verifyRoute(
+      createNextRequest('/api/auth/passkey/registration/verify', {
+        method: 'POST',
+        body: verifyBody()
+      })
+    )
+    expect(response.status).toBe(200)
+    expect(verifyRegistrationResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedOrigin: [
+          'http://localhost:3000',
+          'android:apk-key-hash:FG3pg8VzBlDY7rmVLzT8ZBagg0LmHb6oigSWsj_PROU'
+        ],
+        expectedRPID: 'localhost'
+      })
+    )
+  })
+
   it('attaches the credential when the derived pubkey already has an account', async () => {
     vi.mocked(resolveAccountByPubkey).mockResolvedValue({
       id: 'existing-user',
@@ -320,6 +390,55 @@ describe('POST /api/auth/passkey/registration/verify — signup', () => {
       })
     )
     expect(response.status).toBe(401)
+  })
+
+  it('401s generically but logs and reports why the attestation was rejected', async () => {
+    vi.stubEnv('SENTRY_DSN', 'https://key@sentry.example/1')
+    const reason = new Error('Unexpected registration response origin')
+    vi.mocked(verifyRegistrationResponse).mockRejectedValue(reason)
+    try {
+      const response = await verifyRoute(
+        createNextRequest('/api/auth/passkey/registration/verify', {
+          method: 'POST',
+          body: verifyBody()
+        })
+      )
+      expect(response.status).toBe(401)
+      expect((await response.json()).error.message).toBe(
+        'Passkey verification failed'
+      )
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        expect.objectContaining({ err: String(reason) }),
+        'Passkey registration verify rejected'
+      )
+      await vi.waitFor(() =>
+        expect(captureException).toHaveBeenCalledWith(
+          reason,
+          expect.objectContaining({ level: 'warning' })
+        )
+      )
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('still logs but skips Sentry when SENTRY_DSN is unset', async () => {
+    vi.stubEnv('SENTRY_DSN', '')
+    captureException.mockClear()
+    vi.mocked(verifyRegistrationResponse).mockRejectedValue(new Error('bad'))
+    try {
+      const response = await verifyRoute(
+        createNextRequest('/api/auth/passkey/registration/verify', {
+          method: 'POST',
+          body: verifyBody()
+        })
+      )
+      expect(response.status).toBe(401)
+      expect(vi.mocked(logger.warn)).toHaveBeenCalled()
+      expect(captureException).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('401s on challenge replay (row already consumed)', async () => {

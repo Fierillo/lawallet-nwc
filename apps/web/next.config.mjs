@@ -43,6 +43,13 @@ const nextConfig = {
   // server.js) so the Dockerfile COPY stays correct, and silences the
   // "inferred workspace root" warning.
   outputFileTracingRoot: join(__dirname, '../..'),
+  // `import.meta.glob('…/docs/changelogs/*.md', { query: '?raw' })` loads the
+  // release notes as strings for the What's New dialog (lib/client/changelog.ts).
+  turbopack: {
+    rules: {
+      '*.md': { condition: { query: '?raw' }, type: 'text' }
+    }
+  },
   allowedDevOrigins,
   async headers() {
     return [
@@ -55,6 +62,17 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
           { key: 'Referrer-Policy', value: 'no-referrer' }
+        ]
+      },
+      {
+        // The dotlottie runtime is versioned in its file name, so it never
+        // changes under the same URL.
+        source: '/animations/:file(dotlottie-player-.+\\.wasm)',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable'
+          }
         ]
       }
     ]

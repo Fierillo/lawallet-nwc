@@ -40,10 +40,10 @@ vi.mock('@/lib/lncurl', () => ({
 import {
   courtesyReviveTarget,
   createLncurlRemoteWallet,
-  mintCourtesyLncurlWallet,
   findCourtesyReviveTarget,
   isLncurlWalletConfig,
   lncurlHealTarget,
+  mintCourtesyLncurlWallet,
   reviveDeadCourtesyWallet
 } from '@/lib/wallet/lncurl-wallet'
 import { createLncurlWallet } from '@/lib/lncurl'
@@ -286,42 +286,39 @@ describe('mintCourtesyLncurlWallet', () => {
     expect(createLncurlWallet).not.toHaveBeenCalled()
   })
 
-  it('mints when LNCurl is enabled even if signup auto-create is off', async () => {
+  it('does not mint when auto-create is off, even with LNCurl enabled', async () => {
     vi.mocked(prismaMock.remoteWallet.findFirst).mockResolvedValue(null)
     vi.mocked(getSettings).mockResolvedValue({
       lncurl_enabled: 'true',
-      lncurl_auto_create: 'false',
-      lncurl_server_url: ''
+      lncurl_auto_create: 'false'
     })
+
+    await expect(mintCourtesyLncurlWallet(USER_ID)).resolves.toBeNull()
+    expect(createLncurlWallet).not.toHaveBeenCalled()
+  })
+
+  it('mints an unbound courtesy wallet when LNCurl auto-create is on', async () => {
+    vi.mocked(prismaMock.remoteWallet.findFirst).mockResolvedValue(null)
+    vi.mocked(getSettings).mockResolvedValue(enabled)
 
     const created = await mintCourtesyLncurlWallet(USER_ID)
 
     expect(created?.id).toBe('new-wallet')
-    expect(createLncurlWallet).toHaveBeenCalled()
+    expect(createLncurlWallet).toHaveBeenCalledWith('https://lncurl.example')
+    // The caller inserts the first address and stores the binding itself.
+    expect(prismaMock.lightningAddress.update).not.toHaveBeenCalled()
   })
 
-  it('mints a courtesy wallet and can bind the existing primary address', async () => {
+  it('falls back to the default LNCurl server when none is configured', async () => {
     vi.mocked(prismaMock.remoteWallet.findFirst).mockResolvedValue(null)
-    vi.mocked(getSettings).mockResolvedValue(enabled)
-    vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue({
-      username: 'alice'
-    } as never)
-
-    const created = await mintCourtesyLncurlWallet(USER_ID, {
-      bindPrimary: true
+    vi.mocked(getSettings).mockResolvedValue({
+      lncurl_enabled: 'true',
+      lncurl_auto_create: 'true'
     })
 
-    expect(created?.id).toBe('new-wallet')
-    expect(createLncurlWallet).toHaveBeenCalledWith('https://lncurl.example')
-    expect(prismaMock.lightningAddress.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { username: 'alice' },
-        data: expect.objectContaining({
-          mode: 'CUSTOM_NWC',
-          remoteWalletId: 'new-wallet'
-        })
-      })
-    )
+    await mintCourtesyLncurlWallet(USER_ID)
+
+    expect(createLncurlWallet).toHaveBeenCalledWith('https://lncurl.lol/')
   })
 })
 
@@ -410,72 +407,6 @@ describe('lncurlHealTarget', () => {
     expect(
       lncurlHealTarget({ mode: 'CUSTOM_NWC', boundWallet: deadLncurl }, ON)
     ).toEqual({ previousWalletId: 'w-dead' })
-  })
-})
-
-describe('bound courtesy wallet recovery regressions', () => {
-  it('replaces a DEAD LNCurl wallet and leaves the old row as a tombstone', async () => {
-    vi.mocked(getSettings).mockResolvedValue({
-      lncurl_enabled: 'true',
-      lncurl_auto_recreate: 'true',
-      lncurl_server_url: 'https://lncurl.example'
-    })
-
-    vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue({
-      mode: 'CUSTOM_NWC',
-      remoteWallet: {
-        id: 'w-dead',
-        status: 'DEAD',
-        config: { provider: 'lncurl' }
-      }
-    } as never)
-    const replaced = await reviveDeadCourtesyWallet(USER_ID)
-
-    expect(replaced).toBeTruthy()
-    expect(createLncurlWallet).toHaveBeenCalledWith('https://lncurl.example')
-    expect(prismaMock.lightningAddress.updateMany).toHaveBeenCalledWith({
-      where: { userId: USER_ID, remoteWalletId: 'w-dead' },
-      data: { remoteWalletId: 'new-wallet' }
-    })
-    expect(prismaMock.remoteWallet.updateMany).toHaveBeenCalledWith({
-      where: { id: 'w-dead', userId: USER_ID },
-      data: expect.objectContaining({ status: 'DEAD', isDefault: false })
-    })
-  })
-
-  it('leaves a DEAD non-LNCurl wallet in place', async () => {
-    vi.mocked(getSettings).mockResolvedValue({
-      lncurl_enabled: 'true',
-      lncurl_auto_recreate: 'true'
-    })
-
-    vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue({
-      mode: 'CUSTOM_NWC',
-      remoteWallet: {
-        id: 'w-own',
-        status: 'DEAD',
-        config: { provider: 'custom' }
-      }
-    } as never)
-    await expect(reviveDeadCourtesyWallet(USER_ID)).resolves.toBeNull()
-    expect(createLncurlWallet).not.toHaveBeenCalled()
-  })
-
-  it('does not touch an ACTIVE LNCurl wallet', async () => {
-    vi.mocked(getSettings).mockResolvedValue({
-      lncurl_enabled: 'true',
-      lncurl_auto_recreate: 'true'
-    })
-    vi.mocked(prismaMock.lightningAddress.findFirst).mockResolvedValue({
-      mode: 'CUSTOM_NWC',
-      remoteWallet: {
-        id: 'w-live',
-        status: 'ACTIVE',
-        config: { provider: 'lncurl' }
-      }
-    } as never)
-    await expect(reviveDeadCourtesyWallet(USER_ID)).resolves.toBeNull()
-    expect(createLncurlWallet).not.toHaveBeenCalled()
   })
 })
 

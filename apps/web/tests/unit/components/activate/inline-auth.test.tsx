@@ -121,7 +121,7 @@ describe('InlineAuth', () => {
     render(<InlineAuth onAuthStart={vi.fn()} />)
     await user.click(screen.getByRole('button', { name: 'Passkey' }))
     expect(
-      await screen.findByText(/passkey prompt was closed — try again/i)
+      await screen.findByText(/passkey prompt was closed or timed out — try again/i)
     ).toBeTruthy()
     expect(mocks.toastError).not.toHaveBeenCalled()
 
@@ -130,7 +130,7 @@ describe('InlineAuth', () => {
     )
     await user.click(screen.getByRole('button', { name: 'Passkey' }))
     expect(
-      await screen.findByText('This device already has a passkey.')
+      await screen.findByText(/This device already has a passkey/)
     ).toBeTruthy()
   })
 

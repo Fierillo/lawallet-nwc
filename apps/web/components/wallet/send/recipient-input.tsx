@@ -13,15 +13,18 @@ import {
   type ResolvedRecipient
 } from '@/lib/client/wallet-flow-store'
 import { contactsActions } from '@/lib/client/contacts-store'
+import { useT } from '@/lib/client/i18n'
+import { errorText } from '@/lib/client/i18n/errors'
 
 /**
- * Send-flow recipient step. The field is the shared
- * {@link LightningAddressInput}; saved recipients and domain suggestions stay
- * off this screen. What stays here is resolving the destination (a bolt11 or
- * LNURL as well as an address) and routing onward.
+ * Send-flow recipient step. The field itself — suggestions, saved recipients,
+ * avatars, keyboard handling — is the shared {@link LightningAddressInput};
+ * what stays here is what only the send flow does: resolve the destination
+ * (which may be a bolt11 or LNURL, not just an address) and route onward.
  */
 export function RecipientInput() {
   const router = useRouter()
+  const t = useT()
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -104,7 +107,7 @@ export function RecipientInput() {
       }
       // Leave the spinner up — this screen unmounts when the next one loads.
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid recipient'
+      const message = errorText(t, err, t.send.invalidRecipient)
       setError(message)
       toast.error(message)
       setLoading(false)
@@ -121,14 +124,12 @@ export function RecipientInput() {
           htmlFor="recipient"
           className="text-sm font-medium text-foreground"
         >
-          To
+          {t.send.to}
         </label>
         <LightningAddressInput
           id="recipient"
           variant="inline"
           allowNonAddress
-          hideContacts
-          hideSuggestions
           value={value}
           onChange={next => {
             setValue(next)
@@ -145,7 +146,7 @@ export function RecipientInput() {
 
       <div className="flex min-h-0 flex-1 items-center justify-center">
         {loading && (
-          <Spinner size={32} role="status" aria-label="Loading next screen" />
+          <Spinner size={32} role="status" aria-label={t.send.loadingNext} />
         )}
       </div>
 
@@ -160,7 +161,7 @@ export function RecipientInput() {
             <Spinner size={16} />
           ) : (
             <>
-              Continue
+              {t.common.continue}
               <ArrowRight className="size-4" />
             </>
           )}

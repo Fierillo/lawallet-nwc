@@ -10,10 +10,13 @@ import { ScreenHeader } from '@/components/wallet/shared/screen-header'
 import { useAuth } from '@/components/admin/auth-context'
 import { useSettings } from '@/lib/client/hooks/use-settings'
 import { createNsecSigner } from '@/lib/client/nostr-signer'
+import { postAuthPath } from '@/lib/client/pending-activation'
 import {
   registerPasskeyAccount,
   translatePasskeyError
 } from '@/lib/client/passkey-api'
+import { useT } from '@/lib/client/i18n'
+import { errorText } from '@/lib/client/i18n/errors'
 
 /**
  * Create-account flow for passkey users. The account's Nostr key is DERIVED
@@ -27,6 +30,8 @@ export function PasskeyCreateFlow() {
   const router = useRouter()
   const { login } = useAuth()
   const { data: settings } = useSettings()
+  const tAll = useT()
+  const t = tAll.onboarding.passkey
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const community = settings?.community_name?.trim() || null
@@ -39,14 +44,15 @@ export function PasskeyCreateFlow() {
       await login(createNsecSigner(identity.secretHex), 'passkey', {
         secret: identity.secretHex
       })
-      router.replace('/wallet/welcome')
+      router.replace(postAuthPath('/wallet/welcome'))
     } catch (err) {
       const passkeyError = translatePasskeyError(err)
       if (passkeyError.kind === 'cancelled') {
-        setError('Passkey prompt was closed — try again')
+        setError(t.cancelled)
       } else {
-        setError(passkeyError.message)
-        toast.error(passkeyError.message)
+        const message = errorText(tAll, passkeyError, passkeyError.message)
+        setError(message)
+        toast.error(message)
       }
       setBusy(false)
     }
@@ -54,31 +60,27 @@ export function PasskeyCreateFlow() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <ScreenHeader />
+      <ScreenHeader onBack={() => router.push('/wallet/signup')} />
       <div className="flex flex-1 flex-col justify-between pb-6 pt-2">
         <div className="space-y-6 pt-4">
           <div className="space-y-3">
             <h1 className="text-2xl font-semibold text-foreground">
-              Create with a passkey
+              {t.title}
             </h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              {community
-                ? `Your device creates a passkey for ${community} — Face ID, Touch ID, or screen lock. No passwords, nothing to write down.`
-                : 'Your device creates a passkey — Face ID, Touch ID, or screen lock. No passwords, nothing to write down.'}
+              {t.subtitle(community)}
             </p>
           </div>
 
           <ul className="space-y-4">
             <Benefit icon={<Fingerprint className="size-4" />}>
-              Sign in with just your fingerprint, face, or device PIN.
+              {t.benefitBiometric}
             </Benefit>
             <Benefit icon={<Cloud className="size-4" />}>
-              Works across your devices — synced passkeys sign in anywhere, and
-              any browser can use a phone via QR.
+              {t.benefitSync}
             </Benefit>
             <Benefit icon={<KeyRound className="size-4" />}>
-              Your Nostr key is derived from the passkey itself — the same key
-              on every device it syncs to, never stored on a server.
+              {t.benefitKey}
             </Benefit>
           </ul>
 
@@ -93,7 +95,7 @@ export function PasskeyCreateFlow() {
           disabled={busy}
         >
           {busy ? <Spinner size={16} /> : <Fingerprint className="size-4" />}
-          {busy ? 'Waiting for your device…' : 'Create my account'}
+          {busy ? t.waiting : t.submit}
         </Button>
       </div>
     </div>

@@ -15,7 +15,9 @@ import { verifySignedChallengeEvent } from '@/lib/account/proof'
 import { linkPubkeyToAccount } from '@/lib/account/merge'
 import { createNewUser } from '@/lib/user'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
+import { logger } from '@/lib/logger'
 import {
+  androidApkKeyHashOrigins,
   consumeWebAuthnChallenge,
   toCredentialSummary
 } from '@/lib/auth/passkey'
@@ -77,13 +79,31 @@ export const POST = withErrorHandling(async (request: Request) => {
     const result = await verifyRegistrationResponse({
       response: body.credential as unknown as RegistrationResponseJSON,
       expectedChallenge: row.challenge,
-      expectedOrigin: row.origin,
+      // The native Android wallet registers through Credential Manager,
+      // which stamps its signing-cert hash instead of a web origin.
+      expectedOrigin: [row.origin, ...androidApkKeyHashOrigins()],
       expectedRPID: row.rpId,
       requireUserVerification: true
     })
     verified = result.verified
     info = result.registrationInfo
-  } catch {
+  } catch (err) {
+    // The client only ever sees GENERIC_FAILURE (no oracle), so keep the real
+    // reason here — an origin/rpID mismatch behind a proxy only shows up here.
+    logger.warn(
+      { err: String(err), rpId: row.rpId, origin: row.origin },
+      'Passkey registration verify rejected'
+    )
+    if (process.env.SENTRY_DSN) {
+      import('@sentry/nextjs')
+        .then(Sentry =>
+          Sentry.captureException(err, {
+            level: 'warning',
+            tags: { area: 'passkey', 'passkey.phase': 'verify' }
+          })
+        )
+        .catch(() => {})
+    }
     verified = false
   }
   if (!verified || !info) {

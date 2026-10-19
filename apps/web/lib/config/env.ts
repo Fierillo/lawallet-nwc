@@ -194,6 +194,28 @@ const envSchema = z.object({
       'Prisma queries slower than this log at warn level (0 disables slow-query logging)'
     ),
 
+  DATABASE_POOL_MAX: z
+    .string()
+    .transform(val => parseInt(val, 10))
+    .pipe(z.number().int().positive())
+    .optional()
+    .describe(
+      'Max Postgres connections per web instance (default 3 on Vercel, 10 elsewhere)'
+    ),
+
+  // Data retention (run from the listener's reconcile tick, at most hourly)
+  DATA_RETENTION_DAYS: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .default('90')
+      .transform(val => parseInt(val, 10))
+      .pipe(z.number().int().nonnegative())
+      .describe(
+        'Days to keep the activity log, forwarding-hop markers and finished notification deliveries (0 keeps them forever)'
+      )
+  ),
+
   // Request Size Limits
   REQUEST_MAX_BODY_SIZE: z
     .string()
@@ -246,7 +268,48 @@ const envSchema = z.object({
     .string()
     .min(1, 'NOSTR_PROFILE_CACHE_DIR must not be empty')
     .optional()
-    .describe('Optional filesystem directory for cached Nostr profile images')
+    .describe('Optional filesystem directory for cached Nostr profile images'),
+
+  // Native Android wallet (App Links + passkeys via /.well-known/assetlinks.json)
+  ANDROID_APP_PACKAGE: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .regex(
+        /^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$/,
+        'ANDROID_APP_PACKAGE must be a valid Android package name'
+      )
+      .default('io.lawallet.wallet')
+      .describe('Package name of the native Android wallet app')
+  ),
+
+  ANDROID_APP_CERT_SHA256: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .optional()
+      .describe(
+        'Comma-separated SHA-256 signing-cert fingerprints (AA:BB:…) of the Android app. Empty disables Android App Links and native passkeys.'
+      )
+  ),
+
+  // iOS app association (passkeys + universal links). Unset → AASA is a 404.
+  APPLE_APP_IDS: z.preprocess(
+    emptyEnvToUndefined,
+    z
+      .string()
+      .optional()
+      .transform(
+        val =>
+          val
+            ?.split(',')
+            .map(id => id.trim())
+            .filter(Boolean) ?? []
+      )
+      .describe(
+        'Comma-separated Apple app IDs (TEAMID.bundle.id) served in /.well-known/apple-app-site-association'
+      )
+  )
 })
 
 /**
