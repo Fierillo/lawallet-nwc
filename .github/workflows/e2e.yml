@@ -56,26 +56,3 @@ jobs:
             apps/web/playwright-report/
             apps/web/e2e-results/
           retention-days: 14
-
-  bench:
-    name: Benchmarks (observational)
-    runs-on: ubuntu-latest
-    # Never gates the PR — numbers are machine-dependent trends, uploaded as
-    # an artifact for comparison.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @lawallet-nwc/web bench
-      - name: Upload bench results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: bench-results
-          path: apps/web/bench-results/latest.json
-          retention-days: 30
