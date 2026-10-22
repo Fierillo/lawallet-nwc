@@ -3,7 +3,7 @@
 # ── Build base: Node.js 24 (Debian Trixie Slim) + pnpm via corepack ────
 # corepack activates the exact pnpm pinned in package.json's "packageManager"
 # field — no floating `npm i -g pnpm@latest` version drift between builds.
-FROM node:24-trixie-slim AS base
+FROM node:24.22.1-trixie-slim AS base
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable \
     && corepack prepare pnpm@11.20.0 --activate
@@ -56,7 +56,7 @@ RUN DATABASE_URL=postgresql://build:build@localhost:5432/build \
     sh -c 'pnpm exec prisma generate && pnpm run build'
 
 # ── runner: minimal runtime image (no pnpm, no build toolchain) ────────
-FROM node:24-trixie-slim AS runner
+FROM node:24.22.1-trixie-slim AS runner
 WORKDIR /app
 ARG PRISMA_VERSION=7.10.0
 
