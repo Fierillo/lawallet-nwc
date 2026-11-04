@@ -313,6 +313,7 @@ model User {
   oauthGrants                        OAuthGrant[]
   mcpPayments                        McpPayment[]
   transactionLabels                  TransactionLabel[]
+  transactionNotes                   TransactionNote[]
   /// Whether a card this account holds may be used to recover the whole
   /// account onto another key (card-manager RECOVER QR). On by default; the
   /// owner turns it off in Security so a lost card can't take the account.
@@ -335,6 +336,16 @@ model TransactionLabel {
   userId      String
   paymentHash String @db.VarChar(64)
   label       String @db.VarChar(100)
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, paymentHash])
+}
+
+/// Private free-text note per transaction. Unlike tags, never listed or reused.
+model TransactionNote {
+  userId      String
+  paymentHash String @db.VarChar(64)
+  note        String @db.VarChar(280)
   user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, paymentHash])

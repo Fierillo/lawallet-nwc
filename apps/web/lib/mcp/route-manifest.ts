@@ -197,6 +197,8 @@ export const routeManifest: Record<string, () => Promise<RouteModule>> = {
     import('@/app/api/wallet/transaction-tags/route'),
   '/api/wallet/transactions/{paymentHash}/label': () =>
     import('@/app/api/wallet/transactions/[paymentHash]/label/route'),
+  '/api/wallet/transactions/{paymentHash}/note': () =>
+    import('@/app/api/wallet/transactions/[paymentHash]/note/route'),
   '/api/wallet/vouchers': () => import('@/app/api/wallet/vouchers/route'),
   '/api/wallet/vouchers/settings': () =>
     import('@/app/api/wallet/vouchers/settings/route'),

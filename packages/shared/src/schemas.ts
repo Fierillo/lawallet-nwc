@@ -26,6 +26,12 @@ export const updateTransactionLabelSchema = z.object({
   label: z.string().trim().max(TRANSACTION_LABEL_MAX_LENGTH)
 })
 
+export const TRANSACTION_NOTE_MAX_LENGTH = 280
+
+export const updateTransactionNoteSchema = z.object({
+  note: z.string().trim().max(TRANSACTION_NOTE_MAX_LENGTH)
+})
+
 /** A Nostr public key in the canonical wire format (lowercase hex, no npub). */
 export const hexPubkeySchema = z
   .string()
