@@ -79,6 +79,55 @@ registry.registerPath({
   }
 })
 
+const transactionNoteResponse = z.object({ note: z.string().nullable() })
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/transactions/{paymentHash}/note',
+  tags: [TAG],
+  summary: 'Read the caller’s private transaction note.',
+  description:
+    'Free-text notes are scoped to the authenticated account and never shared with counterparties. A hash without a note returns null.',
+  operationId: 'wallet.transactions.note.get',
+  security: protectedSecurity,
+  request: { params: schemas.TransactionLabelParam },
+  responses: {
+    200: inlineJsonResponse(
+      'Private note (never publicly cached).',
+      transactionNoteResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/transactions/{paymentHash}/note',
+  tags: [TAG],
+  summary: 'Save or remove the caller’s private transaction note.',
+  description:
+    'Upserts a note for this account and payment hash. Notes are trimmed and limited to 280 characters. Saving an empty note removes it.',
+  operationId: 'wallet.transactions.note.set',
+  security: protectedSecurity,
+  request: {
+    params: schemas.TransactionLabelParam,
+    body: {
+      content: {
+        'application/json': { schema: schemas.TransactionNoteUpdateRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved note, or null if removed.',
+      transactionNoteResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
 const walletAddressSchema = z
   .object({
     username: z.string(),
