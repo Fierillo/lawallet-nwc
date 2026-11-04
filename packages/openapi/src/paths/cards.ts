@@ -412,7 +412,11 @@ registry.registerPath({
         .object({
           p: z.string(),
           c: z.string(),
-          ctr: z.number().int()
+          ctr: z.number().int(),
+          url: z.string().openapi({
+            description:
+              'The exact `lnurlw://…/scan?p=…&c=…` URL a physical card emits for this tap.'
+          })
         })
         .openapi({ description: 'Public SUN params (no keys).' })
     ),
@@ -475,10 +479,10 @@ registry.registerPath({
   summary:
     'Resolve a scanned card and return the LNURL-withdraw flow entry point.',
   description:
-    'The first LNURL request on tap (LUD-03). `maxWithdrawable` is the bound wallet’s spendable ' +
-    'balance in millisatoshis. When that balance cannot be read in time, the response ' +
-    'advertises a high ceiling so a point of sale will not refuse a normal invoice; ' +
-    'the callback does not impose a fixed sats cap. A receivable card also includes LUD-19 ' +
+    'The first LNURL request on tap (LUD-03). A spendable card advertises a fixed ' +
+    '`maxWithdrawable` of 10,000,000 sats (in millisatoshis) without reading the wallet; ' +
+    'the wallet refuses what it cannot pay at the callback. An unspendable card advertises 0–0. ' +
+    'A receivable card also includes LUD-19 ' +
     '`payLink`, a raw LUD-17 `lnurlp://` URL (not bech32) whose payRequest mints an invoice ' +
     'on the card’s RemoteWallet — BoltCard SPEC’s optional pay-link extension ' +
     '(https://github.com/boltcard/boltcard/blob/main/docs/SPEC.md, ' +
@@ -517,6 +521,9 @@ registry.registerPath({
   path: '/api/cards/{id}/scan/cb',
   tags: [TAG],
   summary: 'LNURL-withdraw callback for a scanned card.',
+  description:
+    'Publishes the payment, then reads the wallet balance alongside it. When the balance exceeds the invoice the response is `OK` right away and the payment settles in the background (LUD-03 async); otherwise it waits for the payment result. ' +
+    '`balance` (msats) is a non-LNURL extension, included only when the card owner shares it.',
   operationId: 'cards.scan.callback',
   security: publicSecurity,
   request: { params: schemas.IdParam, query: schemas.CardScanCallbackQuery },
@@ -524,8 +531,15 @@ registry.registerPath({
     200: inlineJsonResponse(
       'LUD-03 callback response.',
       z.union([
-        z.object({ status: z.literal('OK') }),
-        z.object({ status: z.literal('ERROR'), reason: z.string() })
+        z.object({
+          status: z.literal('OK'),
+          balance: z.number().int().optional()
+        }),
+        z.object({
+          status: z.literal('ERROR'),
+          reason: z.string(),
+          balance: z.number().int().optional()
+        })
       ])
     ),
     ...publicErrorResponses

@@ -1,31 +1,26 @@
 import { logger } from '@/lib/logger'
 import { driverForWallet } from '@/lib/wallet/drivers'
 import type { CardWalletRoute } from '@/lib/wallet/resolve-payment-route'
-
-/** Keep the LNURL-withdraw response inside a BoltCard tap budget. */
-const BALANCE_PROBE_MS = 1_500
+import { recordWalletBalance } from '@/lib/wallet/last-balance'
 
 /**
- * Advertised only when the wallet balance cannot be read in time. This is not
- * a spend limit: the callback pays any exact invoice the wallet accepts.
- * `Number.MAX_SAFE_INTEGER` (~90,000 BTC in msats) stays inside JSON numbers,
- * so a point of sale that trusts the advertisement will not refuse a normal
- * invoice while the probe is down.
+ * How long the card callback waits for the wallet balance before falling back
+ * to the payment result. With web next to the listener the read is one relay
+ * round-trip (p95 ~500 ms).
  */
-const BALANCE_UNKNOWN_MSATS = Number.MAX_SAFE_INTEGER
+export const BALANCE_PROBE_MS = 600
 
 type SpendableCardWallet = Extract<CardWalletRoute, { kind: 'wallet' }>
 
 /**
- * LUD-03 `maxWithdrawable` for a configured card, in millisatoshis.
- *
- * The advertised ceiling is the wallet's live spendable balance, so a point
- * of sale will not mint an invoice the card cannot pay. A failed or slow
- * probe falls back to {@link BALANCE_UNKNOWN_MSATS}.
+ * The card wallet's spendable balance in msats, or `null` when it can't be
+ * read within `timeoutMs`. Never rejects; a probe that loses the race keeps
+ * running in the background and its late failure is swallowed.
  */
-export async function resolveCardMaxWithdrawableMsats(
-  route: SpendableCardWallet
-): Promise<number> {
+export async function probeCardBalanceMsats(
+  route: SpendableCardWallet,
+  timeoutMs = BALANCE_PROBE_MS
+): Promise<number | null> {
   const pending = readSpendableMsats(route)
   // A probe that loses the race must not surface later as an unhandled rejection.
   pending.catch(() => {})
@@ -37,16 +32,13 @@ export async function resolveCardMaxWithdrawableMsats(
       new Promise<number>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('Card balance probe timed out')),
-          BALANCE_PROBE_MS
+          timeoutMs
         )
       })
     ])
   } catch (err) {
-    logger.warn(
-      { err, walletId: route.walletId },
-      'Card scan balance unavailable; advertising a high withdraw ceiling'
-    )
-    return BALANCE_UNKNOWN_MSATS
+    logger.debug({ err, walletId: route.walletId }, 'Card balance probe failed')
+    return null
   } finally {
     clearTimeout(timer)
   }
@@ -59,8 +51,10 @@ async function readSpendableMsats(route: SpendableCardWallet): Promise<number> {
     config: route.config
   })
   const { balanceSats } = await driver.getBalance(config)
+  // Not awaited: the write must not eat into the tap's BALANCE_PROBE_MS window.
+  if (route.walletId) void recordWalletBalance(route.walletId, balanceSats)
   if (!Number.isSafeInteger(balanceSats) || balanceSats <= 0) return 0
   const msats = balanceSats * 1000
-  if (!Number.isSafeInteger(msats)) return BALANCE_UNKNOWN_MSATS
+  if (!Number.isSafeInteger(msats)) throw new Error('Balance out of range')
   return msats
 }

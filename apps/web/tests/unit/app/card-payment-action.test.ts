@@ -22,7 +22,23 @@ const mocks = vi.hoisted(() => ({
   findWallet: vi.fn(),
   canSend: vi.fn(),
   activity: vi.fn(),
-  emit: vi.fn()
+  emit: vi.fn(),
+  reportError: vi.fn(),
+  probeBalance: vi.fn(),
+  after: vi.fn()
+}))
+
+vi.mock('next/server', async importOriginal => ({
+  ...(await importOriginal<typeof import('next/server')>()),
+  after: mocks.after
+}))
+
+vi.mock('@/lib/card-payments/balance-probe', () => ({
+  probeCardBalanceMsats: mocks.probeBalance
+}))
+
+vi.mock('@/lib/observability/report', () => ({
+  reportError: mocks.reportError
 }))
 
 vi.mock('light-bolt11-decoder', () => ({ decode: mocks.decode }))
@@ -105,7 +121,10 @@ vi.mock('@/lib/logger', () => ({
 import pay, {
   type CardPaymentActionCard
 } from '@/app/api/cards/[id]/scan/cb/actions/pay'
-import { PaymentOutcomeUnknownError } from '@/lib/wallet/drivers'
+import {
+  PaymentOutcomeUnknownError,
+  PaymentRejectedError
+} from '@/lib/wallet/drivers'
 
 const PAYMENT_HASH = 'ab'.repeat(32)
 const INVOICE = 'lnbc-card-payment'
@@ -174,7 +193,11 @@ function attempt(
 }
 
 async function responseBody(response: Response) {
-  return response.json() as Promise<{ status: string; reason?: string }>
+  return response.json() as Promise<{
+    status: string
+    reason?: string
+    balance?: number
+  }>
 }
 
 describe('card payment callback action', () => {
@@ -211,6 +234,7 @@ describe('card payment callback action', () => {
     mocks.getInFlight.mockReturnValue(null)
     mocks.getListenerPayment.mockResolvedValue(null)
     mocks.reconcileDirect.mockResolvedValue(null)
+    mocks.probeBalance.mockResolvedValue(null)
   })
 
   afterEach(() => {
@@ -534,6 +558,7 @@ describe('card payment callback action', () => {
       ...card,
       remoteWallet: null,
       user: {
+        cardBalanceShared: true,
         lightningAddresses: [
           {
             mode,
@@ -650,6 +675,174 @@ describe('card payment callback action', () => {
     expect(mocks.driverPay).toHaveBeenCalledTimes(1)
     expect(mocks.getInFlight).not.toHaveBeenCalled()
     expect(mocks.reconcileDirect).not.toHaveBeenCalled()
+    expect(mocks.reportError).toHaveBeenCalledWith(
+      expect.any(PaymentOutcomeUnknownError),
+      'card-pay',
+      'warning'
+    )
+  })
+
+  describe('balance read alongside the payment', () => {
+    const paid = {
+      preimage: '01'.repeat(32),
+      feesPaidSats: 0,
+      feesPaidMsats: 0,
+      transport: 'DIRECT' as const
+    }
+    const sharing = (cardBalanceShared: boolean): CardPaymentActionCard => ({
+      ...card,
+      user: { cardBalanceShared, lightningAddresses: [] }
+    })
+
+    function deferred<T>() {
+      let resolve!: (value: T) => void
+      const promise = new Promise<T>(r => {
+        resolve = r
+      })
+      return { promise, resolve }
+    }
+
+    beforeEach(() => {
+      mocks.claim.mockResolvedValue({ outcome: 'CREATED', attempt: attempt() })
+    })
+
+    it('answers OK with the balance before a slow payment settles', async () => {
+      const settle = deferred<typeof paid>()
+      mocks.driverPay.mockReturnValue(settle.promise)
+      mocks.probeBalance.mockResolvedValue(5_000)
+
+      const response = await pay(request(), sharing(true), 7)
+
+      expect(await responseBody(response)).toEqual({
+        status: 'OK',
+        balance: 5_000
+      })
+      expect(mocks.succeed).not.toHaveBeenCalled()
+      expect(mocks.after).toHaveBeenCalledTimes(1)
+
+      // The payment keeps running under after() and still resolves the attempt.
+      settle.resolve(paid)
+      await mocks.after.mock.calls[0][0]
+      expect(mocks.succeed).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports a background payment that fails after the early OK', async () => {
+      const settle = deferred<typeof paid>()
+      const dbDown = new Error('db down')
+      mocks.driverPay.mockReturnValue(settle.promise)
+      mocks.probeBalance.mockResolvedValue(5_000)
+      // Invalid preimage + failing UNKNOWN write is the one way handleSuccess rejects.
+      mocks.preimageMatches.mockReturnValue(false)
+      mocks.markUnknown.mockRejectedValue(dbDown)
+
+      const response = await pay(request(), sharing(true), 7)
+      expect((await responseBody(response)).status).toBe('OK')
+
+      settle.resolve(paid)
+      await mocks.after.mock.calls[0][0]
+      expect(mocks.reportError).toHaveBeenCalledWith(dbDown, 'card-pay')
+    })
+
+    it('hides the balance when the owner does not share it', async () => {
+      mocks.driverPay.mockReturnValue(new Promise(() => {}))
+      mocks.probeBalance.mockResolvedValue(5_000)
+
+      const response = await pay(request(), sharing(false), 7)
+
+      expect(await responseBody(response)).toEqual({ status: 'OK' })
+      expect(mocks.after).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns the real result when the payment beats the balance', async () => {
+      const balance = deferred<number | null>()
+      mocks.driverPay.mockResolvedValue(paid)
+      mocks.probeBalance.mockReturnValue(balance.promise)
+
+      const pending = pay(request(), sharing(true), 7)
+      await vi.waitFor(() => expect(mocks.succeed).toHaveBeenCalled())
+      balance.resolve(4_000)
+
+      expect(await responseBody(await pending)).toEqual({
+        status: 'OK',
+        balance: 4_000
+      })
+      expect(mocks.after).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['equals', 1_000],
+      ['is below', 999],
+      ['is unknown', null]
+    ])(
+      'waits for the wallet when the balance %s the invoice',
+      async (_label, balanceMsats) => {
+        const rejection = new PaymentRejectedError('insufficient balance')
+        mocks.driverPay.mockRejectedValue(rejection)
+        mocks.probeBalance.mockResolvedValue(balanceMsats)
+
+        const response = await pay(request(), sharing(true), 7)
+
+        expect(await responseBody(response)).toEqual({
+          status: 'ERROR',
+          reason: 'Payment was rejected by the wallet',
+          ...(balanceMsats === null ? {} : { balance: balanceMsats })
+        })
+        expect(mocks.after).not.toHaveBeenCalled()
+      }
+    )
+  })
+
+  describe('when the paid result cannot be persisted', () => {
+    const persistError = new Error('ledger write failed')
+
+    beforeEach(() => {
+      mocks.claim.mockResolvedValue({ outcome: 'CREATED', attempt: attempt() })
+      mocks.driverPay.mockResolvedValue({
+        preimage: '01'.repeat(32),
+        feesPaidSats: 0,
+        feesPaidMsats: 0,
+        transport: 'DIRECT'
+      })
+      mocks.succeed.mockRejectedValue(persistError)
+    })
+
+    it('reports the failure and marks the attempt UNKNOWN', async () => {
+      const response = await pay(request(), card, 7)
+
+      expect(await responseBody(response)).toEqual({
+        status: 'ERROR',
+        reason: 'Payment outcome is still being resolved'
+      })
+      expect(mocks.markUnknown).toHaveBeenCalledWith(
+        'attempt-1',
+        'PAYMENT_PERSISTENCE_ERROR',
+        'DIRECT'
+      )
+      expect(mocks.reportError).toHaveBeenCalledTimes(1)
+      expect(mocks.reportError).toHaveBeenCalledWith(persistError, 'card-pay')
+    })
+
+    it('also reports when marking the attempt UNKNOWN fails', async () => {
+      const markError = new Error('db down')
+      mocks.markUnknown.mockRejectedValue(markError)
+
+      const response = await pay(request(), card, 7)
+
+      expect(await responseBody(response)).toEqual({
+        status: 'ERROR',
+        reason: 'Payment outcome is still being resolved'
+      })
+      expect(mocks.reportError).toHaveBeenNthCalledWith(
+        1,
+        persistError,
+        'card-pay'
+      )
+      expect(mocks.reportError).toHaveBeenNthCalledWith(
+        2,
+        markError,
+        'card-pay'
+      )
+    })
   })
 
   it.each([

@@ -6,11 +6,15 @@ vi.mock('@/lib/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }))
 
+vi.mock('@/lib/wallet/last-balance', () => ({
+  recordWalletBalance: vi.fn()
+}))
+
 vi.mock('@/lib/wallet/drivers', () => ({
   driverForWallet
 }))
 
-import { resolveCardMaxWithdrawableMsats } from '@/lib/card-payments/max-withdrawable'
+import { probeCardBalanceMsats } from '@/lib/card-payments/balance-probe'
 
 const route = {
   kind: 'wallet' as const,
@@ -30,52 +34,51 @@ beforeEach(() => {
   driverForWallet.mockReset()
 })
 
-describe('resolveCardMaxWithdrawableMsats', () => {
-  it('advertises the live balance in msats', async () => {
+describe('probeCardBalanceMsats', () => {
+  it('returns the live balance in msats', async () => {
     balance(12_345)
 
-    await expect(resolveCardMaxWithdrawableMsats(route)).resolves.toBe(
-      12_345_000
-    )
+    await expect(probeCardBalanceMsats(route)).resolves.toBe(12_345_000)
   })
 
   it('reads the balance when the route has no wallet id', async () => {
     balance(8)
 
     await expect(
-      resolveCardMaxWithdrawableMsats({ ...route, walletId: null })
+      probeCardBalanceMsats({ ...route, walletId: null })
     ).resolves.toBe(8_000)
     expect(driverForWallet).toHaveBeenCalledWith(
       expect.objectContaining({ id: undefined })
     )
   })
 
-  it('advertises nothing when the wallet is empty or the balance is unusable', async () => {
+  it('reports 0 when the wallet is empty or the balance is unusable', async () => {
     for (const balanceSats of [0, -5, 1.5, Number.POSITIVE_INFINITY]) {
       balance(balanceSats)
-      await expect(resolveCardMaxWithdrawableMsats(route)).resolves.toBe(0)
+      await expect(probeCardBalanceMsats(route)).resolves.toBe(0)
     }
   })
 
-  it('advertises a high ceiling when the balance cannot be represented in msats', async () => {
+  it('returns null when the balance cannot be represented in msats', async () => {
     balance(Math.floor(Number.MAX_SAFE_INTEGER / 1000) + 1)
 
-    await expect(resolveCardMaxWithdrawableMsats(route)).resolves.toBe(
-      Number.MAX_SAFE_INTEGER
-    )
+    await expect(probeCardBalanceMsats(route)).resolves.toBeNull()
   })
 
-  it('falls back to a high ceiling when the balance probe fails', async () => {
+  it('returns null when the wallet errors or the driver cannot be built', async () => {
+    driverForWallet.mockReturnValue({
+      driver: { getBalance: vi.fn().mockRejectedValue(new Error('down')) },
+      config: {}
+    })
+    await expect(probeCardBalanceMsats(route)).resolves.toBeNull()
+
     driverForWallet.mockImplementation(() => {
       throw new Error('bad config')
     })
-
-    await expect(resolveCardMaxWithdrawableMsats(route)).resolves.toBe(
-      Number.MAX_SAFE_INTEGER
-    )
+    await expect(probeCardBalanceMsats(route)).resolves.toBeNull()
   })
 
-  it('falls back when the balance probe exceeds the tap budget', async () => {
+  it('gives up at the budget (600 ms by default, or the caller\'s)', async () => {
     vi.useFakeTimers()
     driverForWallet.mockReturnValue({
       driver: { getBalance: () => new Promise(() => {}) },
@@ -83,15 +86,19 @@ describe('resolveCardMaxWithdrawableMsats', () => {
     })
 
     try {
-      const pending = resolveCardMaxWithdrawableMsats(route)
-      await vi.advanceTimersByTimeAsync(1_500)
-      await expect(pending).resolves.toBe(Number.MAX_SAFE_INTEGER)
+      const byDefault = probeCardBalanceMsats(route)
+      await vi.advanceTimersByTimeAsync(600)
+      await expect(byDefault).resolves.toBeNull()
+
+      const custom = probeCardBalanceMsats(route, 50)
+      await vi.advanceTimersByTimeAsync(50)
+      await expect(custom).resolves.toBeNull()
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('swallows a probe that rejects after the tap budget has already elapsed', async () => {
+  it('swallows a probe that rejects after the budget has already elapsed', async () => {
     vi.useFakeTimers()
     let rejectProbe: ((err: Error) => void) | undefined
     driverForWallet.mockReturnValue({
@@ -111,9 +118,9 @@ describe('resolveCardMaxWithdrawableMsats', () => {
     process.on('unhandledRejection', onUnhandled)
 
     try {
-      const pending = resolveCardMaxWithdrawableMsats(route)
-      await vi.advanceTimersByTimeAsync(1_500)
-      await expect(pending).resolves.toBe(Number.MAX_SAFE_INTEGER)
+      const pending = probeCardBalanceMsats(route)
+      await vi.advanceTimersByTimeAsync(600)
+      await expect(pending).resolves.toBeNull()
       rejectProbe?.(new Error('late balance failure'))
       await vi.advanceTimersByTimeAsync(0)
       expect(unhandled).toEqual([])

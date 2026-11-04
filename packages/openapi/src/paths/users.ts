@@ -36,7 +36,23 @@ registry.registerPath({
 })
 
 const currentUserSchema = userSchema.extend({
-  currencyPrefs: schemas.CurrencyPrefs.nullable()
+  currencyPrefs: schemas.CurrencyPrefs.nullable(),
+  cardRecoveryEnabled: z.boolean(),
+  cardBalanceShared: z.boolean(),
+  accountTransfer: z
+    .object({
+      id: z.string(),
+      transferredAt: z.string().datetime(),
+      cardTitle: z.string().nullable(),
+      lightningAddresses: z.array(z.string()),
+      cards: z.number().int(),
+      remoteWallets: z.number().int()
+    })
+    .nullable()
+    .openapi({
+      description:
+        'Set when a card recovery moved this account’s resources to another account and the owner has not dismissed the notice yet.'
+    })
 })
 
 registry.registerPath({
@@ -76,6 +92,75 @@ registry.registerPath({
       z.object({
         currencyPrefs: schemas.CurrencyPrefs
       })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/users/me/card-recovery',
+  tags: [TAG],
+  summary: 'Allow or forbid recovering this account with one of its cards.',
+  description:
+    'Turning it off also revokes any outstanding RECOVER QR for the caller’s cards.',
+  operationId: 'users.me.cardRecovery.set',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.CardRecoverySettingRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Card recovery setting saved.',
+      z.object({ cardRecoveryEnabled: z.boolean() })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/users/me/card-balance-sharing',
+  tags: [TAG],
+  summary: 'Share or hide this account’s balance on card taps.',
+  description:
+    'When on, a card tap’s LNURL-withdraw callback includes the paying wallet’s balance (msats) so the point of sale can show it.',
+  operationId: 'users.me.cardBalanceSharing.set',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.CardBalanceSharingSettingRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Card balance sharing setting saved.',
+      z.object({ cardBalanceShared: z.boolean() })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'post',
+  path: '/api/users/me/account-transfer/dismiss',
+  tags: [TAG],
+  summary: 'Dismiss the “your account was transferred” notice.',
+  operationId: 'users.me.accountTransfer.dismiss',
+  security: protectedSecurity,
+  responses: {
+    200: inlineJsonResponse(
+      'Notice dismissed.',
+      z.object({ dismissed: z.number().int() })
     ),
     ...commonErrorResponses
   }

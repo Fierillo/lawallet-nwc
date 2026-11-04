@@ -9,6 +9,7 @@ import {
   parseExactPaymentInvoice
 } from '@/lib/invoice-utils'
 import { logger } from '@/lib/logger'
+import { reportError } from '@/lib/observability/report'
 import {
   McpToolError,
   type JsonSchema,
@@ -32,6 +33,7 @@ import { nwcWalletCanSend } from '@/lib/wallet/nwc-send-capability'
 import { getPrimaryRemoteWalletForUser } from '@/lib/wallet/primary-wallet'
 import { parseLightningAddress } from '@/lib/wallet/resolve-payment-route'
 import { NotFoundError } from '@/types/server/errors'
+import { recordWalletBalance } from '@/lib/wallet/last-balance'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 /** Sanity cap on amount arguments; the grant budget is the real spend limit. */
@@ -446,6 +448,7 @@ function outcomeOf(error: unknown): Outcome {
   // PaymentOutcomeUnknownError, an ambiguous rejection, or anything else once
   // the driver was invoked: the payment may be out there.
   logger.error({ err: error }, 'mcp.payment_outcome_unknown')
+  reportError(error, 'mcp-pay', 'warning')
   return { status: 'UNKNOWN', error: 'OUTCOME_UNKNOWN' }
 }
 
@@ -466,6 +469,7 @@ async function settle(
     !preimageMatchesPaymentHash(outcome.preimage, payment.paymentHash)
   ) {
     logger.error({ paymentId: payment.id }, 'mcp.payment_preimage_mismatch')
+    reportError('mcp.payment_preimage_mismatch', 'mcp-pay')
     outcome = { status: 'UNKNOWN', error: 'PREIMAGE_MISMATCH' }
   }
   const data =
@@ -503,6 +507,7 @@ async function settle(
     logOutcome(next, grant)
   } catch (err) {
     logger.error({ err, paymentId: payment.id }, 'mcp.payment_ledger_failed')
+    reportError(err, 'mcp-pay')
   }
   return next
 }
@@ -753,6 +758,7 @@ export const walletTools: NativeTool[] = [
         () => driver.getBalance(config),
         `Could not read the balance of wallet "${wallet.name}": the wallet is unreachable or refused the request.`
       )
+      await recordWalletBalance(wallet.id, balanceSats)
       return { walletId: wallet.id, walletName: wallet.name, balanceSats }
     }
   }),

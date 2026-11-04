@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import type {
   CardPaymentAttempt,
   CardPaymentTransport,
@@ -8,6 +8,7 @@ import type {
 import { prisma } from '@/lib/prisma'
 import type { LUD03CallbackError, LUD03CallbackSuccess } from '@/types/lnurl'
 import { logger } from '@/lib/logger'
+import { reportError } from '@/lib/observability/report'
 import { payActionQuerySchema } from '@/lib/validation/schemas'
 import { validateQuery } from '@/lib/validation/middleware'
 import {
@@ -44,6 +45,7 @@ import {
   resolveListenerBridge
 } from '@/lib/wallet/drivers/listener-transport'
 import { nwcWalletCanSend } from '@/lib/wallet/nwc-send-capability'
+import { probeCardBalanceMsats } from '@/lib/card-payments/balance-probe'
 import { derivePrimaryWallet } from '@/lib/wallet/primary-wallet'
 import { ActivityEvent, logActivity } from '@/lib/activity-log'
 import { eventBus } from '@/lib/events/event-bus'
@@ -55,6 +57,7 @@ export interface CardPaymentActionCard {
   ntag424Cid: string | null
   remoteWallet: StoredWallet | null
   user: {
+    cardBalanceShared: boolean
     lightningAddresses: Array<{
       mode: LightningAddressMode
       remoteWalletId: string | null
@@ -190,8 +193,12 @@ export default async function pay(
     'Card payment claimed'
   )
 
-  try {
-    const result = await resolved.driver.payInvoice(
+  // Publish first, then read the balance alongside. LUD-03 lets the service
+  // answer OK and pay asynchronously, and the point of sale confirms on its
+  // own invoice, so once the wallet shows more than the invoice the tap is
+  // answered without waiting for the Lightning payment to settle.
+  const payment = resolved.driver
+    .payInvoice(
       resolved.config,
       { bolt11: invoice.bolt11 },
       {
@@ -205,10 +212,52 @@ export default async function pay(
           switchCardPaymentAttemptToDirect(claim.attempt.id)
       }
     )
-    return handleSuccess(claim.attempt, result, route.type)
-  } catch (error) {
-    return handleDispatchError(claim.attempt, error, route.type)
+    .then(
+      result => handleSuccess(claim.attempt, result, route.type),
+      error => handleDispatchError(claim.attempt, error, route.type)
+    )
+  const balance = probeCardBalanceMsats(route)
+  const shared = card.user?.cardBalanceShared ?? false
+
+  const first = await Promise.race([
+    payment.then(response => ({ response })),
+    balance.then(balanceMsats => ({ balanceMsats }))
+  ])
+  if (
+    'balanceMsats' in first &&
+    first.balanceMsats !== null &&
+    first.balanceMsats > invoice.amountMsats
+  ) {
+    after(
+      payment.catch(error => {
+        logger.error(
+          { err: error, requestId: claim.attempt.requestId },
+          'Background card payment failed'
+        )
+        reportError(error, 'card-pay')
+      })
+    )
+    logger.info(
+      { cardId: card.id, requestId: claim.attempt.requestId },
+      'Card payment acknowledged before settlement'
+    )
+    return withBalance(ludSuccess(), shared ? first.balanceMsats : null)
   }
+  const response = await payment
+  return withBalance(response, shared ? await balance : null)
+}
+
+/** Adds the owner-shared wallet balance (msats) to a LUD-03 callback body. */
+async function withBalance(
+  response: NextResponse,
+  balanceMsats: number | null
+): Promise<NextResponse> {
+  if (balanceMsats === null) return response
+  const body = await response.json()
+  return NextResponse.json(
+    { ...body, balance: balanceMsats },
+    { status: response.status, headers: response.headers }
+  )
 }
 
 async function claimError(
@@ -408,11 +457,15 @@ async function handleSuccess(
       { err: error, requestId: attempt.requestId },
       'Card payment result could not be persisted'
     )
+    reportError(error, 'card-pay')
     await markCardPaymentUnknown(
       attempt.id,
       'PAYMENT_PERSISTENCE_ERROR',
       result.transport ?? attempt.transport
-    ).catch(() => false)
+    ).catch(err => {
+      reportError(err, 'card-pay')
+      return false
+    })
     return ludError('Payment outcome is still being resolved', true)
   }
 }
@@ -456,6 +509,8 @@ async function handleDispatchError(
     { err: error, requestId: attempt.requestId, transport },
     'Card payment outcome is unknown'
   )
+  // Usually a slow wallet, resolved later by lookup: worth seeing, not paging.
+  reportError(error, 'card-pay', 'warning')
   return transitioned
     ? ludError('Payment outcome is still being resolved', true)
     : responseFromCurrentAttempt(attempt.id)
