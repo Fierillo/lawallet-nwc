@@ -345,7 +345,7 @@ model TransactionLabel {
 model TransactionNote {
   userId      String
   paymentHash String @db.VarChar(64)
-  note        String @db.VarChar(280)
+  note        String @db.VarChar(80)
   user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, paymentHash])

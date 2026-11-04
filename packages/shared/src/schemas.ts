@@ -26,7 +26,7 @@ export const updateTransactionLabelSchema = z.object({
   label: z.string().trim().max(TRANSACTION_LABEL_MAX_LENGTH)
 })
 
-export const TRANSACTION_NOTE_MAX_LENGTH = 280
+export const TRANSACTION_NOTE_MAX_LENGTH = 80
 
 export const updateTransactionNoteSchema = z.object({
   note: z.string().trim().max(TRANSACTION_NOTE_MAX_LENGTH)

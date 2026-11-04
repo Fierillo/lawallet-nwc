@@ -103,18 +103,18 @@ describe('private transaction note', () => {
     })
   })
 
-  it('accepts a 280-character note', async () => {
+  it('accepts an 80-character note', async () => {
     const response = await route.PUT(
       createNextRequest(path, {
         method: 'PUT',
-        body: { note: 'x'.repeat(280) }
+        body: { note: 'x'.repeat(80) }
       }),
       createParamsPromise({ paymentHash: hash })
     )
     expect(response.status).toBe(200)
   })
 
-  it.each(['x'.repeat(281), 42, null, { note: 'hidden' }])(
+  it.each(['x'.repeat(81), 42, null, { note: 'hidden' }])(
     'rejects invalid notes (%j)',
     async note => {
       const response = await route.PUT(

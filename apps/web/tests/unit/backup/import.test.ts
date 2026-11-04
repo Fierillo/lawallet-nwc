@@ -37,6 +37,7 @@ import {
 } from '@/lib/validation/schemas'
 import type { ParsedBackup } from '@/lib/backup/archive'
 import { applyBackup } from '@/lib/backup/import'
+import { ROW_SCHEMAS } from '@/lib/backup/row-schemas'
 import { emitRestoreEvents } from '@/lib/backup/events'
 import { eventBus } from '@/lib/events/event-bus'
 
@@ -612,6 +613,21 @@ describe('private transaction notes', () => {
     expect(prismaMock.transactionNote.create).toHaveBeenCalledWith({
       data: { ...NOTE_ROW, userId: LIVE_USER.id }
     })
+  })
+
+  it('rejects backup notes longer than 80 characters', () => {
+    expect(
+      ROW_SCHEMAS.transactionNotes.safeParse({
+        ...NOTE_ROW,
+        note: 'x'.repeat(80)
+      }).success
+    ).toBe(true)
+    expect(
+      ROW_SCHEMAS.transactionNotes.safeParse({
+        ...NOTE_ROW,
+        note: 'x'.repeat(81)
+      }).success
+    ).toBe(false)
   })
 
   it('restores notes keyed by account and payment hash', async () => {
