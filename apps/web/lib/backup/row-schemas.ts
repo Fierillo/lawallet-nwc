@@ -3,7 +3,8 @@ import { Prisma } from '@/lib/generated/prisma'
 import {
   type BackupTableName,
   storedImageUrlSchema,
-  TRANSACTION_LABEL_MAX_LENGTH
+  TRANSACTION_LABEL_MAX_LENGTH,
+  TRANSACTION_NOTE_MAX_LENGTH
 } from '@/lib/validation/schemas'
 import { TABLE_DESCRIPTORS } from '@/lib/backup/tables'
 
@@ -71,6 +72,12 @@ const transactionLabelRow = z.object({
   userId: z.string().min(1),
   paymentHash: z.string().regex(/^[0-9a-fA-F]{64}$/),
   label: z.string().min(1).max(TRANSACTION_LABEL_MAX_LENGTH)
+})
+
+const transactionNoteRow = z.object({
+  userId: z.string().min(1),
+  paymentHash: z.string().regex(/^[0-9a-fA-F]{64}$/),
+  note: z.string().min(1).max(TRANSACTION_NOTE_MAX_LENGTH)
 })
 
 const cardDesignRow = z.object({
@@ -239,6 +246,7 @@ export const ROW_SCHEMAS: Record<
 > = {
   users: userRow,
   transactionLabels: transactionLabelRow,
+  transactionNotes: transactionNoteRow,
   cardDesigns: cardDesignRow,
   ntag424s: ntag424Row,
   remoteWallets: remoteWalletRow,

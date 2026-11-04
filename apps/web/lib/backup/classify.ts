@@ -21,6 +21,7 @@ type Row = Record<string, unknown>
 const TABLE_NOUNS: Record<BackupTableName, string> = {
   users: 'user',
   transactionLabels: 'transaction tag',
+  transactionNotes: 'transaction note',
   cardDesigns: 'card design',
   ntag424s: 'card chip',
   remoteWallets: 'remote wallet',
