@@ -17,6 +17,7 @@ describe('backup tables', () => {
       expect(resolved).toEqual([
         'users',
         'transactionLabels',
+        'transactionNotes',
         'cardDesigns',
         'ntag424s',
         'remoteWallets',

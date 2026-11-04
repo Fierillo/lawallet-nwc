@@ -574,6 +574,67 @@ describe('private transaction tags', () => {
   })
 })
 
+describe('private transaction notes', () => {
+  const NOTE_ROW: Row = {
+    userId: 'u1',
+    paymentHash: 'a'.repeat(64),
+    note: 'Split with Ana'
+  }
+  const BACKUP_USER: Row = {
+    id: 'u-backup',
+    pubkey: 'b'.repeat(64),
+    createdAt: '2026-01-01T00:00:00.000Z',
+    role: 'USER',
+    relays: null,
+    relaysUpdatedAt: null
+  }
+  const LIVE_USER: Row = { id: 'u-live', pubkey: BACKUP_USER.pubkey }
+
+  it('remaps notes to the live account when its pubkey already exists under another id', async () => {
+    ;(prismaMock.user.findMany as ReturnType<typeof vi.fn>).mockImplementation(
+      (args: { where?: Record<string, unknown> }) =>
+        Promise.resolve(args?.where && 'OR' in args.where ? [LIVE_USER] : [])
+    )
+    ;(
+      prismaMock.transactionNote.findMany as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([])
+    ;(
+      prismaMock.transactionNote.create as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(NOTE_ROW)
+
+    const parsed = buildParsedBackup(['core'], {
+      users: [BACKUP_USER],
+      transactionNotes: [{ ...NOTE_ROW, userId: BACKUP_USER.id }]
+    })
+    const result = await applyBackup(parsed, resolution([]))
+
+    expect(result.tables.transactionNotes?.imported).toBe(1)
+    expect(prismaMock.transactionNote.create).toHaveBeenCalledWith({
+      data: { ...NOTE_ROW, userId: LIVE_USER.id }
+    })
+  })
+
+  it('restores notes keyed by account and payment hash', async () => {
+    ;(prismaMock.user.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 'u1' }
+    ])
+    ;(
+      prismaMock.transactionNote.findMany as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([])
+    ;(
+      prismaMock.transactionNote.create as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(NOTE_ROW)
+
+    const parsed = makeParsed('transactionNotes', [NOTE_ROW])
+    const result = await applyBackup(parsed, resolution([]))
+
+    expect(result.tables.transactionNotes?.imported).toBe(1)
+    expect(prismaMock.transactionNote.create).toHaveBeenCalledWith({
+      data: NOTE_ROW
+    })
+  })
+})
+
 describe('emitRestoreEvents — rollback-aware SSE gating', () => {
   function tableResult(over: Partial<TableResult> = {}): TableResult {
     return {

@@ -29,6 +29,11 @@ const TRANSACTION_TAG = {
   paymentHash: 'b'.repeat(64),
   label: 'Coffee'
 }
+const TRANSACTION_NOTE = {
+  userId: 'user-1',
+  paymentHash: 'b'.repeat(64),
+  note: 'Split with Ana'
+}
 const CARD_DESIGN = {
   id: 'design-1',
   imageUrl: 'https://x/img.png',
@@ -107,6 +112,9 @@ function seedCoreTables() {
     prismaMock.transactionLabel.findMany as ReturnType<typeof vi.fn>
   ).mockResolvedValue([TRANSACTION_TAG])
   ;(
+    prismaMock.transactionNote.findMany as ReturnType<typeof vi.fn>
+  ).mockResolvedValue([TRANSACTION_NOTE])
+  ;(
     prismaMock.cardDesign.findMany as ReturnType<typeof vi.fn>
   ).mockResolvedValue([CARD_DESIGN])
   ;(prismaMock.ntag424.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -148,6 +156,7 @@ describe('backup export (buildBackup)', () => {
 
     expect(manifest.tables.users?.count).toBe(1)
     expect(manifest.tables.transactionLabels?.count).toBe(1)
+    expect(manifest.tables.transactionNotes?.count).toBe(1)
     expect(manifest.tables.cardDesigns?.count).toBe(1)
     expect(manifest.tables.ntag424s?.count).toBe(1)
     expect(manifest.tables.remoteWallets?.count).toBe(1)
@@ -159,6 +168,7 @@ describe('backup export (buildBackup)', () => {
       [
         'users',
         'transactionLabels',
+        'transactionNotes',
         'cardDesigns',
         'ntag424s',
         'remoteWallets',
@@ -188,6 +198,7 @@ describe('backup export (buildBackup)', () => {
     expect(parsed.manifest.schemaVersion).toBe(BACKUP_SCHEMA_VERSION)
     expect(parsed.tables.users).toHaveLength(1)
     expect(parsed.tables.transactionLabels).toHaveLength(1)
+    expect(parsed.tables.transactionNotes).toHaveLength(1)
     expect(parsed.tables.cardDesigns).toHaveLength(1)
     expect(parsed.tables.cardActivationTokens).toHaveLength(0)
     expect(
