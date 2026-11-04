@@ -14,6 +14,7 @@ import type { NwcTransaction } from '@/lib/client/nwc/transactions'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
+import { TransactionNotePill } from './transaction-note-pill'
 
 export function ActivityTransactionRow({
   tx,
@@ -34,6 +35,9 @@ export function ActivityTransactionRow({
       ? `/api/wallet/transactions/${tx.paymentHash.toLowerCase()}/label`
       : null
   const annotation = useApi<{ label: string | null }>(labelPath)
+  const noteResult = useApi<{ note: string | null }>(
+    labelPath ? labelPath.replace(/\/label$/, '/note') : null
+  )
   const currentTag =
     savedTag?.pubkey === pubkey
       ? savedTag?.tag
@@ -75,6 +79,11 @@ export function ActivityTransactionRow({
           />
         </button>
       </div>
+      {noteResult.data?.note && !noteResult.error ? (
+        <div className="-mt-1 mb-2 px-3">
+          <TransactionNotePill note={noteResult.data.note} />
+        </div>
+      ) : null}
       <div id={panelId} hidden={!expanded}>
         {expanded ? (
           <TransactionInformation

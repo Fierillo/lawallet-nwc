@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionLabel } from './transaction-label'
+import { TransactionNote } from './transaction-note'
 import { Send } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -339,10 +340,16 @@ export function ActivityDetailScreen({
           )}
         </PaymentProofCard>
         {!isActivityPreviewRequested() && /^[0-9a-fA-F]{64}$/.test(hash) ? (
-          <TransactionLabel
-            key={`${pubkey}:${hash}`}
-            paymentHash={hash.toLowerCase()}
-          />
+          <>
+            <TransactionLabel
+              key={`${pubkey}:${hash}`}
+              paymentHash={hash.toLowerCase()}
+            />
+            <TransactionNote
+              key={`note:${pubkey}:${hash}`}
+              paymentHash={hash.toLowerCase()}
+            />
+          </>
         ) : null}
       </PaymentReceiptLayout>
     </div>
