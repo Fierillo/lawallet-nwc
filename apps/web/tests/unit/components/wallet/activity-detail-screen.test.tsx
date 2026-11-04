@@ -17,6 +17,9 @@ const saveLabelMock = vi.hoisted(() => vi.fn())
 const privateLabel = vi.hoisted(() => ({
   label: 'Personal groceries' as string | null
 }))
+const privateNote = vi.hoisted(() => ({
+  note: 'Split with Ana' as string | null
+}))
 const refetchLabelMock = vi.hoisted(() => vi.fn(async () => undefined))
 const labelState = vi.hoisted(() => ({
   pubkey: 'test-owner',
@@ -47,22 +50,29 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/client/hooks/use-api', () => ({
   invalidateApiPath: vi.fn(),
   useApi: (path: string) =>
-    path?.endsWith('/label')
+    path?.endsWith('/note')
       ? {
-          data: privateLabel,
-          loading: labelState.loading,
-          error: labelState.error,
-          refetch: refetchLabelMock
-        }
-      : {
-          data: {
-            effectiveNwcString: 'nostr+walletconnect://test',
-            nwcString: 'nostr+walletconnect://test'
-          },
+          data: privateNote,
           loading: false,
           error: null,
-          refetch: async () => undefined
+          refetch: refetchLabelMock
         }
+      : path?.endsWith('/label')
+        ? {
+            data: privateLabel,
+            loading: labelState.loading,
+            error: labelState.error,
+            refetch: refetchLabelMock
+          }
+        : {
+            data: {
+              effectiveNwcString: 'nostr+walletconnect://test',
+              nwcString: 'nostr+walletconnect://test'
+            },
+            loading: false,
+            error: null,
+            refetch: async () => undefined
+          }
 }))
 
 vi.mock('@/lib/client/nwc', async importOriginal => {
@@ -159,6 +169,7 @@ describe('ActivityDetailScreen', () => {
     __resetActivityDetailStoreForTests()
     lookupTransactionMock.mockResolvedValue(null)
     privateLabel.label = 'Personal groceries'
+    privateNote.note = 'Split with Ana'
     labelState.pubkey = 'test-owner'
     labelState.loading = false
     labelState.error = null
@@ -166,6 +177,47 @@ describe('ActivityDetailScreen', () => {
     readByPaymentHashMock.mockResolvedValue(null)
     mockShare()
     window.history.replaceState({}, '', '/')
+  })
+
+  it('shows the private note as a pill and saves an edited note', async () => {
+    const user = userEvent.setup()
+    saveLabelMock.mockResolvedValue({ note: 'Rent for May' })
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+
+    expect(await screen.findByTestId('transaction-note')).toHaveTextContent(
+      'Split with Ana'
+    )
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(input).toHaveValue('Split with Ana')
+    expect(input).toHaveAttribute('maxLength', '280')
+    await user.clear(input)
+    await user.type(input, 'Rent for May')
+    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    expect(saveLabelMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      { note: 'Rent for May' }
+    )
+    expect(await screen.findByText('Note saved')).toBeInTheDocument()
+    expect(screen.getByTestId('transaction-note')).toHaveTextContent(
+      'Rent for May'
+    )
+  })
+
+  it('clears the note and hides the pill when saved empty', async () => {
+    const user = userEvent.setup()
+    saveLabelMock.mockResolvedValue({ note: null })
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+    const input = await screen.findByRole('textbox', { name: 'Note' })
+    await user.clear(input)
+    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    expect(saveLabelMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      { note: '' }
+    )
+    expect(await screen.findByText('Note removed')).toBeInTheDocument()
+    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
   })
 
   it('loads and edits the private transaction label', async () => {
