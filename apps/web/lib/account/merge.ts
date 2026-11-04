@@ -369,6 +369,18 @@ export async function mergeAccounts(params: {
       })
       await tx.transactionLabel.deleteMany({ where: { userId: absorbedId } })
     }
+    // Notes follow the same composite-PK rule as tags: survivor wins.
+    const absorbedNotes = await tx.transactionNote.findMany({
+      where: { userId: absorbedId },
+      select: { paymentHash: true, note: true }
+    })
+    if (absorbedNotes.length > 0) {
+      await tx.transactionNote.createMany({
+        data: absorbedNotes.map(note => ({ ...note, userId: survivorId })),
+        skipDuplicates: true
+      })
+      await tx.transactionNote.deleteMany({ where: { userId: absorbedId } })
+    }
 
     // ── Delete the empty shell BEFORE settling the primary: its
     // User.pubkey would collide with the survivor's mirror if the chosen
