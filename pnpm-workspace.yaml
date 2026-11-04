@@ -18,13 +18,13 @@ trustPolicyExclude:
   - eslint-import-resolver-typescript@3.10.1
   - fumadocs-core@16.8.0
   - fumadocs-ui@16.8.0
-  - prisma@7.10.0
+  - prisma@7.10.1
   - react-redux@9.2.0
   - reselect@5.1.1
   - semver@6.3.1
 
 # Dependency build-script policy. pnpm blocks third-party install/postinstall
-# scripts by default; this list records the deliberate decision to keep every
+# scripts by default; these lists record the deliberate decision to keep every
 # one of them blocked. Verified by clean install + full build: nothing here
 # needs its script to run.
 #
