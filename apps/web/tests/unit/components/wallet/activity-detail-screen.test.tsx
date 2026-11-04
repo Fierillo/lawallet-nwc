@@ -190,7 +190,7 @@ describe('ActivityDetailScreen', () => {
     )
     const input = screen.getByRole('textbox', { name: 'Note' })
     expect(input).toHaveValue('Split with Ana')
-    expect(input).toHaveAttribute('maxLength', '280')
+    expect(input).toHaveAttribute('maxLength', '80')
     await user.clear(input)
     await user.type(input, 'Rent for May')
     await user.click(screen.getByRole('button', { name: 'Save note' }))

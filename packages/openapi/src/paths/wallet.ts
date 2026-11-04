@@ -108,7 +108,7 @@ registry.registerPath({
   tags: [TAG],
   summary: 'Save or remove the caller’s private transaction note.',
   description:
-    'Upserts a note for this account and payment hash. Notes are trimmed and limited to 280 characters. Saving an empty note removes it.',
+    'Upserts a note for this account and payment hash. Notes are trimmed and limited to 80 characters. Saving an empty note removes it.',
   operationId: 'wallet.transactions.note.set',
   security: protectedSecurity,
   request: {
