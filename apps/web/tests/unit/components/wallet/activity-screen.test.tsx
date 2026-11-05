@@ -439,6 +439,24 @@ describe('ActivityScreen quick transaction information', () => {
     )
   })
 
+  it('adds a note after payment from the row note button', async () => {
+    const user = userEvent.setup()
+    saveTagMock.mockResolvedValue({ note: 'Dinner' })
+    render(<ActivityScreen />)
+    await user.click(await screen.findByRole('button', { name: 'Add note' }))
+    const input = await screen.findByRole('textbox', { name: 'Note' })
+    expect(input).toHaveAttribute('maxLength', '80')
+    await user.type(input, 'Dinner')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    expect(saveTagMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${hash}/note`,
+      { note: 'Dinner' }
+    )
+    expect(await screen.findByTestId('transaction-note')).toHaveTextContent(
+      'Dinner'
+    )
+  })
+
   it('renders no note pill when the transaction has no note', async () => {
     render(<ActivityScreen />)
     await screen.findByRole('button', {

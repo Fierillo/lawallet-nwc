@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionLabel } from './transaction-label'
-import { TransactionNote } from './transaction-note'
+import { TransactionNotePicker } from './transaction-note-picker'
+import { TransactionNotePill } from './transaction-note-pill'
 import { Send } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -345,13 +346,31 @@ export function ActivityDetailScreen({
               key={`${pubkey}:${hash}`}
               paymentHash={hash.toLowerCase()}
             />
-            <TransactionNote
+            <TransactionNoteSection
               key={`note:${pubkey}:${hash}`}
               paymentHash={hash.toLowerCase()}
             />
           </>
         ) : null}
       </PaymentReceiptLayout>
+    </div>
+  )
+}
+
+function TransactionNoteSection({ paymentHash }: { paymentHash: string }) {
+  const result = useApi<{ note: string | null }>(
+    `/api/wallet/transactions/${paymentHash}/note`
+  )
+  const [saved, setSaved] = useState<string | null | undefined>()
+  const note = saved === undefined ? result.data?.note : saved
+  return (
+    <div className="mt-3 flex items-center justify-center gap-2">
+      <TransactionNotePill note={note} />
+      <TransactionNotePicker
+        paymentHash={paymentHash}
+        note={note}
+        onSaved={setSaved}
+      />
     </div>
   )
 }

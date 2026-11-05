@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ActivityDetailScreen } from '@/components/wallet/activity/activity-detail-screen'
 import {
@@ -179,7 +179,7 @@ describe('ActivityDetailScreen', () => {
     window.history.replaceState({}, '', '/')
   })
 
-  it('shows the private note as a pill and saves an edited note', async () => {
+  it('shows the private note as a pill and edits it from the note button', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: 'Rent for May' })
     rememberActivityTx(SETTLED_IN)
@@ -188,36 +188,41 @@ describe('ActivityDetailScreen', () => {
     expect(await screen.findByTestId('transaction-note')).toHaveTextContent(
       'Split with Ana'
     )
-    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(
+      screen.queryByRole('button', { name: 'Save note' })
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /^Edit note/ }))
+    const input = await screen.findByRole('textbox', { name: 'Note' })
     expect(input).toHaveValue('Split with Ana')
     expect(input).toHaveAttribute('maxLength', '80')
     await user.clear(input)
     await user.type(input, 'Rent for May')
-    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
     expect(saveLabelMock).toHaveBeenCalledWith(
       `/api/wallet/transactions/${HASH}/note`,
       { note: 'Rent for May' }
     )
-    expect(await screen.findByText('Note saved')).toBeInTheDocument()
-    expect(screen.getByTestId('transaction-note')).toHaveTextContent(
-      'Rent for May'
+    await waitFor(() =>
+      expect(screen.getByTestId('transaction-note')).toHaveTextContent(
+        'Rent for May'
+      )
     )
   })
 
-  it('clears the note and hides the pill when saved empty', async () => {
+  it('removes the note and hides the pill', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: null })
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} />)
-    const input = await screen.findByRole('textbox', { name: 'Note' })
-    await user.clear(input)
-    await user.click(screen.getByRole('button', { name: 'Save note' }))
+    await user.click(await screen.findByRole('button', { name: /^Edit note/ }))
+    await user.click(await screen.findByRole('button', { name: 'Remove note' }))
     expect(saveLabelMock).toHaveBeenCalledWith(
       `/api/wallet/transactions/${HASH}/note`,
       { note: '' }
     )
-    expect(await screen.findByText('Note removed')).toBeInTheDocument()
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    )
   })
 
   it('loads and edits the private transaction label', async () => {
