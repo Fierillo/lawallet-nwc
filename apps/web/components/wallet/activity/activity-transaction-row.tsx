@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
 import { TransactionNotePill } from './transaction-note-pill'
+import { TransactionNotePicker } from './transaction-note-picker'
 
 export function ActivityTransactionRow({
   tx,
@@ -44,6 +45,16 @@ export function ActivityTransactionRow({
       : !annotation.loading && !annotation.error
         ? annotation.data?.label
         : undefined
+  const [savedNote, setSavedNote] = useState<{
+    pubkey: string | null
+    note: string | null
+  } | null>(null)
+  const currentNote =
+    savedNote?.pubkey === pubkey
+      ? savedNote.note
+      : !noteResult.error
+        ? noteResult.data?.note
+        : undefined
   const panelId = useId()
   const href = tx.paymentHash
     ? activityDetailHref(tx.paymentHash, from)
@@ -60,6 +71,14 @@ export function ActivityTransactionRow({
             paymentHash={tx.paymentHash.toLowerCase()}
             tag={currentTag}
             onSaved={tag => setSavedTag({ pubkey, tag })}
+          />
+        ) : null}
+        {labelPath ? (
+          <TransactionNotePicker
+            key={`note:${pubkey}:${tx.paymentHash}`}
+            paymentHash={tx.paymentHash.toLowerCase()}
+            note={currentNote}
+            onSaved={note => setSavedNote({ pubkey, note })}
           />
         ) : null}
         <button
@@ -79,9 +98,9 @@ export function ActivityTransactionRow({
           />
         </button>
       </div>
-      {noteResult.data?.note && !noteResult.error ? (
+      {currentNote ? (
         <div className="-mt-1 mb-2 px-3">
-          <TransactionNotePill note={noteResult.data.note} />
+          <TransactionNotePill note={currentNote} />
         </div>
       ) : null}
       <div id={panelId} hidden={!expanded}>
