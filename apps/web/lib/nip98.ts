@@ -34,23 +34,37 @@ function decodeNip98Token(base64Event: string): NostrEvent {
  *
  * NIP-98 requires the `u` tag to equal the absolute request URL. When the
  * admin has configured `endpoint` (this instance's true public URL) that is
- * the **only** accepted origin: `Host` / `X-Forwarded-*` are client-supplied
- * wherever the app is reachable without a header-rewriting proxy, so trusting
- * them would accept a token the user signed for another site.
+ * the **only** accepted origin outside Vercel Preview: `Host` /
+ * `X-Forwarded-*` are client-supplied wherever the app is reachable without a
+ * header-rewriting proxy, so trusting them would accept a token the user
+ * signed for another site.
+ *
+ * On Vercel Preview (`VERCEL_ENV=preview`), the configured endpoint is kept
+ * and request-derived origins are also accepted, so a Preview URL can log in
+ * while sharing production DB settings.
  *
  * Without a configured endpoint the instance has no other notion of its own
  * URL, so the request headers are used — the fresh-install / local-dev path.
  */
 async function resolveCandidateOrigins(request: Request): Promise<Set<string>> {
+  let configured: string | null = null
   try {
-    const configured = await resolveConfiguredApiUrl()
-    if (configured) return new Set([configured])
+    configured = await resolveConfiguredApiUrl()
   } catch {
     // Settings unavailable (e.g. fresh install or unit context) — fall back to
     // the request headers below.
   }
 
+  // Production (and any non-Preview deploy): when `endpoint` is set it is the
+  // only accepted origin (#364). Vercel Preview shares that DB setting with
+  // production but clients sign NIP-98 for the preview host, so Preview also
+  // accepts request-derived origins alongside the configured endpoint.
+  if (configured && process.env.VERCEL_ENV !== 'preview') {
+    return new Set([configured])
+  }
+
   const origins = new Set<string>()
+  if (configured) origins.add(configured)
 
   const forwardedHost = request.headers.get('x-forwarded-host')
   const forwardedProto = request.headers.get('x-forwarded-proto')
