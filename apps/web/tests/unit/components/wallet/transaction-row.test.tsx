@@ -79,4 +79,29 @@ describe('TransactionRow', () => {
       )[HASH].avatarUrl
     ).toBeNull()
   })
+
+  it('prefers a private note override over the payment comment', () => {
+    render(
+      <TransactionRow
+        tx={{ ...TX, description: 'Payment to @bob: gracias!' }}
+        noteOverride="Split dinner"
+      />
+    )
+    expect(screen.getByText('“Split dinner”')).toBeInTheDocument()
+    expect(screen.queryByText('“gracias!”')).not.toBeInTheDocument()
+  })
+
+  it('renders an amount footer under the price inside the row link', () => {
+    render(
+      <TransactionRow
+        tx={TX}
+        href={`/wallet/activity/${HASH}`}
+        amountFooter={<button type="button">Add note</button>}
+      />
+    )
+    const link = screen.getByRole('link', { name: /Coffee/ })
+    expect(
+      link.contains(screen.getByRole('button', { name: 'Add note' }))
+    ).toBe(true)
+  })
 })

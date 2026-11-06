@@ -11,10 +11,13 @@ import {
 } from '@/lib/client/activity-detail'
 import { rememberActivityTx } from '@/lib/client/activity-detail-store'
 import type { NwcTransaction } from '@/lib/client/nwc/transactions'
+import {
+  splitPaymentDescription,
+  usePaymentDestination
+} from '@/lib/client/payment-destinations'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
-import { TransactionNotePill } from './transaction-note-pill'
 import { TransactionNotePicker } from './transaction-note-picker'
 
 export function ActivityTransactionRow({
@@ -55,15 +58,36 @@ export function ActivityTransactionRow({
       : !noteResult.error
         ? noteResult.data?.note
         : undefined
+  const destination = usePaymentDestination(
+    tx.type === 'incoming' ? null : tx.paymentHash
+  )
+  const described = splitPaymentDescription(tx.description)
+  const originalComment = destination ? destination.comment : described.comment
   const panelId = useId()
   const href = tx.paymentHash
     ? activityDetailHref(tx.paymentHash, from)
     : undefined
+  const noteButton =
+    labelPath != null ? (
+      <TransactionNotePicker
+        key={`note:${pubkey}:${tx.paymentHash}`}
+        paymentHash={tx.paymentHash.toLowerCase()}
+        note={currentNote}
+        fallbackComment={originalComment}
+        onSaved={note => setSavedNote({ pubkey, note })}
+      />
+    ) : null
 
   return (
     <div>
       <div className="flex items-center">
-        <TransactionRow tx={tx} href={href} className="min-w-0 flex-1" />
+        <TransactionRow
+          tx={tx}
+          href={href}
+          className="min-w-0 flex-1"
+          noteOverride={currentNote}
+          amountFooter={noteButton}
+        />
         {!isActivityPreviewRequested() &&
         /^[0-9a-fA-F]{64}$/.test(tx.paymentHash || '') ? (
           <TransactionTagPicker
@@ -71,14 +95,6 @@ export function ActivityTransactionRow({
             paymentHash={tx.paymentHash.toLowerCase()}
             tag={currentTag}
             onSaved={tag => setSavedTag({ pubkey, tag })}
-          />
-        ) : null}
-        {labelPath ? (
-          <TransactionNotePicker
-            key={`note:${pubkey}:${tx.paymentHash}`}
-            paymentHash={tx.paymentHash.toLowerCase()}
-            note={currentNote}
-            onSaved={note => setSavedNote({ pubkey, note })}
           />
         ) : null}
         <button
@@ -98,17 +114,13 @@ export function ActivityTransactionRow({
           />
         </button>
       </div>
-      {currentNote ? (
-        <div className="-mt-1 mb-2 px-3">
-          <TransactionNotePill note={currentNote} />
-        </div>
-      ) : null}
       <div id={panelId} hidden={!expanded}>
         {expanded ? (
           <TransactionInformation
             tx={tx}
             href={href}
             savedTag={currentTag}
+            message={currentNote || tx.description}
             annotation={annotation}
           />
         ) : null}
@@ -121,11 +133,13 @@ function TransactionInformation({
   tx,
   href,
   savedTag,
+  message,
   annotation
 }: {
   tx: NwcTransaction
   href?: string
   savedTag?: string | null
+  message?: string | null
   annotation: UseApiResult<{ label: string | null }>
 }) {
   const { data, loading, error, refetch } = annotation
@@ -134,7 +148,7 @@ function TransactionInformation({
       <div>
         <dt className="text-xs text-muted-foreground">Message</dt>
         <dd className="mt-1 whitespace-pre-wrap break-words text-foreground">
-          {tx.description || 'No message'}
+          {message || 'No message'}
         </dd>
       </div>
       <div>
