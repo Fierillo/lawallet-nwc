@@ -156,7 +156,10 @@ export function TransactionRow({
           <span className="ml-1 text-xs text-muted-foreground">sats</span>
         </div>
         {feeAmount ? (
-          <span className="text-[9px] leading-tight text-red-500">
+          <span
+            className="text-[9px] leading-tight text-red-500"
+            style={{ fontSize: 9 }}
+          >
             fee: {feeAmount} sats
           </span>
         ) : null}
