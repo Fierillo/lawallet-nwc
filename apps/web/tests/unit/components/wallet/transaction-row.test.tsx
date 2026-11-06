@@ -167,7 +167,10 @@ describe('TransactionRow', () => {
         }}
       />
     )
-    expect(screen.getByText(/fee 3 sats/i)).toBeInTheDocument()
+    const fee = screen.getByText('3 sats')
+    expect(fee).toHaveClass('text-red-500')
+    expect(fee.className).toMatch(/text-\[1[01]px\]/)
+    expect(screen.queryByText(/fee|comisi/i)).not.toBeInTheDocument()
   })
 
   it('shows <1 sat when the fee is a positive sub-sat amount', () => {
@@ -182,7 +185,7 @@ describe('TransactionRow', () => {
         }}
       />
     )
-    expect(screen.getByText(/fee <1 sats/i)).toBeInTheDocument()
+    expect(screen.getByText('<1 sats')).toHaveClass('text-red-500')
   })
 
   it('hides the fee line for incoming payments and zero fees', () => {
@@ -191,7 +194,7 @@ describe('TransactionRow', () => {
         tx={{ ...TX, type: 'incoming', feesPaidSats: 3, feesPaidMsats: 3_000 }}
       />
     )
-    expect(screen.queryByText(/fee /i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^(<1|\d+) sats$/)).not.toBeInTheDocument()
 
     rerender(
       <TransactionRow
@@ -204,5 +207,5 @@ describe('TransactionRow', () => {
         }}
       />
     )
-    expect(screen.queryByText(/fee /i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/^(<1|\d+) sats$/)).not.toBeInTheDocument()
   })
