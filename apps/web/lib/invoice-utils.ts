@@ -181,6 +181,29 @@ export function parseCardPaymentInvoice(
   return invoice
 }
 
+/** Compressed Lightning node pubkey (33 bytes → 66 hex, 02/03 prefix). */
+const NODE_PUBKEY_RE = /^0[23][0-9a-f]{64}$/
+
+/**
+ * Extracts the payee node pubkey from a bolt11 invoice.
+ * Prefers the explicit `n` / `payee_node_key` tag when present; otherwise
+ * recovers it from the signature (BOLT-11). Returns lowercase hex or null.
+ */
+export function extractPayeePubkey(bolt11: string): string | null {
+  const trimmed = bolt11.trim()
+  if (!trimmed) return null
+  try {
+    const decoded = decodeVerifiedInvoice(trimmed)
+    const fromTag = decoded.tagsObject.payee_node_key?.toLowerCase()
+    if (fromTag && NODE_PUBKEY_RE.test(fromTag)) return fromTag
+    const fromSig = decoded.payeeNodeKey?.toLowerCase()
+    if (fromSig && NODE_PUBKEY_RE.test(fromSig)) return fromSig
+    return null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Extracts the human-readable description/memo from a bolt11 invoice.
  * Returns `null` when absent or undecodable.

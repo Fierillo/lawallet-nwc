@@ -13,6 +13,8 @@ export interface NwcTransaction {
   preimage: string | null
   settledAt: number | null
   createdAt: number
+  /** BOLT11 from the wallet when NIP-47 includes it; used for payee identity. */
+  invoice?: string | null
   /** Wallet-reported NIP-47 state when the payload includes it. */
   state?: NwcTransactionState
 }
@@ -46,6 +48,7 @@ interface RawTransaction {
   preimage?: string | null
   settled_at?: number | null
   created_at?: number | null
+  invoice?: string | null
   state?: string | null
 }
 
@@ -63,6 +66,7 @@ function normalizeState(raw: RawTransaction): NwcTransactionState | undefined {
 function normalize(raw: RawTransaction): NwcTransaction | null {
   const paymentHash = raw.payment_hash?.trim()
   if (!paymentHash) return null
+  const invoice = raw.invoice?.trim() || null
   return {
     type: raw.type === 'outgoing' ? 'outgoing' : 'incoming',
     amountSats: Math.floor((raw.amount ?? 0) / 1000),
@@ -72,6 +76,7 @@ function normalize(raw: RawTransaction): NwcTransaction | null {
     preimage: raw.preimage ?? null,
     settledAt: raw.settled_at ? raw.settled_at * 1000 : null,
     createdAt: (raw.created_at ?? 0) * 1000,
+    invoice,
     state: normalizeState(raw)
   }
 }
