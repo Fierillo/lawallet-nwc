@@ -19,8 +19,7 @@ export const shared: typeof En = {
     justNow: 'Ahora',
     minutesAgo: (n: number) => `hace ${n} min`,
     hoursAgo: (n: number) => `hace ${n} h`,
-    daysAgo: (n: number) => `hace ${n} d`,
-    fee: (amount: string) => `comisión ${amount} sats`
+    daysAgo: (n: number) => `hace ${n} d`
   },
   pagination: {
     label: (label: string) => `Paginación de ${label}`,
