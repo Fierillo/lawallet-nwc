@@ -128,6 +128,59 @@ registry.registerPath({
   }
 })
 
+
+const counterpartyAliasesResponse = z.object({
+  aliases: z.record(z.string(), z.string())
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/counterparty-aliases',
+  tags: [TAG],
+  summary: 'List the caller’s counterparty aliases.',
+  description:
+    'Returns every Lightning Address / payee-node display alias for the authenticated account as a key→alias map.',
+  operationId: 'wallet.counterpartyAliases.list',
+  security: protectedSecurity,
+  responses: {
+    200: inlineJsonResponse(
+      'Alias map (never publicly cached).',
+      counterpartyAliasesResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/counterparty-aliases',
+  tags: [TAG],
+  summary: 'Save or remove a counterparty alias.',
+  description:
+    'Upserts an alias for `ln:<address>` or `node:<pubkey>`. Empty alias removes it. Aliases apply to every transaction with that counterparty.',
+  operationId: 'wallet.counterpartyAliases.set',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.CounterpartyAliasUpdateRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved alias, or null if removed.',
+      z.object({
+        key: z.string(),
+        alias: z.string().nullable()
+      })
+    ),
+    ...commonErrorResponses
+  }
+})
+
 const walletAddressSchema = z
   .object({
     username: z.string(),
