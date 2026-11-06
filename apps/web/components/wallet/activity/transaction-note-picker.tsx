@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent, type MouseEvent } from 'react'
 import { StickyNote } from 'lucide-react'
 import { useAuth } from '@/components/admin/auth-context'
 import { useApi, invalidateApiPath } from '@/lib/client/hooks/use-api'
@@ -15,14 +15,17 @@ import { Field, FieldLabel, FieldError } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
-/** Small note button that opens a short private-note field. */
+/** Tiny note button under the amount; opens a short private-note field. */
 export function TransactionNotePicker({
   paymentHash,
   note,
+  fallbackComment,
   onSaved
 }: {
   paymentHash: string
   note?: string | null
+  /** Original payment comment used to prefill when no override is saved. */
+  fallbackComment?: string | null
   onSaved: (note: string | null) => void
 }) {
   const { apiClient } = useAuth()
@@ -35,8 +38,10 @@ export function TransactionNotePicker({
   const path = `/api/wallet/transactions/${paymentHash}/note`
   const current = useApi<{ note: string | null }>(open ? path : null)
   const unavailable = current.loading || !current.data || Boolean(current.error)
-  const loaded = current.data?.note ?? ''
-  const value = draft ?? loaded
+  const loadedOverride = current.data?.note ?? ''
+  const hasOverride = Boolean(loadedOverride)
+  const prefill = loadedOverride || fallbackComment || ''
+  const value = draft ?? prefill
 
   async function save(next: string) {
     if (saving || unavailable) return
@@ -62,6 +67,10 @@ export function TransactionNotePicker({
     void save(value.trim())
   }
 
+  function stopRowNavigation(event: MouseEvent) {
+    event.stopPropagation()
+  }
+
   return (
     <Popover
       open={open}
@@ -79,17 +88,21 @@ export function TransactionNotePicker({
           size="icon"
           aria-label={note ? `Edit note: ${note}` : 'Add note'}
           title={note || 'Add note'}
-          className="size-11 shrink-0"
+          className="size-5 shrink-0 text-muted-foreground hover:text-foreground [&_svg]:size-3"
+          onClick={stopRowNavigation}
+          onPointerDown={stopRowNavigation}
         >
           <StickyNote
             aria-hidden="true"
-            className={cn('size-4', note && 'fill-current')}
+            className={cn('size-3', note && 'fill-current')}
           />
         </Button>
       </PopoverTrigger>
       <PopoverContent
         align="end"
         className="w-64 max-w-[calc(100vw-2rem)] p-2"
+        onClick={stopRowNavigation}
+        onPointerDown={stopRowNavigation}
       >
         {current.error ? (
           <div className="flex flex-col gap-2">
@@ -126,7 +139,7 @@ export function TransactionNotePicker({
               />
             </Field>
             <div className="flex justify-end gap-2">
-              {loaded ? (
+              {hasOverride ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -142,7 +155,12 @@ export function TransactionNotePicker({
                 type="submit"
                 size="sm"
                 className="h-8"
-                disabled={saving || unavailable || value.trim() === loaded}
+                disabled={
+                  saving ||
+                  unavailable ||
+                  value.trim() === loadedOverride ||
+                  (!hasOverride && value.trim() === (fallbackComment || ''))
+                }
               >
                 {saving ? 'Saving…' : 'Save'}
               </Button>

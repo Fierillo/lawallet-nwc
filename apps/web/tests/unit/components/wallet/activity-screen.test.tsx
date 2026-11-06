@@ -428,22 +428,36 @@ describe('ActivityScreen quick transaction information', () => {
     expect(recallActivityTx(hash)?.paymentHash).toBe(hash)
   })
 
-  it('shows the private note as a pill below the transaction row', async () => {
+  it('shows the private note as the row comment, with a tiny edit button under the amount', async () => {
     labelState.note = 'Split with Ana'
     render(<ActivityScreen />)
-    const pill = await screen.findByTestId('transaction-note')
-    expect(pill).toHaveTextContent('Split with Ana')
-    expect(pill).toHaveClass('rounded-full', 'text-white', 'text-xs')
+    const row = await screen.findByRole('link', {
+      name: /A long payment message/
+    })
+    expect(within(row).getByText('“Split with Ana”')).toBeInTheDocument()
+    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    const noteButton = screen.getByRole('button', { name: /^Edit note/ })
+    expect(row.contains(noteButton)).toBe(true)
+    expect(
+      screen.getByRole('button', { name: /Choose tag/ }).contains(noteButton)
+    ).toBe(false)
+    expect(noteButton.querySelector('svg')).toHaveClass('size-3')
     expect(vi.mocked(useApi)).toHaveBeenCalledWith(
       `/api/wallet/transactions/${hash}/note`
     )
   })
 
-  it('adds a note after payment from the row note button', async () => {
+  it('adds a note from the tiny button under the amount and shows it as the comment', async () => {
     const user = userEvent.setup()
     saveTagMock.mockResolvedValue({ note: 'Dinner' })
     render(<ActivityScreen />)
-    await user.click(await screen.findByRole('button', { name: 'Add note' }))
+    const row = await screen.findByRole('link', {
+      name: /A long payment message/
+    })
+    const noteButton = await screen.findByRole('button', { name: 'Add note' })
+    expect(row.contains(noteButton)).toBe(true)
+    await user.click(noteButton)
+    expect(recallActivityTx(hash)).toBeNull()
     const input = await screen.findByRole('textbox', { name: 'Note' })
     expect(input).toHaveAttribute('maxLength', '80')
     await user.type(input, 'Dinner')
@@ -452,16 +466,17 @@ describe('ActivityScreen quick transaction information', () => {
       `/api/wallet/transactions/${hash}/note`,
       { note: 'Dinner' }
     )
-    expect(await screen.findByTestId('transaction-note')).toHaveTextContent(
-      'Dinner'
-    )
+    expect(await within(row).findByText('“Dinner”')).toBeInTheDocument()
+    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
   })
 
-  it('renders no note pill when the transaction has no note', async () => {
+  it('keeps the original comment when there is no private note override', async () => {
     render(<ActivityScreen />)
-    await screen.findByRole('button', {
-      name: /Expand transaction information/
+    const row = await screen.findByRole('link', {
+      name: /A long payment message/
     })
+    expect(within(row).queryByText(/^“/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
     expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
   })
 

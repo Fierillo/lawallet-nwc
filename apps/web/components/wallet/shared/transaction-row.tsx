@@ -1,5 +1,6 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { ArrowUpRight, ArrowDownLeft } from 'lucide-react'
 import { useLocale, useT, type Dict } from '@/lib/client/i18n'
@@ -17,9 +18,19 @@ interface TransactionRowProps {
   tx: NwcTransaction
   href?: string
   className?: string
+  /** Private note override shown instead of the payment comment when set. */
+  noteOverride?: string | null
+  /** Rendered under the amount (e.g. tiny note button); stays inside the link. */
+  amountFooter?: ReactNode
 }
 
-export function TransactionRow({ tx, href, className }: TransactionRowProps) {
+export function TransactionRow({
+  tx,
+  href,
+  className,
+  noteOverride,
+  amountFooter
+}: TransactionRowProps) {
   const t = useT()
   const locale = useLocale()
   const incoming = tx.type === 'incoming'
@@ -34,7 +45,8 @@ export function TransactionRow({ tx, href, className }: TransactionRowProps) {
     destination?.address ||
     described.label ||
     (incoming ? t.shared.tx.received : t.shared.tx.sent)
-  const comment = destination ? destination.comment : described.comment
+  const originalComment = destination ? destination.comment : described.comment
+  const comment = noteOverride || originalComment
   const avatarUrl = useAddressAvatar(
     destination?.address,
     destination?.avatarUrl
@@ -92,17 +104,20 @@ export function TransactionRow({ tx, href, className }: TransactionRowProps) {
         </span>
       </div>
 
-      <div className="text-right tabular-nums">
-        <span
-          className={cn(
-            'text-sm font-semibold',
-            incoming ? 'text-green-500' : 'text-foreground'
-          )}
-        >
-          {incoming ? '+' : '−'}
-          {tx.amountSats.toLocaleString()}
-        </span>
-        <span className="ml-1 text-xs text-muted-foreground">sats</span>
+      <div className="flex shrink-0 flex-col items-end gap-0.5 tabular-nums">
+        <div className="text-right">
+          <span
+            className={cn(
+              'text-sm font-semibold',
+              incoming ? 'text-green-500' : 'text-foreground'
+            )}
+          >
+            {incoming ? '+' : '−'}
+            {tx.amountSats.toLocaleString()}
+          </span>
+          <span className="ml-1 text-xs text-muted-foreground">sats</span>
+        </div>
+        {amountFooter}
       </div>
     </>
   )

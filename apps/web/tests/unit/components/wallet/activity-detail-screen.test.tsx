@@ -179,19 +179,18 @@ describe('ActivityDetailScreen', () => {
     window.history.replaceState({}, '', '/')
   })
 
-  it('shows the private note as a pill and edits it from the note button', async () => {
+  it('shows the private note as the Message/Note field and edits it from a tiny button', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: 'Rent for May' })
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} />)
 
-    expect(await screen.findByTestId('transaction-note')).toHaveTextContent(
-      'Split with Ana'
-    )
-    expect(
-      screen.queryByRole('button', { name: 'Save note' })
-    ).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: /^Edit note/ }))
+    expect(await screen.findByText('Split with Ana')).toBeInTheDocument()
+    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    expect(screen.queryByText('Coffee')).not.toBeInTheDocument()
+    const noteButton = screen.getByRole('button', { name: /^Edit note/ })
+    expect(noteButton.querySelector('svg')).toHaveClass('size-3')
+    await user.click(noteButton)
     const input = await screen.findByRole('textbox', { name: 'Note' })
     expect(input).toHaveValue('Split with Ana')
     expect(input).toHaveAttribute('maxLength', '80')
@@ -203,13 +202,11 @@ describe('ActivityDetailScreen', () => {
       { note: 'Rent for May' }
     )
     await waitFor(() =>
-      expect(screen.getByTestId('transaction-note')).toHaveTextContent(
-        'Rent for May'
-      )
+      expect(screen.getByText('Rent for May')).toBeInTheDocument()
     )
   })
 
-  it('removes the note and hides the pill', async () => {
+  it('removes the private note and restores the original message', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: null })
     rememberActivityTx(SETTLED_IN)
@@ -220,9 +217,11 @@ describe('ActivityDetailScreen', () => {
       `/api/wallet/transactions/${HASH}/note`,
       { note: '' }
     )
-    await waitFor(() =>
-      expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
-    )
+    await waitFor(() => {
+      expect(screen.queryByText('Split with Ana')).not.toBeInTheDocument()
+      expect(screen.getByText('Coffee')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
   })
 
   it('loads and edits the private transaction label', async () => {
@@ -271,7 +270,7 @@ describe('ActivityDetailScreen', () => {
     )
     expect(await screen.findByText('Tag removed')).toBeInTheDocument()
     expect(input).toHaveValue('')
-    expect(screen.getByText('Coffee')).toBeInTheDocument()
+    expect(screen.getByText('Split with Ana')).toBeInTheDocument()
   })
 
   it('keeps the draft and allows retry when persistence fails', async () => {
@@ -317,6 +316,7 @@ describe('ActivityDetailScreen', () => {
   })
 
   it('renders a receive-style receipt for an incoming transaction', async () => {
+    privateNote.note = null
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} from="home" />)
 

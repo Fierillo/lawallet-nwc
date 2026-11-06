@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionLabel } from './transaction-label'
 import { TransactionNotePicker } from './transaction-note-picker'
-import { TransactionNotePill } from './transaction-note-pill'
 import { Send } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -95,6 +94,15 @@ export function ActivityDetailScreen({
   const nwcString = resolveUserNwc(me)
   const { activeCurrencies, rates, activeCode, setCurrencyCode } =
     useReceiptCurrency()
+  const canAnnotate =
+    !isActivityPreviewRequested() && /^[0-9a-fA-F]{64}$/.test(hash)
+  const notePath = canAnnotate
+    ? `/api/wallet/transactions/${hash.toLowerCase()}/note`
+    : null
+  const noteResult = useApi<{ note: string | null }>(notePath)
+  const [savedNote, setSavedNote] = useState<string | null | undefined>()
+  const privateNote =
+    savedNote === undefined ? noteResult.data?.note : savedNote
 
   const [loading, setLoading] = useState(() => !recallActivityTx(hash))
   const [notFound, setNotFound] = useState(false)
@@ -223,15 +231,55 @@ export function ActivityDetailScreen({
     ? described.comment || described.label || null
     : destination?.address || described.label || null
   const outgoingNote = destination ? destination.comment : described.comment
+  const originalMessage = incoming ? counterpart : outgoingNote
+  const displayMessage = privateNote || originalMessage
   const timestamp = tx.settledAt ?? tx.createdAt
   const preimage = tx.preimage?.trim() || null
   const showPreimage = Boolean(
     preimage && (incoming ? preimage !== tx.paymentHash : true)
   )
 
+  // Tapping the recipient starts a fresh send to the same address.
+  function payAgain(address: string) {
+    try {
+      const next = parseDestination(address)
+      sendActions.reset()
+      sendActions.setRecipient({ raw: address, destination: next })
+      router.push('/wallet/send/amount')
+    } catch {
+      router.push('/wallet/send')
+    }
+  }
+
+  const noteDetail: ReceiptDetailItem = {
+    label: d.note,
+    value: displayMessage,
+    include: Boolean(displayMessage) || canAnnotate,
+    valueNode: (
+      <span className="inline-flex max-w-full items-start justify-end gap-1.5">
+        {displayMessage ? (
+          <span className="min-w-0 break-all">{displayMessage}</span>
+        ) : (
+          <span className="text-muted-foreground">
+            {t.shared.receipt.unavailable}
+          </span>
+        )}
+        {canAnnotate ? (
+          <TransactionNotePicker
+            key={`note:${pubkey}:${hash}`}
+            paymentHash={hash.toLowerCase()}
+            note={privateNote}
+            fallbackComment={originalMessage}
+            onSaved={setSavedNote}
+          />
+        ) : null}
+      </span>
+    )
+  }
+
   const details: ReceiptDetailItem[] = incoming
     ? [
-        { label: d.note, value: counterpart, include: Boolean(counterpart) },
+        noteDetail,
         {
           label: d.time,
           value: timestamp ? formatDateTime(timestamp) : null,
@@ -266,7 +314,7 @@ export function ActivityDetailScreen({
             </button>
           ) : undefined
         },
-        { label: d.note, value: outgoingNote, include: Boolean(outgoingNote) },
+        noteDetail,
         {
           label: d.networkFee,
           value: feeLabel,
@@ -280,18 +328,6 @@ export function ActivityDetailScreen({
 
   const showDetails = details.some(item => item.include !== false)
   const receipt = tx
-
-  // Tapping the recipient starts a fresh send to the same address.
-  function payAgain(address: string) {
-    try {
-      const next = parseDestination(address)
-      sendActions.reset()
-      sendActions.setRecipient({ raw: address, destination: next })
-      router.push('/wallet/send/amount')
-    } catch {
-      router.push('/wallet/send')
-    }
-  }
 
   function share() {
     void shareReceiptText(
@@ -340,37 +376,13 @@ export function ActivityDetailScreen({
             <ReceiptProofRow label={d.preimage} value={preimage} secret />
           )}
         </PaymentProofCard>
-        {!isActivityPreviewRequested() && /^[0-9a-fA-F]{64}$/.test(hash) ? (
-          <>
-            <TransactionLabel
-              key={`${pubkey}:${hash}`}
-              paymentHash={hash.toLowerCase()}
-            />
-            <TransactionNoteSection
-              key={`note:${pubkey}:${hash}`}
-              paymentHash={hash.toLowerCase()}
-            />
-          </>
+        {canAnnotate ? (
+          <TransactionLabel
+            key={`${pubkey}:${hash}`}
+            paymentHash={hash.toLowerCase()}
+          />
         ) : null}
       </PaymentReceiptLayout>
-    </div>
-  )
-}
-
-function TransactionNoteSection({ paymentHash }: { paymentHash: string }) {
-  const result = useApi<{ note: string | null }>(
-    `/api/wallet/transactions/${paymentHash}/note`
-  )
-  const [saved, setSaved] = useState<string | null | undefined>()
-  const note = saved === undefined ? result.data?.note : saved
-  return (
-    <div className="mt-3 flex items-center justify-center gap-2">
-      <TransactionNotePill note={note} />
-      <TransactionNotePicker
-        paymentHash={paymentHash}
-        note={note}
-        onSaved={setSaved}
-      />
     </div>
   )
 }
