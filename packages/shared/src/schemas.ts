@@ -32,6 +32,25 @@ export const updateTransactionNoteSchema = z.object({
   note: z.string().trim().max(TRANSACTION_NOTE_MAX_LENGTH)
 })
 
+export const COUNTERPARTY_ALIAS_MAX_LENGTH = 40
+
+/** `ln:<address>` or `node:<66-hex compressed pubkey>`. */
+export const counterpartyAliasKeySchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .refine(
+    value =>
+      /^ln:[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ||
+      /^node:0[23][0-9a-f]{64}$/.test(value),
+    'Invalid counterparty key'
+  )
+
+export const updateCounterpartyAliasSchema = z.object({
+  key: counterpartyAliasKeySchema,
+  alias: z.string().trim().max(COUNTERPARTY_ALIAS_MAX_LENGTH)
+})
+
 /** A Nostr public key in the canonical wire format (lowercase hex, no npub). */
 export const hexPubkeySchema = z
   .string()
