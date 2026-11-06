@@ -51,7 +51,9 @@ describe('TransactionRow', () => {
 
   it('shows the comment a payer left on an incoming LUD-16 payment', () => {
     render(
-      <TransactionRow tx={{ ...TX, description: 'Payment to @bob: gracias!' }} />
+      <TransactionRow
+        tx={{ ...TX, description: 'Payment to @bob: gracias!' }}
+      />
     )
 
     expect(screen.getByText('Payment to @bob')).toBeInTheDocument()
@@ -91,17 +93,18 @@ describe('TransactionRow', () => {
     expect(screen.queryByText('“gracias!”')).not.toBeInTheDocument()
   })
 
-  it('renders an amount footer under the price inside the row link', () => {
+  it('renders the comment slot outside the row link (overlay link)', () => {
     render(
       <TransactionRow
         tx={TX}
         href={`/wallet/activity/${HASH}`}
-        amountFooter={<button type="button">Add note</button>}
+        commentSlot={<button type="button">Add note</button>}
       />
     )
     const link = screen.getByRole('link', { name: /Coffee/ })
     expect(
       link.contains(screen.getByRole('button', { name: 'Add note' }))
-    ).toBe(true)
+    ).toBe(false)
+    expect(link).toHaveAttribute('href', `/wallet/activity/${HASH}`)
   })
 })

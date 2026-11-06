@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionLabel } from './transaction-label'
-import { TransactionNotePicker } from './transaction-note-picker'
+import { TransactionNoteEditor } from './transaction-note-editor'
 import { Send } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -255,24 +255,20 @@ export function ActivityDetailScreen({
     label: d.note,
     value: displayMessage,
     include: Boolean(displayMessage) || canAnnotate,
-    valueNode: (
-      <span className="inline-flex max-w-full items-start justify-end gap-1.5">
-        {displayMessage ? (
-          <span className="min-w-0 break-all">{displayMessage}</span>
-        ) : (
-          <span className="text-muted-foreground">
-            {t.shared.receipt.unavailable}
-          </span>
-        )}
-        {canAnnotate ? (
-          <TransactionNotePicker
-            key={`note:${pubkey}:${hash}`}
-            paymentHash={hash.toLowerCase()}
-            note={privateNote}
-            fallbackComment={originalMessage}
-            onSaved={setSavedNote}
-          />
-        ) : null}
+    valueNode: canAnnotate ? (
+      <TransactionNoteEditor
+        key={`note:${pubkey}:${hash}`}
+        paymentHash={hash.toLowerCase()}
+        note={privateNote}
+        originalComment={originalMessage}
+        onSaved={setSavedNote}
+        className="ml-auto"
+      />
+    ) : displayMessage ? (
+      <span className="min-w-0 break-all">{displayMessage}</span>
+    ) : (
+      <span className="text-muted-foreground">
+        {t.shared.receipt.unavailable}
       </span>
     )
   }

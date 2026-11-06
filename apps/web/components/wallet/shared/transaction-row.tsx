@@ -20,8 +20,11 @@ interface TransactionRowProps {
   className?: string
   /** Private note override shown instead of the payment comment when set. */
   noteOverride?: string | null
-  /** Rendered under the amount (e.g. tiny note button); stays inside the link. */
-  amountFooter?: ReactNode
+  /**
+   * Replaces the comment line (e.g. inline note editor). When set with href,
+   * the link becomes a full-row overlay so this control is not inside it.
+   */
+  commentSlot?: ReactNode
 }
 
 export function TransactionRow({
@@ -29,7 +32,7 @@ export function TransactionRow({
   href,
   className,
   noteOverride,
-  amountFooter
+  commentSlot
 }: TransactionRowProps) {
   const t = useT()
   const locale = useLocale()
@@ -94,11 +97,15 @@ export function TransactionRow({
         <span className="truncate text-sm font-medium text-foreground">
           {title}
         </span>
-        {comment && (
+        {commentSlot ? (
+          <span className="pointer-events-auto relative z-10 flex min-w-0">
+            {commentSlot}
+          </span>
+        ) : comment ? (
           <span className="truncate text-xs text-foreground/80">
             “{comment}”
           </span>
-        )}
+        ) : null}
         <span className="text-xs text-muted-foreground">
           {formatRelative(timestamp, t, locale)}
         </span>
@@ -117,10 +124,30 @@ export function TransactionRow({
           </span>
           <span className="ml-1 text-xs text-muted-foreground">sats</span>
         </div>
-        {amountFooter}
       </div>
     </>
   )
+
+  const linkLabel = `${title}, ${incoming ? '+' : '−'}${tx.amountSats.toLocaleString()} sats`
+
+  if (href && commentSlot) {
+    // Overlay link: the note control is a sibling, never nested in the <a>.
+    return (
+      <div className={cn('relative', classNames)}>
+        <Link
+          href={href}
+          prefetch={false}
+          onClick={remember}
+          onPointerDown={remember}
+          aria-label={linkLabel}
+          className="absolute inset-0 z-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <div className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-3">
+          {body}
+        </div>
+      </div>
+    )
+  }
 
   if (href) {
     return (
@@ -131,7 +158,7 @@ export function TransactionRow({
         prefetch={false}
         onClick={remember}
         onPointerDown={remember}
-        aria-label={`${title}, ${incoming ? '+' : '−'}${tx.amountSats.toLocaleString()} sats`}
+        aria-label={linkLabel}
         className={classNames}
       >
         {body}

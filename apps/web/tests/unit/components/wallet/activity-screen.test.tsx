@@ -428,56 +428,73 @@ describe('ActivityScreen quick transaction information', () => {
     expect(recallActivityTx(hash)?.paymentHash).toBe(hash)
   })
 
-  it('shows the private note as the row comment, with a tiny edit button under the amount', async () => {
+  it('shows the note as the comment line, outside the row link', async () => {
     labelState.note = 'Split with Ana'
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
       name: /A long payment message/
     })
-    expect(within(row).getByText('“Split with Ana”')).toBeInTheDocument()
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
-    const noteButton = screen.getByRole('button', { name: /^Edit note/ })
-    expect(row.contains(noteButton)).toBe(true)
-    expect(
-      screen.getByRole('button', { name: /Choose tag/ }).contains(noteButton)
-    ).toBe(false)
-    expect(noteButton.querySelector('svg')).toHaveClass('size-3')
+    const note = screen.getByRole('button', {
+      name: 'Edit note: Split with Ana'
+    })
+    expect(note).toHaveTextContent('“Split with Ana”')
+    expect(row.contains(note)).toBe(false)
+    expect(note.closest('a')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull()
     expect(vi.mocked(useApi)).toHaveBeenCalledWith(
       `/api/wallet/transactions/${hash}/note`
     )
   })
 
-  it('adds a note from the tiny button under the amount and shows it as the comment', async () => {
+  it('tapping the note edits it inline without navigating; the row still navigates', async () => {
+    const user = userEvent.setup()
+    labelState.note = 'Split with Ana'
+    saveTagMock.mockResolvedValue({ note: 'Dinner' })
+    render(<ActivityScreen />)
+    const row = await screen.findByRole('link', {
+      name: /A long payment message/
+    })
+    await user.click(screen.getByRole('button', { name: /^Edit note/ }))
+    expect(recallActivityTx(hash)).toBeNull()
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(input.closest('a')).toBeNull()
+    await user.clear(input)
+    await user.type(input, 'Dinner{Enter}')
+    expect(saveTagMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${hash}/note`,
+      { note: 'Dinner' }
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Dinner' })
+    ).toBeInTheDocument()
+    expect(recallActivityTx(hash)).toBeNull()
+    await user.click(row)
+    expect(recallActivityTx(hash)?.paymentHash).toBe(hash)
+  })
+
+  it('shows a round + when there is no comment and adds a note on blur', async () => {
     const user = userEvent.setup()
     saveTagMock.mockResolvedValue({ note: 'Dinner' })
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
       name: /A long payment message/
     })
-    const noteButton = await screen.findByRole('button', { name: 'Add note' })
-    expect(row.contains(noteButton)).toBe(true)
-    await user.click(noteButton)
+    const plus = screen.getByRole('button', { name: 'Add note' })
+    expect(plus).toHaveClass('rounded-full')
+    expect(row.contains(plus)).toBe(false)
+    await user.click(plus)
     expect(recallActivityTx(hash)).toBeNull()
-    const input = await screen.findByRole('textbox', { name: 'Note' })
+    const input = screen.getByRole('textbox', { name: 'Note' })
     expect(input).toHaveAttribute('maxLength', '80')
     await user.type(input, 'Dinner')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await user.tab()
     expect(saveTagMock).toHaveBeenCalledWith(
       `/api/wallet/transactions/${hash}/note`,
       { note: 'Dinner' }
     )
-    expect(await within(row).findByText('“Dinner”')).toBeInTheDocument()
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
-  })
-
-  it('keeps the original comment when there is no private note override', async () => {
-    render(<ActivityScreen />)
-    const row = await screen.findByRole('link', {
-      name: /A long payment message/
-    })
-    expect(within(row).queryByText(/^“/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add note' })).toBeInTheDocument()
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Dinner' })
+    ).toBeInTheDocument()
   })
 
   it('does not fetch private notes for preview transactions', async () => {

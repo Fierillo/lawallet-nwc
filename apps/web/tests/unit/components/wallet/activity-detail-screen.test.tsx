@@ -179,49 +179,63 @@ describe('ActivityDetailScreen', () => {
     window.history.replaceState({}, '', '/')
   })
 
-  it('shows the private note as the Message/Note field and edits it from a tiny button', async () => {
+  it('edits the Message/Note field in place by tapping it', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: 'Rent for May' })
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} />)
 
-    expect(await screen.findByText('Split with Ana')).toBeInTheDocument()
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    const noteText = await screen.findByRole('button', {
+      name: 'Edit note: Split with Ana'
+    })
+    expect(noteText.querySelector('svg')).toBeNull()
     expect(screen.queryByText('Coffee')).not.toBeInTheDocument()
-    const noteButton = screen.getByRole('button', { name: /^Edit note/ })
-    expect(noteButton.querySelector('svg')).toHaveClass('size-3')
-    await user.click(noteButton)
-    const input = await screen.findByRole('textbox', { name: 'Note' })
+    await user.click(noteText)
+    const input = screen.getByRole('textbox', { name: 'Note' })
     expect(input).toHaveValue('Split with Ana')
     expect(input).toHaveAttribute('maxLength', '80')
     await user.clear(input)
-    await user.type(input, 'Rent for May')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await user.type(input, 'Rent for May{Enter}')
     expect(saveLabelMock).toHaveBeenCalledWith(
       `/api/wallet/transactions/${HASH}/note`,
       { note: 'Rent for May' }
     )
-    await waitFor(() =>
-      expect(screen.getByText('Rent for May')).toBeInTheDocument()
-    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Rent for May' })
+    ).toBeInTheDocument()
   })
 
-  it('removes the private note and restores the original message', async () => {
+  it('Escape cancels an edit without saving', async () => {
+    const user = userEvent.setup()
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+    await user.click(await screen.findByRole('button', { name: /^Edit note/ }))
+    await user.type(screen.getByRole('textbox', { name: 'Note' }), 'x{Escape}')
+    expect(saveLabelMock).not.toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      expect.anything()
+    )
+    expect(
+      screen.getByRole('button', { name: 'Edit note: Split with Ana' })
+    ).toBeInTheDocument()
+  })
+
+  it('clearing the note removes the override and restores the original message', async () => {
     const user = userEvent.setup()
     saveLabelMock.mockResolvedValue({ note: null })
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} />)
     await user.click(await screen.findByRole('button', { name: /^Edit note/ }))
-    await user.click(await screen.findByRole('button', { name: 'Remove note' }))
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    await user.clear(input)
+    await user.type(input, '{Enter}')
     expect(saveLabelMock).toHaveBeenCalledWith(
       `/api/wallet/transactions/${HASH}/note`,
       { note: '' }
     )
-    await waitFor(() => {
-      expect(screen.queryByText('Split with Ana')).not.toBeInTheDocument()
-      expect(screen.getByText('Coffee')).toBeInTheDocument()
-    })
-    expect(screen.queryByTestId('transaction-note')).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Coffee' })
+    ).toBeInTheDocument()
   })
 
   it('loads and edits the private transaction label', async () => {

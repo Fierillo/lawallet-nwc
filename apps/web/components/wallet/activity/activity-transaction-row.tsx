@@ -18,7 +18,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
-import { TransactionNotePicker } from './transaction-note-picker'
+import { TransactionNoteEditor } from './transaction-note-editor'
 
 export function ActivityTransactionRow({
   tx,
@@ -67,13 +67,14 @@ export function ActivityTransactionRow({
   const href = tx.paymentHash
     ? activityDetailHref(tx.paymentHash, from)
     : undefined
-  const noteButton =
+  const noteEditor =
     labelPath != null ? (
-      <TransactionNotePicker
+      <TransactionNoteEditor
         key={`note:${pubkey}:${tx.paymentHash}`}
         paymentHash={tx.paymentHash.toLowerCase()}
         note={currentNote}
-        fallbackComment={originalComment}
+        originalComment={originalComment}
+        quoted
         onSaved={note => setSavedNote({ pubkey, note })}
       />
     ) : null
@@ -86,7 +87,7 @@ export function ActivityTransactionRow({
           href={href}
           className="min-w-0 flex-1"
           noteOverride={currentNote}
-          amountFooter={noteButton}
+          commentSlot={noteEditor}
         />
         {!isActivityPreviewRequested() &&
         /^[0-9a-fA-F]{64}$/.test(tx.paymentHash || '') ? (
