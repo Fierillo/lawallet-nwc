@@ -165,6 +165,35 @@ describe('fees_paid normalization', () => {
     expect(list[0].feesPaidSats).toBe(0)
   })
 
+  it('reads negative fees_paid (LNbits list_transactions) as a positive fee', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 21_000,
+          fees_paid: -3_000,
+          payment_hash: HASH,
+          created_at: 10
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].feesPaidMsats).toBe(3_000)
+    expect(list[0].feesPaidSats).toBe(3)
+  })
+
+  it('reads negative fees_paid from lookup_invoice as a positive fee', async () => {
+    lookupInvoice.mockResolvedValue({
+      type: 'outgoing',
+      amount: 21_000,
+      fees_paid: -500,
+      payment_hash: HASH,
+      created_at: 10
+    })
+    const found = await lookupTransaction(NWC, HASH)
+    expect(found?.feesPaidMsats).toBe(500)
+  })
+
   it('sets feesPaidMsats to null when fees_paid is omitted', async () => {
     listTransactionsMock.mockResolvedValue({
       transactions: [
