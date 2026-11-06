@@ -88,6 +88,7 @@ describe('lookupTransaction', () => {
       preimage: 'bb'.repeat(32),
       settledAt: 1_700_000_000_000,
       createdAt: 1_699_999_000_000,
+      invoice: null,
       state: 'settled'
     })
   })
@@ -104,6 +105,22 @@ describe('lookupTransaction', () => {
 })
 
 describe('listTransactions', () => {
+  it('keeps the bolt11 invoice when the wallet returns it', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 1000,
+          payment_hash: HASH,
+          created_at: 10,
+          invoice: 'lnbc1...'
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].invoice).toBe('lnbc1...')
+  })
+
   it('drops rows without a payment hash', async () => {
     listTransactionsMock.mockResolvedValue({
       transactions: [
