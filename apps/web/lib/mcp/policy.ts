@@ -157,6 +157,12 @@ export const OPERATION_POLICY: Record<string, OperationPolicy> = {
   'wallet.transactions.note.set': exclude(
     'private user annotations are not exposed to delegated agents'
   ),
+  'wallet.counterpartyAliases.list': exclude(
+    'private user annotations are not exposed to delegated agents'
+  ),
+  'wallet.counterpartyAliases.set': exclude(
+    'private user annotations are not exposed to delegated agents'
+  ),
   'wallet.addresses.list': READ,
   'wallet.addresses.create': WRITE,
   'wallet.addresses.proxyBalance.get': READ,
