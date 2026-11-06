@@ -36,7 +36,7 @@ describe('TransactionRow', () => {
       <TransactionRow tx={TX} href={`/wallet/activity/${HASH}?from=home`} />
     )
 
-    const link = screen.getByRole('link', { name: /Coffee, \+21,000 sats/ })
+    const link = screen.getByRole('link', { name: /Received, \+21,000 sats/ })
     expect(link).toHaveAttribute('href', `/wallet/activity/${HASH}?from=home`)
   })
 
@@ -44,19 +44,20 @@ describe('TransactionRow', () => {
     const user = userEvent.setup()
     render(<TransactionRow tx={TX} href={`/wallet/activity/${HASH}`} />)
 
-    await user.click(screen.getByRole('link', { name: /Coffee/ }))
+    await user.click(screen.getByRole('link', { name: /Received/ }))
 
     expect(recallActivityTx(HASH)?.amountSats).toBe(21000)
   })
 
-  it('shows the comment a payer left on an incoming LUD-16 payment', () => {
+  it('shows Sent/Received as the title and keeps the LUD-16 comment', () => {
     render(
       <TransactionRow
         tx={{ ...TX, description: 'Payment to @bob: gracias!' }}
       />
     )
 
-    expect(screen.getByText('Payment to @bob')).toBeInTheDocument()
+    expect(screen.getByText('Received')).toBeInTheDocument()
+    expect(screen.queryByText('Payment to @bob')).not.toBeInTheDocument()
     expect(screen.getByText('“gracias!”')).toBeInTheDocument()
   })
 
@@ -101,10 +102,55 @@ describe('TransactionRow', () => {
         commentSlot={<button type="button">Add note</button>}
       />
     )
-    const link = screen.getByRole('link', { name: /Coffee/ })
+    const link = screen.getByRole('link', { name: /Received/ })
     expect(
       link.contains(screen.getByRole('button', { name: 'Add note' }))
     ).toBe(false)
     expect(link).toHaveAttribute('href', `/wallet/activity/${HASH}`)
+  })
+
+  it('renders the title slot outside the row link so alias edits do not navigate', () => {
+    render(
+      <TransactionRow
+        tx={TX}
+        href={`/wallet/activity/${HASH}`}
+        titleSlot={<button type="button">Edit alias</button>}
+      />
+    )
+    const link = screen.getByRole('link', { name: /Received/ })
+    expect(
+      link.contains(screen.getByRole('button', { name: 'Edit alias' }))
+    ).toBe(false)
+  })
+
+  it('prefers a counterparty alias over the remembered destination name', () => {
+    rememberPaymentDestination(HASH, {
+      address: 'alice@example.com',
+      name: 'Alice',
+      avatarUrl: null,
+      comment: null
+    })
+    render(
+      <TransactionRow
+        tx={{ ...TX, type: 'outgoing', description: 'Invoice from alice' }}
+        aliasOverride="Ana"
+      />
+    )
+    expect(screen.getByText('Ana')).toBeInTheDocument()
+    expect(screen.queryByText('Alice')).not.toBeInTheDocument()
+  })
+
+  it('does not use the invoice description as the title', () => {
+    render(
+      <TransactionRow
+        tx={{
+          ...TX,
+          type: 'outgoing',
+          description: 'Envío de BTC a alguien'
+        }}
+      />
+    )
+    expect(screen.getByText('Sent')).toBeInTheDocument()
+    expect(screen.queryByText(/Envío de BTC/)).not.toBeInTheDocument()
   })
 })

@@ -50,29 +50,36 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/client/hooks/use-api', () => ({
   invalidateApiPath: vi.fn(),
   useApi: (path: string) =>
-    path?.endsWith('/note')
+    path === '/api/wallet/counterparty-aliases'
       ? {
-          data: privateNote,
+          data: { aliases: {} },
           loading: false,
           error: null,
           refetch: refetchLabelMock
         }
-      : path?.endsWith('/label')
+      : path?.endsWith('/note')
         ? {
-            data: privateLabel,
-            loading: labelState.loading,
-            error: labelState.error,
-            refetch: refetchLabelMock
-          }
-        : {
-            data: {
-              effectiveNwcString: 'nostr+walletconnect://test',
-              nwcString: 'nostr+walletconnect://test'
-            },
+            data: privateNote,
             loading: false,
             error: null,
-            refetch: async () => undefined
+            refetch: refetchLabelMock
           }
+        : path?.endsWith('/label')
+          ? {
+              data: privateLabel,
+              loading: labelState.loading,
+              error: labelState.error,
+              refetch: refetchLabelMock
+            }
+          : {
+              data: {
+                effectiveNwcString: 'nostr+walletconnect://test',
+                nwcString: 'nostr+walletconnect://test'
+              },
+              loading: false,
+              error: null,
+              refetch: async () => undefined
+            }
 }))
 
 vi.mock('@/lib/client/nwc', async importOriginal => {

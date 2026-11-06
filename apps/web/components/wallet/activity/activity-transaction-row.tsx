@@ -15,10 +15,13 @@ import {
   splitPaymentDescription,
   usePaymentDestination
 } from '@/lib/client/payment-destinations'
+import { resolveTransactionCounterparty } from '@/lib/client/transaction-counterparty'
+import { useCounterpartyAliases } from '@/lib/client/hooks/use-counterparty-aliases'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
 import { TransactionNoteEditor } from './transaction-note-editor'
+import { CounterpartyAliasEditor } from './counterparty-alias-editor'
 
 export function ActivityTransactionRow({
   tx,
@@ -63,6 +66,18 @@ export function ActivityTransactionRow({
   )
   const described = splitPaymentDescription(tx.description)
   const originalComment = destination ? destination.comment : described.comment
+  const { get: getAlias } = useCounterpartyAliases()
+  const [savedAlias, setSavedAlias] = useState<{
+    pubkey: string | null
+    key: string
+    alias: string | null
+  } | null>(null)
+  const baseCounterparty = resolveTransactionCounterparty(tx, destination, null)
+  const aliasFromApi = getAlias(baseCounterparty.key)
+  const currentAlias =
+    savedAlias?.pubkey === pubkey && savedAlias.key === baseCounterparty.key
+      ? savedAlias.alias
+      : aliasFromApi
   const panelId = useId()
   const href = tx.paymentHash
     ? activityDetailHref(tx.paymentHash, from)
@@ -78,6 +93,18 @@ export function ActivityTransactionRow({
         onSaved={note => setSavedNote({ pubkey, note })}
       />
     ) : null
+  const titleEditor =
+    labelPath != null && baseCounterparty.key && baseCounterparty.label ? (
+      <CounterpartyAliasEditor
+        key={`alias:${pubkey}:${baseCounterparty.key}`}
+        counterpartyKey={baseCounterparty.key}
+        alias={currentAlias}
+        defaultLabel={baseCounterparty.label}
+        onSaved={alias =>
+          setSavedAlias({ pubkey, key: baseCounterparty.key!, alias })
+        }
+      />
+    ) : null
 
   return (
     <div>
@@ -87,7 +114,9 @@ export function ActivityTransactionRow({
           href={href}
           className="min-w-0 flex-1"
           noteOverride={currentNote}
+          aliasOverride={currentAlias}
           commentSlot={noteEditor}
+          titleSlot={titleEditor}
         />
         {!isActivityPreviewRequested() &&
         /^[0-9a-fA-F]{64}$/.test(tx.paymentHash || '') ? (
