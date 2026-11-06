@@ -12,6 +12,7 @@ import {
   useAddressAvatar,
   usePaymentDestination
 } from '@/lib/client/payment-destinations'
+import { resolveTransactionCounterparty } from '@/lib/client/transaction-counterparty'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 
 interface TransactionRowProps {
@@ -20,11 +21,18 @@ interface TransactionRowProps {
   className?: string
   /** Private note override shown instead of the payment comment when set. */
   noteOverride?: string | null
+  /** Saved counterparty alias; applied on top of recipient / node id. */
+  aliasOverride?: string | null
   /**
    * Replaces the comment line (e.g. inline note editor). When set with href,
    * the link becomes a full-row overlay so this control is not inside it.
    */
   commentSlot?: ReactNode
+  /**
+   * Replaces the title line (e.g. inline alias editor). Same overlay rules as
+   * `commentSlot`.
+   */
+  titleSlot?: ReactNode
 }
 
 export function TransactionRow({
@@ -32,7 +40,9 @@ export function TransactionRow({
   href,
   className,
   noteOverride,
-  commentSlot
+  aliasOverride,
+  commentSlot,
+  titleSlot
 }: TransactionRowProps) {
   const t = useT()
   const locale = useLocale()
@@ -40,20 +50,26 @@ export function TransactionRow({
   const Icon = incoming ? ArrowDownLeft : ArrowUpRight
   const timestamp = tx.settledAt ?? tx.createdAt
   // Outgoing Lightning Address sends are remembered locally at pay time;
-  // everything else only has the invoice description to go on.
+  // everything else only has the invoice (and optional alias) to go on.
   const destination = usePaymentDestination(incoming ? null : tx.paymentHash)
   const described = splitPaymentDescription(tx.description)
+  const counterparty = resolveTransactionCounterparty(
+    tx,
+    destination,
+    aliasOverride
+  )
   const title =
-    destination?.name ||
-    destination?.address ||
-    described.label ||
-    (incoming ? t.shared.tx.received : t.shared.tx.sent)
+    counterparty.label ||
+    (counterparty.fallback === 'received'
+      ? t.shared.tx.received
+      : t.shared.tx.sent)
   const originalComment = destination ? destination.comment : described.comment
   const comment = noteOverride || originalComment
   const avatarUrl = useAddressAvatar(
     destination?.address,
     destination?.avatarUrl
   )
+  const interactiveSlots = Boolean(titleSlot || commentSlot)
 
   function remember() {
     rememberActivityTx(tx)
@@ -94,9 +110,15 @@ export function TransactionRow({
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium text-foreground">
-          {title}
-        </span>
+        {titleSlot ? (
+          <span className="pointer-events-auto relative z-10 flex min-w-0">
+            {titleSlot}
+          </span>
+        ) : (
+          <span className="truncate text-sm font-medium text-foreground">
+            {title}
+          </span>
+        )}
         {commentSlot ? (
           <span className="pointer-events-auto relative z-10 flex min-w-0">
             {commentSlot}
@@ -130,8 +152,8 @@ export function TransactionRow({
 
   const linkLabel = `${title}, ${incoming ? '+' : '−'}${tx.amountSats.toLocaleString()} sats`
 
-  if (href && commentSlot) {
-    // Overlay link: the note control is a sibling, never nested in the <a>.
+  if (href && interactiveSlots) {
+    // Overlay link: title/note controls are siblings, never nested in the <a>.
     return (
       <div className={cn('relative', classNames)}>
         <Link

@@ -52,12 +52,19 @@ vi.mock('@/lib/client/hooks/use-api', () => ({
               error: null,
               refetch: refetchMock
             }
-          : {
-              data: path ? { label: labelState.label } : null,
-              loading: labelState.loading,
-              error: labelState.error,
-              refetch: refetchMock
-            }
+          : path === '/api/wallet/counterparty-aliases'
+            ? {
+                data: { aliases: {} },
+                loading: false,
+                error: null,
+                refetch: refetchMock
+              }
+            : {
+                data: path ? { label: labelState.label } : null,
+                loading: labelState.loading,
+                error: labelState.error,
+                refetch: refetchMock
+              }
   )
 }))
 vi.mock('@/components/wallet/nwc-provider', () => ({
@@ -174,7 +181,7 @@ describe('ActivityScreen quick transaction information', () => {
   it('shows the persisted tag in the closed transaction row without opening anything', async () => {
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
-      name: /A long payment message/
+      name: /Received/
     })
     expect(within(row).queryByText('Groceries')).not.toBeInTheDocument()
     expect(
@@ -421,7 +428,7 @@ describe('ActivityScreen quick transaction information', () => {
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByText('Groceries')).toBeInTheDocument()
-    const rowLink = screen.getByRole('link', { name: /A long payment message/ })
+    const rowLink = screen.getByRole('link', { name: /Received/ })
     expect(rowLink).toHaveAttribute('href', `/wallet/activity/${hash}`)
     expect(rowLink.contains(toggle)).toBe(false)
     await user.click(rowLink)
@@ -432,7 +439,7 @@ describe('ActivityScreen quick transaction information', () => {
     labelState.note = 'Split with Ana'
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
-      name: /A long payment message/
+      name: /Received/
     })
     const note = screen.getByRole('button', {
       name: 'Edit note: Split with Ana'
@@ -452,7 +459,7 @@ describe('ActivityScreen quick transaction information', () => {
     saveTagMock.mockResolvedValue({ note: 'Dinner' })
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
-      name: /A long payment message/
+      name: /Received/
     })
     await user.click(screen.getByRole('button', { name: /^Edit note/ }))
     expect(recallActivityTx(hash)).toBeNull()
@@ -477,7 +484,7 @@ describe('ActivityScreen quick transaction information', () => {
     saveTagMock.mockResolvedValue({ note: 'Dinner' })
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
-      name: /A long payment message/
+      name: /Received/
     })
     const plus = screen.getByRole('button', { name: 'Add note' })
     expect(plus).toHaveClass('rounded-full')
