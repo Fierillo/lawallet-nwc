@@ -154,3 +154,55 @@ describe('TransactionRow', () => {
     expect(screen.queryByText(/Envío de BTC/)).not.toBeInTheDocument()
   })
 })
+
+  it('shows the routing fee under the amount for outgoing payments', () => {
+    render(
+      <TransactionRow
+        tx={{
+          ...TX,
+          type: 'outgoing',
+          feesPaidSats: 3,
+          feesPaidMsats: 3_000,
+          description: ''
+        }}
+      />
+    )
+    expect(screen.getByText(/fee 3 sats/i)).toBeInTheDocument()
+  })
+
+  it('shows <1 sat when the fee is a positive sub-sat amount', () => {
+    render(
+      <TransactionRow
+        tx={{
+          ...TX,
+          type: 'outgoing',
+          feesPaidSats: 0,
+          feesPaidMsats: 500,
+          description: ''
+        }}
+      />
+    )
+    expect(screen.getByText(/fee <1 sats/i)).toBeInTheDocument()
+  })
+
+  it('hides the fee line for incoming payments and zero fees', () => {
+    const { rerender } = render(
+      <TransactionRow
+        tx={{ ...TX, type: 'incoming', feesPaidSats: 3, feesPaidMsats: 3_000 }}
+      />
+    )
+    expect(screen.queryByText(/fee /i)).not.toBeInTheDocument()
+
+    rerender(
+      <TransactionRow
+        tx={{
+          ...TX,
+          type: 'outgoing',
+          feesPaidSats: 0,
+          feesPaidMsats: 0,
+          description: ''
+        }}
+      />
+    )
+    expect(screen.queryByText(/fee /i)).not.toBeInTheDocument()
+  })

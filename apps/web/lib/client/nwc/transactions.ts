@@ -8,6 +8,11 @@ export interface NwcTransaction {
   type: 'incoming' | 'outgoing'
   amountSats: number
   feesPaidSats: number
+  /**
+   * Exact NIP-47 `fees_paid` in msats when the wallet reported it; `null` when
+   * the field was omitted. Used for sub-sat fee display in the activity row.
+   */
+  feesPaidMsats?: number | null
   description: string
   paymentHash: string
   preimage: string | null
@@ -67,10 +72,13 @@ function normalize(raw: RawTransaction): NwcTransaction | null {
   const paymentHash = raw.payment_hash?.trim()
   if (!paymentHash) return null
   const invoice = raw.invoice?.trim() || null
+  const feesPaidMsats =
+    raw.fees_paid == null ? null : Math.max(0, Math.floor(raw.fees_paid))
   return {
     type: raw.type === 'outgoing' ? 'outgoing' : 'incoming',
     amountSats: Math.floor((raw.amount ?? 0) / 1000),
-    feesPaidSats: Math.floor((raw.fees_paid ?? 0) / 1000),
+    feesPaidSats: Math.floor((feesPaidMsats ?? 0) / 1000),
+    feesPaidMsats,
     description: raw.description ?? '',
     paymentHash,
     preimage: raw.preimage ?? null,
@@ -79,6 +87,19 @@ function normalize(raw: RawTransaction): NwcTransaction | null {
     invoice,
     state: normalizeState(raw)
   }
+}
+
+/**
+ * Compact sats label for the activity-row fee line. Returns null when there is
+ * nothing useful to show (missing or zero). Sub-sat positive fees render as
+ * `<1` so floor-to-sats does not hide a real routing cost.
+ */
+export function activityFeeAmountLabel(
+  feesPaidMsats: number | null | undefined
+): string | null {
+  if (feesPaidMsats == null || feesPaidMsats <= 0) return null
+  if (feesPaidMsats < 1000) return '<1'
+  return Math.floor(feesPaidMsats / 1000).toLocaleString()
 }
 
 /**

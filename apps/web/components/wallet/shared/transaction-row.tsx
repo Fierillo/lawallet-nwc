@@ -5,7 +5,10 @@ import Link from 'next/link'
 import { ArrowUpRight, ArrowDownLeft } from 'lucide-react'
 import { useLocale, useT, type Dict } from '@/lib/client/i18n'
 import { cn } from '@/lib/utils'
-import type { NwcTransaction } from '@/lib/client/nwc/transactions'
+import {
+  activityFeeAmountLabel,
+  type NwcTransaction
+} from '@/lib/client/nwc/transactions'
 import { rememberActivityTx } from '@/lib/client/activity-detail-store'
 import {
   splitPaymentDescription,
@@ -70,6 +73,12 @@ export function TransactionRow({
     destination?.avatarUrl
   )
   const interactiveSlots = Boolean(titleSlot || commentSlot)
+  const feeAmount = incoming
+    ? null
+    : activityFeeAmountLabel(
+        tx.feesPaidMsats ??
+          (tx.feesPaidSats > 0 ? tx.feesPaidSats * 1000 : null)
+      )
 
   function remember() {
     rememberActivityTx(tx)
@@ -146,6 +155,11 @@ export function TransactionRow({
           </span>
           <span className="ml-1 text-xs text-muted-foreground">sats</span>
         </div>
+        {feeAmount ? (
+          <span className="text-[11px] leading-tight text-muted-foreground">
+            {t.shared.tx.fee(feeAmount)}
+          </span>
+        ) : null}
       </div>
     </>
   )
