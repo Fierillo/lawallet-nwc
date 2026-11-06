@@ -42,7 +42,9 @@ describe('exposure policy vs the live OpenAPI document', () => {
       'wallet.transactions.label.set',
       'wallet.transactions.tags.list',
       'wallet.transactions.note.get',
-      'wallet.transactions.note.set'
+      'wallet.transactions.note.set',
+      'wallet.counterpartyAliases.list',
+      'wallet.counterpartyAliases.set'
     ]) {
       expect(policyFor(findOperation(id)!)).toHaveProperty('excluded')
     }
