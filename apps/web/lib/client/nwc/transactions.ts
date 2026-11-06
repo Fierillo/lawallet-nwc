@@ -72,8 +72,7 @@ function normalize(raw: RawTransaction): NwcTransaction | null {
   const paymentHash = raw.payment_hash?.trim()
   if (!paymentHash) return null
   const invoice = raw.invoice?.trim() || null
-  const feesPaidMsats =
-    raw.fees_paid == null ? null : Math.max(0, Math.floor(raw.fees_paid))
+  const feesPaidMsats = normalizeFeesPaidMsats(raw.fees_paid)
   return {
     type: raw.type === 'outgoing' ? 'outgoing' : 'incoming',
     amountSats: Math.floor((raw.amount ?? 0) / 1000),
@@ -87,6 +86,18 @@ function normalize(raw: RawTransaction): NwcTransaction | null {
     invoice,
     state: normalizeState(raw)
   }
+}
+
+/**
+ * NIP-47 `fees_paid` in msats, or `null` when omitted. LNbits'
+ * `list_transactions` passes its internal fee through, which is negative for
+ * outgoing payments, so the sign is dropped instead of clamping it to zero.
+ */
+export function normalizeFeesPaidMsats(
+  feesPaid: number | null | undefined
+): number | null {
+  if (feesPaid == null || !Number.isFinite(feesPaid)) return null
+  return Math.floor(Math.abs(feesPaid))
 }
 
 /**

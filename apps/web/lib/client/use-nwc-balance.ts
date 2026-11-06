@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { nwcCacheKey } from '@/lib/client/cache/key'
 import { readBalance, writeBalance } from '@/lib/client/cache/balance-cache'
 import { upsertMany } from '@/lib/client/cache/activity-cache'
+import { normalizeFeesPaidMsats } from '@/lib/client/nwc/transactions'
 
 /**
  * Minimal shape of a NIP-47 transaction that we care about for UI.
@@ -316,10 +317,7 @@ export function useNwcBalance(
               const tx = notification.notification
               // Refresh balance on any payment event so the UI stays in sync
               fetchOnce(true, true)
-              const feesPaidMsats =
-                tx.fees_paid == null
-                  ? null
-                  : Math.max(0, Math.floor(tx.fees_paid))
+              const feesPaidMsats = normalizeFeesPaidMsats(tx.fees_paid)
               const event = {
                 type: tx.type,
                 amountSats: Math.floor(tx.amount / 1000),
