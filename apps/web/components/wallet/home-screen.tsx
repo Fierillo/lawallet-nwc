@@ -761,6 +761,7 @@ function eventToTransaction(event: NwcTransactionEvent): NwcTransaction {
     type: event.type,
     amountSats: event.amountSats,
     feesPaidSats: event.feesPaidSats,
+    feesPaidMsats: event.feesPaidMsats ?? null,
     description: event.description,
     paymentHash: event.paymentHash,
     preimage: null,

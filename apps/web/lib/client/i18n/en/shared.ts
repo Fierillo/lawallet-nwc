@@ -18,7 +18,8 @@ export const shared = {
     justNow: 'Just now',
     minutesAgo: (n: number) => `${n}m ago`,
     hoursAgo: (n: number) => `${n}h ago`,
-    daysAgo: (n: number) => `${n}d ago`
+    daysAgo: (n: number) => `${n}d ago`,
+    fee: (amount: string) => `fee ${amount} sats`
   },
   pagination: {
     label: (label: string) => `${label} pagination`,
