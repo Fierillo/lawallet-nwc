@@ -129,11 +129,33 @@ export function LightningAddressInput({
   const committed = committedValue !== null && committedValue === query
   const currentDomain = resolveCurrentLightningDomain(me?.lightningAddress)
 
+  // Addresses the user aliased in activity are people they know too, even
+  // when this device never saved them. Node-id aliases have no address to
+  // pay, so they stay out.
+  const knownRecipients = useMemo(() => {
+    if (hideContacts) return contacts
+    const saved = new Set(contacts.map(c => c.lightningAddress))
+    const aliasOnly: Contact[] = []
+    for (const key of Object.keys(aliasData?.aliases ?? {})) {
+      if (!key.startsWith('ln:')) continue
+      const lightningAddress = key.slice(3)
+      if (saved.has(lightningAddress) || !isLightningAddress(lightningAddress))
+        continue
+      aliasOnly.push({
+        id: `alias:${lightningAddress}`,
+        name: lightningAddress.split('@')[0] ?? lightningAddress,
+        lightningAddress,
+        createdAt: 0
+      })
+    }
+    return aliasOnly.length > 0 ? [...contacts, ...aliasOnly] : contacts
+  }, [aliasData, contacts, hideContacts])
+
   const recentContacts = useMemo(() => {
     if (hideContacts) return []
     const aliases = aliasData?.aliases
     const matched = query
-      ? contacts.filter(contact =>
+      ? knownRecipients.filter(contact =>
           recipientMatchesQuery(
             {
               lightningAddress: contact.lightningAddress,
@@ -146,9 +168,9 @@ export function LightningAddressInput({
             query
           )
         )
-      : contacts
+      : knownRecipients
     return matched.slice(0, MAX_RECENT_OPTIONS)
-  }, [aliasData, contacts, hideContacts, query])
+  }, [aliasData, hideContacts, knownRecipients, query])
   const suggestedAddresses = useMemo(
     () =>
       hideSuggestions
@@ -161,7 +183,7 @@ export function LightningAddressInput({
   // noise — the user already settled on one. Collapse to that single row, the
   // saved contact when there is one (it carries the avatar and name).
   const savedContact =
-    contacts.find(contact => contact.lightningAddress === query) ?? null
+    knownRecipients.find(contact => contact.lightningAddress === query) ?? null
   const exactContact = hideContacts ? null : savedContact
   const exactSuggestion =
     suggestedAddresses.find(

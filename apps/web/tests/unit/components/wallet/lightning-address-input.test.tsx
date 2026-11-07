@@ -113,6 +113,25 @@ describe('LightningAddressInput', () => {
     ).toHaveTextContent('ariel@')
   })
 
+  it('offers an aliased Lightning Address even when it is not a saved contact', async () => {
+    const user = userEvent.setup()
+    aliases.current = {
+      'ln:juan@blink.sv': 'fiwi',
+      ['node:02' + 'ab'.repeat(32)]: 'fiwi node'
+    }
+    render(<Harness variant="inline" hideSuggestions />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    const options = within(
+      screen.getByRole('group', { name: 'Saved' })
+    ).getAllByRole('option')
+    // The node alias has no address to pay, so only the address one shows.
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('fiwi')
+    expect(options[0]).toHaveTextContent('juan@blink.sv')
+  })
+
   it('keeps the list closed until the popover field is focused', async () => {
     const user = userEvent.setup()
     seedContacts(3)
