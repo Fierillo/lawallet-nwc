@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   backfillSavedRecipients,
   historyRecipients,
+  seedContactsFromHistory,
   __resetRecipientBackfillForTests
 } from '@/lib/client/recipient-backfill'
 import {
   __resetContactsCacheForTests,
-  contactsActions
+  contactsActions,
+  readContactFailures
 } from '@/lib/client/contacts-store'
 import {
   __resetPaymentDestinationsForTests,
@@ -112,6 +114,27 @@ describe('backfillSavedRecipients', () => {
     expect(
       stored.map((c: { lightningAddress: string }) => c.lightningAddress)
     ).toContain('ariel@lacrypta.ar')
+  })
+
+  it('preserves account payment alerts while seeding and uploading local history', async () => {
+    contactsActions.upsertRecent({ lightningAddress: 'bob@example.com' })
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'bob@example.com',
+        name: 'Bob',
+        avatarUrl: null,
+        lastUsedAt: new Date(t0).toISOString(),
+        lastFailureReason: 'No route'
+      }
+    ])
+
+    seedContactsFromHistory()
+    expect(readContactFailures()).toEqual({ 'bob@example.com': 'No route' })
+    await backfillSavedRecipients(
+      [],
+      vi.fn().mockResolvedValue({ inserted: 1 })
+    )
+    expect(readContactFailures()).toEqual({ 'bob@example.com': 'No route' })
   })
 
   it('skips the request when the account already has everything', async () => {
