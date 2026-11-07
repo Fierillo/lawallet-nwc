@@ -382,6 +382,40 @@ export async function mergeAccounts(params: {
       await tx.transactionNote.deleteMany({ where: { userId: absorbedId } })
     }
 
+    // Private contacts follow the same conflict rule as notes: survivor wins.
+    // Omit IDs so copies get fresh PKs; absorbed rows cascade with the shell.
+    const absorbedAliases = await tx.counterpartyAlias.findMany({
+      where: { userId: absorbedId },
+      select: { key: true, alias: true, createdAt: true, updatedAt: true }
+    })
+    if (absorbedAliases.length > 0) {
+      await tx.counterpartyAlias.createMany({
+        data: absorbedAliases.map(alias => ({ ...alias, userId: survivorId })),
+        skipDuplicates: true
+      })
+    }
+    const absorbedRecipients = await tx.savedRecipient.findMany({
+      where: { userId: absorbedId },
+      select: {
+        lightningAddress: true,
+        name: true,
+        avatarUrl: true,
+        lastUsedAt: true,
+        createdAt: true,
+        lastFailureReason: true,
+        lastFailureAt: true
+      }
+    })
+    if (absorbedRecipients.length > 0) {
+      await tx.savedRecipient.createMany({
+        data: absorbedRecipients.map(recipient => ({
+          ...recipient,
+          userId: survivorId
+        })),
+        skipDuplicates: true
+      })
+    }
+
     // ── Delete the empty shell BEFORE settling the primary: its
     // User.pubkey would collide with the survivor's mirror if the chosen
     // main pubkey is the absorbed account's. Everything was re-parented, so
