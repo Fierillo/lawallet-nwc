@@ -252,7 +252,7 @@
           "lightningAddress": {
             "type": "string",
             "maxLength": 200,
-            "pattern": "^[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
+            "pattern": "^(?:[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}|0[23][a-f0-9]{64})$"
           },
           "name": {
             "type": [
@@ -268,6 +268,14 @@
             ],
             "maxLength": 2048,
             "format": "uri"
+          },
+          "lastFailureReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500
           }
         },
         "required": [
@@ -285,7 +293,7 @@
                 "lightningAddress": {
                   "type": "string",
                   "maxLength": 200,
-                  "pattern": "^[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
+                  "pattern": "^(?:[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}|0[23][a-f0-9]{64})$"
                 },
                 "name": {
                   "type": [
@@ -10589,7 +10597,7 @@
         "tags": [
           "Wallet"
         ],
-        "summary": "List the caller’s recently paid Lightning Addresses.",
+        "summary": "List the caller’s recent Lightning recipients and payment alerts.",
         "description": "Returns up to 50 saved send recipients for the authenticated account, most recently used first.",
         "operationId": "wallet.recipients.list",
         "security": [
@@ -10630,13 +10638,27 @@
                           },
                           "lastUsedAt": {
                             "type": "string"
+                          },
+                          "lastFailureReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastFailureAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "lightningAddress",
                           "name",
                           "avatarUrl",
-                          "lastUsedAt"
+                          "lastUsedAt",
+                          "lastFailureReason",
+                          "lastFailureAt"
                         ]
                       }
                     }
@@ -10695,8 +10717,8 @@
         "tags": [
           "Wallet"
         ],
-        "summary": "Save a Lightning Address as a recent send recipient.",
-        "description": "Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar keep the stored values.",
+        "summary": "Save a Lightning Address or keysend node as a recent recipient.",
+        "description": "Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar/failure keep stored values. lastFailureReason records an alert (up to 500 characters); null clears it. lastFailureAt is assigned by the server. Alias-only addresses and compressed node public keys are upserted for the caller.",
         "operationId": "wallet.recipients.save",
         "security": [
           {
@@ -10782,7 +10804,7 @@
           "Wallet"
         ],
         "summary": "Backfill recent send recipients from payment history.",
-        "description": "Inserts up to 50 Lightning Addresses with their own last-used time. Addresses the account already has are left untouched.",
+        "description": "Inserts up to 50 Lightning recipients (addresses or keysend nodes) with their own last-used time. Addresses the account already has are left untouched.",
         "operationId": "wallet.recipients.import",
         "security": [
           {

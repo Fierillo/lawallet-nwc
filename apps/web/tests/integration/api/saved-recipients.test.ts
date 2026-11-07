@@ -43,7 +43,9 @@ describe('saved recipients', () => {
         lightningAddress: 'alice@example.com',
         name: 'Alice',
         avatarUrl: null,
-        lastUsedAt: usedAt
+        lastUsedAt: usedAt,
+        lastFailureReason: 'Pedile un invoice.',
+        lastFailureAt: usedAt
       }
     ] as never)
     const response = await route.GET(
@@ -55,7 +57,9 @@ describe('saved recipients', () => {
           lightningAddress: 'alice@example.com',
           name: 'Alice',
           avatarUrl: null,
-          lastUsedAt: usedAt.toISOString()
+          lastUsedAt: usedAt.toISOString(),
+          lastFailureReason: 'Pedile un invoice.',
+          lastFailureAt: usedAt.toISOString()
         }
       ]
     })
@@ -67,7 +71,9 @@ describe('saved recipients', () => {
         lightningAddress: true,
         name: true,
         avatarUrl: true,
-        lastUsedAt: true
+        lastUsedAt: true,
+        lastFailureReason: true,
+        lastFailureAt: true
       }
     })
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
@@ -132,6 +138,44 @@ describe('saved recipients', () => {
     }
   })
 
+  it.each(['alice@example.com', '02' + 'ab'.repeat(32)])(
+    'persists and clears a failure for %s under the caller only',
+    async lightningAddress => {
+      for (const lastFailureReason of [
+        'No se encontró ruta. Pedile un invoice.',
+        null
+      ]) {
+        const response = await route.PUT(
+          createNextRequest(path, {
+            method: 'PUT',
+            body: {
+              lightningAddress,
+              lastFailureReason,
+              userId: 'other',
+              lastFailureAt: '2000-01-01T00:00:00Z'
+            }
+          })
+        )
+        expect(response.status).toBe(200)
+        const call = vi
+          .mocked(prismaMock.savedRecipient.upsert)
+          .mock.calls.at(-1)![0]
+        expect(call.where).toEqual({
+          userId_lightningAddress: { userId: 'owner', lightningAddress }
+        })
+        expect(call.create).toMatchObject({
+          userId: 'owner',
+          lightningAddress,
+          lastFailureReason
+        })
+        expect(call.update).toMatchObject({
+          lastFailureReason,
+          lastFailureAt: lastFailureReason ? expect.any(Date) : null
+        })
+      }
+    }
+  )
+
   it('keeps stored name and avatar when the upsert omits them', async () => {
     await route.PUT(
       createNextRequest(path, {
@@ -142,6 +186,8 @@ describe('saved recipients', () => {
     const call = vi.mocked(prismaMock.savedRecipient.upsert).mock.calls[0][0]
     expect(call.update).not.toHaveProperty('name')
     expect(call.update).not.toHaveProperty('avatarUrl')
+    expect(call.update).not.toHaveProperty('lastFailureReason')
+    expect(call.update).not.toHaveProperty('lastFailureAt')
     expect(call.update).toHaveProperty('lastUsedAt')
   })
 
@@ -151,6 +197,13 @@ describe('saved recipients', () => {
     { lightningAddress: 'alice@example.com', name: 'x'.repeat(81) },
     { lightningAddress: 'alice@example.com', avatarUrl: 'javascript:alert(1)' },
     { lightningAddress: 42 },
+    { lightningAddress: '02' + 'ab'.repeat(31) },
+    {
+      lightningAddress: 'alice@example.com',
+      lastFailureReason: 'x'.repeat(501)
+    },
+    { lightningAddress: 'alice@example.com', lastFailureReason: '' },
+    { lightningAddress: 'alice@example.com', lastFailureReason: 42 },
     {}
   ])('rejects invalid payloads (%j)', async body => {
     const response = await route.PUT(

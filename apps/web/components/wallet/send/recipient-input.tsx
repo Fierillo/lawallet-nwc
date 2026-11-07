@@ -13,7 +13,7 @@ import {
   type ResolvedRecipient
 } from '@/lib/client/wallet-flow-store'
 import { useAuth } from '@/components/admin/auth-context'
-import { useApi } from '@/lib/client/hooks/use-api'
+import { invalidateApiPath, useApi } from '@/lib/client/hooks/use-api'
 import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
 import { counterpartyNodeKey } from '@/lib/client/transaction-counterparty'
 import {
@@ -154,7 +154,11 @@ export function RecipientInput() {
       // Leave the spinner up — this screen unmounts when the next one loads.
     } catch (err) {
       const message = errorText(t, err, t.send.invalidRecipient)
-      contactsActions.setPaymentFailure(trimmedValue, message)
+      void contactsActions.syncPaymentFailure(trimmedValue, message, body =>
+        apiClient
+          .put(SAVED_RECIPIENTS_PATH, body)
+          .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+      )
       setError(message)
       toast.error(message)
       setLoading(false)

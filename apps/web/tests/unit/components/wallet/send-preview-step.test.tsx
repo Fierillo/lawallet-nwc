@@ -14,6 +14,10 @@ import {
 } from '@/lib/client/wallet-flow-store'
 import { PaymentInputError, type PaymentQuote } from '@/lib/client/nwc/pay'
 
+const accountClient = vi.hoisted(() => ({
+  get: vi.fn(async () => undefined),
+  put: vi.fn(async () => undefined)
+}))
 const replaceMock = vi.hoisted(() => vi.fn())
 const quotePaymentMock = vi.hoisted(() => vi.fn())
 const payQuotedInvoiceMock = vi.hoisted(() => vi.fn())
@@ -41,7 +45,7 @@ vi.mock('@/lib/client/hooks/use-api', () => ({
 
 vi.mock('@/components/admin/auth-context', () => ({
   useAuth: () => ({
-    apiClient: { get: vi.fn(async () => undefined) }
+    apiClient: accountClient
   })
 }))
 
@@ -95,6 +99,7 @@ describe('SendPreviewStep payer note', () => {
     replaceMock.mockReset()
     quotePaymentMock.mockReset()
     payQuotedInvoiceMock.mockReset()
+    accountClient.put.mockClear()
     payQuotedInvoiceMock.mockResolvedValue({
       preimage: 'ab',
       feesPaidSats: 2
@@ -214,6 +219,7 @@ describe('SendPreviewStep keysend', () => {
     replaceMock.mockReset()
     quotePaymentMock.mockReset()
     payQuotedInvoiceMock.mockReset()
+    accountClient.put.mockClear()
     sendActions.setRecipient({
       raw: PUBKEY,
       destination: { kind: 'keysend', pubkey: PUBKEY },
@@ -254,6 +260,10 @@ describe('SendPreviewStep keysend', () => {
       )
     })
     expect(readContactFailures()[PUBKEY]).toBeUndefined()
+    expect(accountClient.put).toHaveBeenCalledWith('/api/wallet/recipients', {
+      lightningAddress: PUBKEY,
+      lastFailureReason: null
+    })
   })
 
   it('explains a missing route to the node in plain words', async () => {
@@ -281,6 +291,10 @@ describe('SendPreviewStep keysend', () => {
       )
     })
     expect(readContactFailures()[PUBKEY]).toContain('No route')
+    expect(accountClient.put).toHaveBeenCalledWith('/api/wallet/recipients', {
+      lightningAddress: PUBKEY,
+      lastFailureReason: expect.stringContaining('No route')
+    })
   })
 
   it('explains when the wallet cannot keysend', async () => {
@@ -293,5 +307,9 @@ describe('SendPreviewStep keysend', () => {
       await screen.findByText(/Your wallet can't pay a node directly/)
     ).toBeInTheDocument()
     expect(readContactFailures()[PUBKEY]).toContain('keysend')
+    expect(accountClient.put).toHaveBeenCalledWith('/api/wallet/recipients', {
+      lightningAddress: PUBKEY,
+      lastFailureReason: expect.stringContaining('keysend')
+    })
   })
 })

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   contactsActions,
   readContactFailures,
@@ -280,5 +280,65 @@ describe('contact payment alerts', () => {
     __resetContactsCacheForTests()
     expect(readContactFailures()['alice@example.com']).toBeUndefined()
     expect(readContactFailures()[node]).toBe('No se encontró ruta.')
+  })
+})
+
+describe('account recipient alerts', () => {
+  it('uses the account state as authoritative, including cleared flags and alias-only nodes', () => {
+    const node = '02' + 'ab'.repeat(32)
+    contactsActions.clear()
+    contactsActions.setPaymentFailure(
+      'alice@example.com',
+      'stale local failure'
+    )
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'alice@example.com',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString(),
+        lastFailureReason: null,
+        lastFailureAt: null
+      },
+      {
+        lightningAddress: node,
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString(),
+        lastFailureReason: 'Pedile un invoice.',
+        lastFailureAt: new Date().toISOString()
+      }
+    ])
+    expect(readContactFailures()['alice@example.com']).toBeUndefined()
+    expect(readContactFailures()[node]).toBe('Pedile un invoice.')
+  })
+})
+
+describe('syncing account failures', () => {
+  it('sends failure and success to the account without blocking local alerts on network errors', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    await contactsActions.syncPaymentFailure(
+      'ALICE@example.com',
+      'Pedile un invoice.',
+      save
+    )
+    expect(save).toHaveBeenLastCalledWith({
+      lightningAddress: 'alice@example.com',
+      lastFailureReason: 'Pedile un invoice.'
+    })
+    await contactsActions.syncPaymentFailure('alice@example.com', null, save)
+    expect(save).toHaveBeenLastCalledWith({
+      lightningAddress: 'alice@example.com',
+      lastFailureReason: null
+    })
+    save.mockRejectedValue(new Error('offline'))
+    await expect(
+      contactsActions.syncPaymentFailure(
+        'alice@example.com',
+        'Reintentá.',
+        save
+      )
+    ).resolves.toBeUndefined()
+    expect(readContactFailures()['alice@example.com']).toBe('Reintentá.')
   })
 })

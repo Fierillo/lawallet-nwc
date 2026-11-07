@@ -186,7 +186,9 @@ const savedRecipientsResponse = z.object({
       lightningAddress: z.string(),
       name: z.string().nullable(),
       avatarUrl: z.string().nullable(),
-      lastUsedAt: z.string()
+      lastUsedAt: z.string(),
+      lastFailureReason: z.string().nullable(),
+      lastFailureAt: z.string().nullable()
     })
   )
 })
@@ -196,7 +198,7 @@ registry.registerPath({
   method: 'get',
   path: '/api/wallet/recipients',
   tags: [TAG],
-  summary: 'List the caller’s recently paid Lightning Addresses.',
+  summary: 'List the caller’s recent Lightning recipients and payment alerts.',
   description:
     'Returns up to 50 saved send recipients for the authenticated account, most recently used first.',
   operationId: 'wallet.recipients.list',
@@ -215,9 +217,9 @@ registry.registerPath({
   method: 'put',
   path: '/api/wallet/recipients',
   tags: [TAG],
-  summary: 'Save a Lightning Address as a recent send recipient.',
+  summary: 'Save a Lightning Address or keysend node as a recent recipient.',
   description:
-    'Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar keep the stored values.',
+    'Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar/failure keep stored values. lastFailureReason records an alert (up to 500 characters); null clears it. lastFailureAt is assigned by the server. Alias-only addresses and compressed node public keys are upserted for the caller.',
   operationId: 'wallet.recipients.save',
   security: protectedSecurity,
   request: {
@@ -243,7 +245,7 @@ registry.registerPath({
   tags: [TAG],
   summary: 'Backfill recent send recipients from payment history.',
   description:
-    'Inserts up to 50 Lightning Addresses with their own last-used time. Addresses the account already has are left untouched.',
+    'Inserts up to 50 Lightning recipients (addresses or keysend nodes) with their own last-used time. Addresses the account already has are left untouched.',
   operationId: 'wallet.recipients.import',
   security: protectedSecurity,
   request: {

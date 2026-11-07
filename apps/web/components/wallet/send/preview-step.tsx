@@ -14,6 +14,7 @@ import {
 } from '@/lib/client/wallet-flow-store'
 import {
   contactsActions,
+  SAVED_RECIPIENTS_PATH,
   useContacts,
   type Contact
 } from '@/lib/client/contacts-store'
@@ -173,7 +174,14 @@ export function SendPreviewStep() {
       err => {
         const message = errorText(t, err, t.send.preview.quoteFailed)
         if (!cancelled) {
-          contactsActions.setPaymentFailure(flow.recipient!.raw, message)
+          void contactsActions.syncPaymentFailure(
+            flow.recipient!.raw,
+            message,
+            body =>
+              apiClient
+                .put(SAVED_RECIPIENTS_PATH, body)
+                .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+          )
           setQuoteState({ key: quoteKey, status: 'error', message })
         }
       }
@@ -182,7 +190,15 @@ export function SendPreviewStep() {
     return () => {
       cancelled = true
     }
-  }, [quoteKey, flow.recipient, flow.amountSats, flow.comment, effectiveNwc, t])
+  }, [
+    quoteKey,
+    flow.recipient,
+    flow.amountSats,
+    flow.comment,
+    effectiveNwc,
+    t,
+    apiClient
+  ])
 
   const typedNote = flow.comment.trim()
   const acceptedNote =
@@ -231,7 +247,11 @@ export function SendPreviewStep() {
         return
       }
       const result = await payQuotedInvoice(nwc, currentQuote.quote)
-      contactsActions.setPaymentFailure(flow.recipient!.raw, null)
+      void contactsActions.syncPaymentFailure(flow.recipient!.raw, null, body =>
+        apiClient
+          .put(SAVED_RECIPIENTS_PATH, body)
+          .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+      )
       const paymentHash =
         result.paymentHash ??
         paymentHashFromBolt11(currentQuote.quote.paymentRequest)
@@ -258,7 +278,14 @@ export function SendPreviewStep() {
       const message = nwcErrorText(t, err, t.send.preview.paymentFailed, {
         keysend: Boolean(currentQuote.quote.keysendPubkey)
       })
-      contactsActions.setPaymentFailure(flow.recipient!.raw, message)
+      void contactsActions.syncPaymentFailure(
+        flow.recipient!.raw,
+        message,
+        body =>
+          apiClient
+            .put(SAVED_RECIPIENTS_PATH, body)
+            .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+      )
       sendActions.setError(message)
       toast.error(message)
       setPaying(false)
