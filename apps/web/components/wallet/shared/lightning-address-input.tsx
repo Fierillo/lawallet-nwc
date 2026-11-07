@@ -9,7 +9,7 @@ import {
   type ReactNode
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
-import { Zap } from 'lucide-react'
+import { TriangleAlert, Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
@@ -19,6 +19,7 @@ import { readAvatar } from '@/lib/client/cache/avatar-cache'
 import {
   contactsActions,
   useContacts,
+  useContactFailures,
   type Contact
 } from '@/lib/client/contacts-store'
 import {
@@ -41,7 +42,8 @@ const RECENT_PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_RECENT_OPTIONS = 10
 const AVATAR_LOOKUP_DEBOUNCE_MS = 400
 const NAME_QUERY_RE = /^[a-z0-9._-]+(@[a-z0-9.-]*)?$/
-const NON_ADDRESS_PREFIX_RE = /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile|0[23][0-9a-f]{64}$)/
+const NON_ADDRESS_PREFIX_RE =
+  /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile|0[23][0-9a-f]{64}$)/
 
 interface UserMeResponse {
   lightningAddress: string | null
@@ -117,6 +119,7 @@ export function LightningAddressInput({
 }: LightningAddressInputProps) {
   const t = useT()
   const contacts = useContacts()
+  const failures = useContactFailures()
   const { data: me } = useApi<UserMeResponse>('/api/users/me')
   const { data: aliasData } = useApi<{ aliases?: Record<string, string> }>(
     hideContacts ? null : COUNTERPARTY_ALIASES_PATH
@@ -363,6 +366,7 @@ export function LightningAddressInput({
               <LightningAddressOptionButton
                 key={contact.id}
                 id={optionId(listboxId, index)}
+                failureReason={failures[contact.lightningAddress.toLowerCase()]}
                 name={contact.lightningAddress}
                 label={aliasFor(contact.lightningAddress)}
                 avatarUrl={
@@ -386,6 +390,7 @@ export function LightningAddressInput({
                   id={optionId(listboxId, index)}
                   name={abbreviateNodePubkey(node.pubkey)}
                   label={node.alias}
+                  failureReason={failures[node.pubkey.toLowerCase()]}
                   icon={<Zap className="size-3.5" aria-hidden />}
                   active={activeOptionIndex === index}
                   buttonRef={el => {
@@ -644,6 +649,7 @@ export function LightningAddressOptionButton({
   label,
   icon,
   avatarUrl,
+  failureReason,
   active,
   buttonRef,
   onHighlight,
@@ -657,6 +663,7 @@ export function LightningAddressOptionButton({
   /** Replaces the avatar, for options that aren't people (e.g. nodes). */
   icon?: ReactNode
   avatarUrl?: string | null
+  failureReason?: string
   active: boolean
   buttonRef: (node: HTMLButtonElement | null) => void
   onHighlight: () => void
@@ -677,7 +684,8 @@ export function LightningAddressOptionButton({
       onMouseEnter={onHighlight}
       disabled={disabled}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
+        'relative flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
+        failureReason && 'pr-7',
         'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-70',
         active
           ? 'border-(--theme-300) bg-accent/80'
@@ -697,6 +705,16 @@ export function LightningAddressOptionButton({
             {initialsFor(name)}
           </AvatarFallback>
         </Avatar>
+      )}
+      {failureReason && (
+        <span
+          title={failureReason}
+          aria-label={failureReason}
+          role="img"
+          className="absolute right-1 top-1 text-amber-500"
+        >
+          <TriangleAlert className="size-3.5" aria-hidden />
+        </span>
       )}
       {/* One line only: the address already contains the username, and the
       domain was repeating what the address ends with. An alias is the one

@@ -13,6 +13,9 @@ import {
 } from '@/lib/nostr/profile'
 
 const STORAGE_KEY = 'lawallet-contacts'
+const FAILURES_KEY = 'lawallet-contact-failures'
+const EMPTY_FAILURES: Record<string, string> = {}
+let failuresCache: Record<string, string> | null = null
 /** Matches the server cap in `/api/wallet/recipients`. */
 const MAX_RECENT_CONTACTS = 50
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -109,9 +112,50 @@ function subscribe(listener: () => void) {
   }
 }
 
+/** Device-local alerts also cover alias-only contacts and keysend nodes. */
+export function readContactFailures(): Record<string, string> {
+  if (typeof window === 'undefined') return EMPTY_FAILURES
+  if (failuresCache) return failuresCache
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(FAILURES_KEY) ?? '{}'
+    )
+    failuresCache =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? Object.fromEntries(
+            Object.entries(parsed)
+              .filter(([, reason]) => typeof reason === 'string')
+              .slice(0, MAX_RECENT_CONTACTS)
+          )
+        : {}
+  } catch {
+    failuresCache = {}
+  }
+  return failuresCache
+}
+
+export function useContactFailures() {
+  return useSyncExternalStore(
+    subscribe,
+    readContactFailures,
+    () => EMPTY_FAILURES
+  )
+}
+
+function writeContactFailures(next: Record<string, string>) {
+  failuresCache = next
+  try {
+    window.localStorage.setItem(FAILURES_KEY, JSON.stringify(next))
+  } catch {
+    // Best effort, like the contact cache; payment results must never depend on storage.
+  }
+  for (const listener of listeners) listener()
+}
+
 function onStorage(e: StorageEvent) {
-  if (e.key !== STORAGE_KEY) return
+  if (e.key !== STORAGE_KEY && e.key !== FAILURES_KEY && e.key !== null) return
   cache = null
+  failuresCache = null
   for (const listener of listeners) listener()
 }
 
@@ -185,6 +229,20 @@ export function useContacts(): Contact[] {
 
 /** Mutation surface for the contacts store — all writes notify subscribers. */
 export const contactsActions = {
+  setPaymentFailure(destination: string, reason: string | null) {
+    const key = destination.trim().toLowerCase()
+    if (!key || key.length > 2048) return
+    const next = { ...readContactFailures() }
+    delete next[key]
+    writeContactFailures(
+      Object.fromEntries(
+        [
+          ...(reason ? [[key, reason.slice(0, 500)]] : []),
+          ...Object.entries(next)
+        ].slice(0, MAX_RECENT_CONTACTS)
+      )
+    )
+  },
   add(input: Omit<Contact, 'id' | 'createdAt'>): Contact {
     const contact: Contact = {
       id: genId(),
@@ -304,6 +362,7 @@ export const contactsActions = {
     write(read().filter(c => c.id !== id))
   },
   clear() {
+    writeContactFailures({})
     write([])
   }
 }
@@ -315,9 +374,11 @@ export const contactsActions = {
  */
 export function clearContactsCache(): void {
   cache = []
+  failuresCache = {}
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.removeItem(STORAGE_KEY)
+      window.localStorage.removeItem(FAILURES_KEY)
     } catch {
       // ignore unavailable storage
     }
@@ -454,5 +515,6 @@ function isNostrEvent(event: unknown): event is NostrEvent {
 
 /** Test-only hook to reset the module-level cache between cases. */
 export function __resetContactsCacheForTests() {
+  failuresCache = null
   cache = null
 }

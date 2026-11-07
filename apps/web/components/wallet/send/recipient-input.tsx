@@ -154,6 +154,7 @@ export function RecipientInput() {
       // Leave the spinner up — this screen unmounts when the next one loads.
     } catch (err) {
       const message = errorText(t, err, t.send.invalidRecipient)
+      contactsActions.setPaymentFailure(trimmedValue, message)
       setError(message)
       toast.error(message)
       setLoading(false)

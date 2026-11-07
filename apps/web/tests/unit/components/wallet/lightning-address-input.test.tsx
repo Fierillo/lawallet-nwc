@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
+import {
+  contactsActions,
+  __resetContactsCacheForTests
+} from '@/lib/client/contacts-store'
 import {
   LightningAddressInput,
   knownAvatarFor
@@ -51,6 +54,31 @@ describe('LightningAddressInput', () => {
       'fetch',
       vi.fn(async () => new Response(null, { status: 404 }))
     )
+  })
+
+  it('shows a corner warning with its reason on saved addresses and aliased nodes', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    aliases.current = { [`node:${node}`]: 'Fiwind' }
+    contactsActions.setPaymentFailure(
+      'user0@lawallet.io',
+      'Pedile una LN address.'
+    )
+    contactsActions.setPaymentFailure(
+      node,
+      'No se encontró ruta hasta el nodo.'
+    )
+    render(<Harness variant="inline" hideSuggestions allowNodes />)
+    expect(screen.getByTitle('Pedile una LN address.')).toHaveAttribute(
+      'aria-label',
+      'Pedile una LN address.'
+    )
+    expect(screen.getByTitle('No se encontró ruta hasta el nodo.')).toHaveClass(
+      'absolute',
+      'right-1',
+      'top-1'
+    )
+    expect(screen.getAllByRole('option')).toHaveLength(2)
   })
 
   it('finds a saved recipient by the alias the user gave it', async () => {

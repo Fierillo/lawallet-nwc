@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   contactsActions,
+  readContactFailures,
   savedRecipientPayload,
   __resetContactsCacheForTests
 } from '@/lib/client/contacts-store'
@@ -258,5 +259,26 @@ describe('contacts-store', () => {
       name: 'x'.repeat(80),
       avatarUrl: null
     })
+  })
+})
+
+describe('contact payment alerts', () => {
+  beforeEach(() => contactsActions.clear())
+
+  it('persists failures for addresses and nodes and clears only a successful recipient', () => {
+    const node = '02' + 'ab'.repeat(32)
+    contactsActions.setPaymentFailure(
+      ' Alice@Example.com ',
+      'Pedile un invoice.'
+    )
+    contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+    __resetContactsCacheForTests()
+    expect(readContactFailures()['alice@example.com']).toBe(
+      'Pedile un invoice.'
+    )
+    contactsActions.setPaymentFailure('alice@example.com', null)
+    __resetContactsCacheForTests()
+    expect(readContactFailures()['alice@example.com']).toBeUndefined()
+    expect(readContactFailures()[node]).toBe('No se encontró ruta.')
   })
 })
