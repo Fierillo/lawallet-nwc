@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
 import { __resetRecipientBackfillForTests } from '@/lib/client/recipient-backfill'
@@ -8,12 +8,16 @@ import {
   rememberPaymentDestination
 } from '@/lib/client/payment-destinations'
 import { RecipientInput } from '@/components/wallet/send/recipient-input'
+import { renderHook } from '@testing-library/react'
+import { resetAllFlows, useSendFlow } from '@/lib/client/wallet-flow-store'
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() })
+  useRouter: () => ({ push })
 }))
 
-const { apiPut, apiPost, serverRecipients } = vi.hoisted(() => ({
+const { apiPut, apiPost, serverRecipients, aliases, push } = vi.hoisted(() => ({
+  aliases: { current: {} as Record<string, string> },
+  push: vi.fn(),
   apiPut: vi.fn(),
   apiPost: vi.fn(),
   serverRecipients: { current: [] as unknown[] | null }
@@ -22,9 +26,11 @@ const { apiPut, apiPost, serverRecipients } = vi.hoisted(() => ({
 vi.mock('@/lib/client/hooks/use-api', () => ({
   useApi: (path: string | null) => ({
     data:
-      path === '/api/wallet/recipients'
-        ? serverRecipients.current && { recipients: serverRecipients.current }
-        : { lightningAddress: 'me@lawallet.io' }
+      path === '/api/wallet/counterparty-aliases'
+        ? { aliases: aliases.current }
+        : path === '/api/wallet/recipients'
+          ? serverRecipients.current && { recipients: serverRecipients.current }
+          : { lightningAddress: 'me@lawallet.io' }
   })
 }))
 
@@ -49,6 +55,8 @@ describe('RecipientInput', () => {
     __resetContactsCacheForTests()
     serverRecipients.current = []
     apiPut.mockReset().mockResolvedValue({})
+    aliases.current = {}
+    push.mockReset()
     apiPost.mockReset().mockResolvedValue({ inserted: 0 })
     __resetPaymentDestinationsForTests()
     __resetRecipientBackfillForTests()
@@ -214,15 +222,41 @@ describe('RecipientInput', () => {
     expect(screen.getByText('No matching contacts')).toBeInTheDocument()
   })
 
-  it.each(['satoshi@lawallet.ar', 'lnbc10n1pexample', 'lnurl1dp68gurn'])(
-    'shows no hint for a complete destination (%s)',
-    async input => {
-      const user = userEvent.setup()
-      render(<RecipientInput />)
+  it.each([
+    'satoshi@lawallet.ar',
+    'lnbc10n1pexample',
+    'lnurl1dp68gurn',
+    '02' + 'ab'.repeat(32)
+  ])('shows no hint for a complete destination (%s)', async input => {
+    const user = userEvent.setup()
+    render(<RecipientInput />)
 
-      await user.type(screen.getByRole('combobox'), input)
+    await user.type(screen.getByRole('combobox'), input)
 
-      expect(screen.queryByText('No matching contacts')).toBeNull()
-    }
-  )
+    expect(screen.queryByText('No matching contacts')).toBeNull()
+  })
+
+  it('offers an aliased node and sends it to the amount step as keysend', async () => {
+    const user = userEvent.setup()
+    resetAllFlows()
+    const pubkey = '02' + 'ab'.repeat(32)
+    aliases.current = { [`node:${pubkey}`]: 'fiwi' }
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    const option = screen.getByRole('option', { name: /fiwi/ })
+    expect(option).toHaveTextContent('02abab…abab')
+    await user.click(option)
+
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith('/wallet/send/amount')
+    )
+    const { result } = renderHook(() => useSendFlow())
+    expect(result.current.recipient).toMatchObject({
+      raw: pubkey,
+      destination: { kind: 'keysend', pubkey },
+      profile: { name: 'fiwi' }
+    })
+  })
 })
