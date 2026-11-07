@@ -24,7 +24,9 @@ export const GET = withErrorHandling(async (request: Request) => {
       lightningAddress: true,
       name: true,
       avatarUrl: true,
-      lastUsedAt: true
+      lastUsedAt: true,
+      lastFailureReason: true,
+      lastFailureAt: true
     }
   })
   return NextResponse.json({ recipients }, { headers })
@@ -33,14 +35,18 @@ export const GET = withErrorHandling(async (request: Request) => {
 export const PUT = withErrorHandling(async (request: Request) => {
   await checkRequestLimits(request, 'json')
   const userId = await requireUserId(request)
-  const { lightningAddress, name, avatarUrl } = await validateBody(
-    request,
-    saveRecipientSchema
-  )
+  const { lightningAddress, name, avatarUrl, lastFailureReason } =
+    await validateBody(request, saveRecipientSchema)
 
   const data = {
     ...(name ? { name } : {}),
     ...(avatarUrl ? { avatarUrl } : {}),
+    ...(lastFailureReason !== undefined
+      ? {
+          lastFailureReason,
+          lastFailureAt: lastFailureReason ? new Date() : null
+        }
+      : {}),
     lastUsedAt: new Date()
   }
   await prisma.savedRecipient.upsert({

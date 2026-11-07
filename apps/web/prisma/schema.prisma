@@ -378,6 +378,8 @@ model SavedRecipient {
   lightningAddress String   @db.VarChar(200)
   name             String?  @db.VarChar(80)
   avatarUrl        String?  @db.VarChar(2048)
+  lastFailureReason String? @db.VarChar(500)
+  lastFailureAt     DateTime?
   lastUsedAt       DateTime @default(now())
   createdAt        DateTime @default(now())
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)

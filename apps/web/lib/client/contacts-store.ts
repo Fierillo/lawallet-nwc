@@ -193,6 +193,8 @@ export interface SavedRecipient {
   name: string | null
   avatarUrl: string | null
   lastUsedAt: string
+  lastFailureReason?: string | null
+  lastFailureAt?: string | null
 }
 
 export const SAVED_RECIPIENTS_PATH = '/api/wallet/recipients'
@@ -229,6 +231,30 @@ export function useContacts(): Contact[] {
 
 /** Mutation surface for the contacts store — all writes notify subscribers. */
 export const contactsActions = {
+  async syncPaymentFailure(
+    destination: string,
+    reason: string | null,
+    save: (body: {
+      lightningAddress: string
+      lastFailureReason: string | null
+    }) => Promise<unknown>
+  ): Promise<void> {
+    contactsActions.setPaymentFailure(destination, reason)
+    const lightningAddress = destination.trim().toLowerCase()
+    if (
+      !normalizeLightningAddress(lightningAddress) &&
+      !/^0[23][a-f0-9]{64}$/.test(lightningAddress)
+    )
+      return
+    try {
+      await save({
+        lightningAddress,
+        lastFailureReason: reason?.slice(0, 500) ?? null
+      })
+    } catch {
+      // Best effort: a sync failure must never change the payment result.
+    }
+  },
   setPaymentFailure(destination: string, reason: string | null) {
     const key = destination.trim().toLowerCase()
     if (!key || key.length > 2048) return
@@ -326,6 +352,21 @@ export const contactsActions = {
    * missing avatar. Order is most recent use across both sources.
    */
   mergeRemote(recipients: SavedRecipient[]) {
+    // The account is authoritative; null clears stale device-local alerts.
+    writeContactFailures(
+      Object.fromEntries(
+        recipients.flatMap(recipient =>
+          recipient.lastFailureReason
+            ? [
+                [
+                  recipient.lightningAddress.toLowerCase(),
+                  recipient.lastFailureReason
+                ]
+              ]
+            : []
+        )
+      )
+    )
     const contacts = [...read()]
     for (const recipient of recipients) {
       const lightningAddress = normalizeLightningAddress(

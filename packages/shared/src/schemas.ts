@@ -119,11 +119,12 @@ export const saveRecipientSchema = z.object({
     .toLowerCase()
     .max(SAVED_RECIPIENT_ADDRESS_MAX_LENGTH)
     .regex(
-      /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/,
-      'Invalid Lightning Address'
+      /^(?:[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}|0[23][a-f0-9]{64})$/,
+      'Invalid Lightning Address or node public key'
     ),
   name: z.string().trim().max(SAVED_RECIPIENT_NAME_MAX_LENGTH).nullish(),
-  avatarUrl: imageUrlSchema.nullish()
+  avatarUrl: imageUrlSchema.nullish(),
+  lastFailureReason: z.string().trim().min(1).max(500).nullable().optional()
 })
 
 export const SAVED_RECIPIENTS_IMPORT_MAX = 50
@@ -132,7 +133,7 @@ export const SAVED_RECIPIENTS_IMPORT_MAX = 50
 export const importRecipientsSchema = z.object({
   recipients: z
     .array(
-      saveRecipientSchema.extend({
+      saveRecipientSchema.omit({ lastFailureReason: true }).extend({
         lastUsedAt: z.string().datetime()
       })
     )
