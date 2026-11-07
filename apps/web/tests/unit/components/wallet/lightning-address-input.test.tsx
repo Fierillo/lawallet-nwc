@@ -168,6 +168,85 @@ describe('LightningAddressInput', () => {
     ).toHaveLength(2)
   })
 
+  it.each([
+    ['Este contacto tiene Lightning Address', 'user0@lawallet.io'],
+    ['Este contacto es un nodo Lightning', 'Fiwind'],
+    ['No se encontró ruta.', 'Fiwind']
+  ])(
+    'opens %s on touch without choosing the contact, toggles and dismisses outside',
+    async (reason, recipientLabel) => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      seedContacts(1)
+      const node = '02' + 'ab'.repeat(32)
+      aliases.current = { [`node:${node}`]: 'Fiwind' }
+      contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+      render(
+        <>
+          <Harness
+            variant="inline"
+            hideSuggestions
+            allowNodes
+            onSelect={onSelect}
+          />
+          <button type="button">Fuera</button>
+        </>
+      )
+      const badge = screen.getByTitle(reason)
+      expect(badge.tagName).toBe('BUTTON')
+      expect(badge.closest('[role="option"]')?.tagName).not.toBe('BUTTON')
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      const explanation = await screen.findByRole('dialog', { name: reason })
+      expect(explanation).toHaveTextContent(reason)
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.click(explanation)
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      await screen.findByRole('dialog', { name: reason })
+      await user.pointer({
+        keys: '[TouchA]',
+        target: screen.getByRole('button', { name: 'Fuera' })
+      })
+      expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.pointer({
+        keys: '[TouchA]',
+        target: screen.getByText(recipientLabel)
+      })
+      expect(onSelect).toHaveBeenCalledWith(
+        recipientLabel === 'Fiwind' ? node : recipientLabel
+      )
+    }
+  )
+
+  it('dismisses an explanation when another badge is tapped', async () => {
+    const user = userEvent.setup()
+    seedContacts(1)
+    contactsActions.setPaymentFailure('user0@lawallet.io', 'Pedile un invoice.')
+    render(<Harness variant="inline" hideSuggestions />)
+    await user.pointer({
+      keys: '[TouchA]',
+      target: screen.getByTitle('Este contacto tiene Lightning Address')
+    })
+    await screen.findByRole('dialog', {
+      name: 'Este contacto tiene Lightning Address'
+    })
+    await user.pointer({
+      keys: '[TouchA]',
+      target: screen.getByTitle('Pedile un invoice.')
+    })
+    expect(
+      await screen.findByRole('dialog', { name: 'Pedile un invoice.' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Este contacto tiene Lightning Address'
+      })
+    ).toBeNull()
+  })
+
   it('finds a saved recipient by the alias the user gave it', async () => {
     const user = userEvent.setup()
     seedContacts(3)
