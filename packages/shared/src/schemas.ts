@@ -39,6 +39,7 @@ export const counterpartyAliasKeySchema = z
   .string()
   .trim()
   .toLowerCase()
+  .max(200)
   .refine(
     value =>
       /^ln:[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ||

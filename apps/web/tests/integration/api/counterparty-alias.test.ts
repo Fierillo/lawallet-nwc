@@ -101,9 +101,22 @@ describe('counterparty aliases', () => {
     expect(response.status).toBe(200)
   })
 
+  it('accepts a counterparty key at the 200-character database limit', async () => {
+    const key = `ln:${'a'.repeat(185)}@example.com`
+    expect(key).toHaveLength(200)
+    const response = await route.PUT(
+      createNextRequest(path, {
+        method: 'PUT',
+        body: { key, alias: 'Ana' }
+      })
+    )
+    expect(response.status).toBe(200)
+  })
+
   it.each([
     { key: lnKey, alias: 'x'.repeat(41) },
     { key: 'ln:not-an-address', alias: 'Ana' },
+    { key: `ln:${'a'.repeat(186)}@example.com`, alias: 'Ana' },
     { key: 'node:zz', alias: 'Ana' },
     { key: lnKey, alias: 42 },
     { alias: 'Ana' }
