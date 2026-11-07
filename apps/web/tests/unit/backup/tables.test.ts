@@ -86,6 +86,12 @@ describe('backup tables', () => {
   })
 
   describe('drift guards', () => {
+    it('declares each table only once within each category', () => {
+      for (const tables of Object.values(CATEGORY_TABLES)) {
+        expect(new Set(tables).size).toBe(tables.length)
+      }
+    })
+
     it('every table in CATEGORY_TABLES is a member of BACKUP_TABLE_ORDER', () => {
       for (const tables of Object.values(CATEGORY_TABLES)) {
         for (const table of tables) {
