@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SendPreviewStep } from '@/components/wallet/send/preview-step'
-import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
+import {
+  contactsActions,
+  readContactFailures,
+  __resetContactsCacheForTests
+} from '@/lib/client/contacts-store'
 import {
   resetAllFlows,
   sendActions,
@@ -117,6 +121,17 @@ describe('SendPreviewStep payer note', () => {
     vi.unstubAllGlobals()
   })
 
+  it('marks an address when resolving its LN payment request fails', async () => {
+    quotePaymentMock.mockRejectedValue(
+      new Error('No Lightning Address available')
+    )
+    render(<SendPreviewStep />)
+    await screen.findByText('No Lightning Address available')
+    expect(readContactFailures()[ADDRESS]).toBe(
+      'No Lightning Address available'
+    )
+  })
+
   it('quotes with the note and shows it before paying', async () => {
     quotePaymentMock.mockResolvedValue(quote('Coffee'))
     render(<SendPreviewStep />)
@@ -135,6 +150,7 @@ describe('SendPreviewStep payer note', () => {
 
   it('pays without the note when the recipient rejects it', async () => {
     const user = userEvent.setup()
+    contactsActions.setPaymentFailure(ADDRESS, 'Fallo anterior')
     quotePaymentMock.mockResolvedValue(quote(null))
     render(
       <>
@@ -163,6 +179,7 @@ describe('SendPreviewStep payer note', () => {
       expect.objectContaining({ comment: null, paymentRequest: 'lnbc1quote' })
     )
     expect(replaceMock).toHaveBeenCalledWith('/wallet/send/summary')
+    expect(readContactFailures()[ADDRESS]).toBeUndefined()
   })
 
   it('keeps the accepted note on the receipt', async () => {
@@ -207,6 +224,7 @@ describe('SendPreviewStep keysend', () => {
 
   it('names the node by its alias and pays it, keeping the derived hash', async () => {
     const user = userEvent.setup()
+    contactsActions.setPaymentFailure(PUBKEY, 'No se encontró ruta.')
     quotePaymentMock.mockResolvedValue({
       ...quote(null),
       paymentRequest: '',
@@ -235,6 +253,7 @@ describe('SendPreviewStep keysend', () => {
         'cd'.repeat(32)
       )
     })
+    expect(readContactFailures()[PUBKEY]).toBeUndefined()
   })
 
   it('explains a missing route to the node in plain words', async () => {
@@ -261,6 +280,7 @@ describe('SendPreviewStep keysend', () => {
         'No route found to the node. Ask them for an invoice or a Lightning Address if they have one.'
       )
     })
+    expect(readContactFailures()[PUBKEY]).toContain('No route')
   })
 
   it('explains when the wallet cannot keysend', async () => {
@@ -272,5 +292,6 @@ describe('SendPreviewStep keysend', () => {
     expect(
       await screen.findByText(/Your wallet can't pay a node directly/)
     ).toBeInTheDocument()
+    expect(readContactFailures()[PUBKEY]).toContain('keysend')
   })
 })

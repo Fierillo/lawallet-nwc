@@ -172,8 +172,10 @@ export function SendPreviewStep() {
       },
       err => {
         const message = errorText(t, err, t.send.preview.quoteFailed)
-        if (!cancelled)
+        if (!cancelled) {
+          contactsActions.setPaymentFailure(flow.recipient!.raw, message)
           setQuoteState({ key: quoteKey, status: 'error', message })
+        }
       }
     )
 
@@ -229,6 +231,7 @@ export function SendPreviewStep() {
         return
       }
       const result = await payQuotedInvoice(nwc, currentQuote.quote)
+      contactsActions.setPaymentFailure(flow.recipient!.raw, null)
       const paymentHash =
         result.paymentHash ??
         paymentHashFromBolt11(currentQuote.quote.paymentRequest)
@@ -255,6 +258,7 @@ export function SendPreviewStep() {
       const message = nwcErrorText(t, err, t.send.preview.paymentFailed, {
         keysend: Boolean(currentQuote.quote.keysendPubkey)
       })
+      contactsActions.setPaymentFailure(flow.recipient!.raw, message)
       sendActions.setError(message)
       toast.error(message)
       setPaying(false)
