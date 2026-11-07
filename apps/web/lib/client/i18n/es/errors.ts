@@ -51,6 +51,9 @@ export const errors: typeof En = {
     relayOffline:
       'No se pudo conectar con tu billetera. Su relay parece estar desconectado — revisa la conexión de la billetera e inténtalo de nuevo.',
     timeout: 'Tu billetera no respondió a tiempo. Inténtalo de nuevo.',
+    noRoute: 'No se encontró ruta para pagar.',
+    noRouteToNode:
+      'No se encontró ruta hasta el nodo. Pedile un invoice o una LN address si tiene.',
     generic: 'Algo salió mal. Inténtalo de nuevo.'
   }
 }

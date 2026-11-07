@@ -50,6 +50,9 @@ export const errors = {
     relayOffline:
       "Couldn't reach your wallet. Its relay looks offline — check the wallet connection and try again.",
     timeout: "Your wallet didn't respond in time. Please try again.",
+    noRoute: 'No route found to pay.',
+    noRouteToNode:
+      'No route found to the node. Ask them for an invoice or a Lightning Address if they have one.',
     generic: 'Something went wrong. Please try again.'
   }
 }

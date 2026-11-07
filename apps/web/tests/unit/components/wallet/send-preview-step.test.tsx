@@ -78,6 +78,7 @@ function ResultProbe() {
       data-testid="send-result"
       data-comment={flow.result?.comment ?? ''}
       data-hash={flow.result?.paymentHash ?? ''}
+      data-error={flow.error ?? ''}
     />
   )
 }
@@ -232,6 +233,32 @@ describe('SendPreviewStep keysend', () => {
       expect(screen.getByTestId('send-result')).toHaveAttribute(
         'data-hash',
         'cd'.repeat(32)
+      )
+    })
+  })
+
+  it('explains a missing route to the node in plain words', async () => {
+    const user = userEvent.setup()
+    quotePaymentMock.mockResolvedValue({
+      ...quote(null),
+      paymentRequest: '',
+      keysendPubkey: PUBKEY
+    })
+    payQuotedInvoiceMock.mockRejectedValue(new Error('FAILURE_REASON_NO_ROUTE'))
+    render(
+      <>
+        <ResultProbe />
+        <SendPreviewStep />
+      </>
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: /Pay 1,000 sats/ })
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('send-result')).toHaveAttribute(
+        'data-error',
+        'No route found to the node. Ask them for an invoice or a Lightning Address if they have one.'
       )
     })
   })
