@@ -108,6 +108,24 @@ export const imageUrlSchema = z
     message: 'Image URL must be an http:// or https:// URL'
   })
 
+export const SAVED_RECIPIENT_ADDRESS_MAX_LENGTH = 200
+export const SAVED_RECIPIENT_NAME_MAX_LENGTH = 80
+
+/** Lightning Address the caller paid; kept per account as a send suggestion. */
+export const saveRecipientSchema = z.object({
+  lightningAddress: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(SAVED_RECIPIENT_ADDRESS_MAX_LENGTH)
+    .regex(
+      /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/,
+      'Invalid Lightning Address'
+    ),
+  name: z.string().trim().max(SAVED_RECIPIENT_NAME_MAX_LENGTH).nullish(),
+  avatarUrl: imageUrlSchema.nullish()
+})
+
 /**
  * A URL accepted from API input and later rendered as a clickable link.
  *

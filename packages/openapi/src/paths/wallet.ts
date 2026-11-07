@@ -128,7 +128,6 @@ registry.registerPath({
   }
 })
 
-
 const counterpartyAliasesResponse = z.object({
   aliases: z.record(z.string(), z.string())
 })
@@ -176,6 +175,62 @@ registry.registerPath({
         key: z.string(),
         alias: z.string().nullable()
       })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+const savedRecipientsResponse = z.object({
+  recipients: z.array(
+    z.object({
+      lightningAddress: z.string(),
+      name: z.string().nullable(),
+      avatarUrl: z.string().nullable(),
+      lastUsedAt: z.string()
+    })
+  )
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'List the caller’s recently paid Lightning Addresses.',
+  description:
+    'Returns up to 50 saved send recipients for the authenticated account, most recently used first.',
+  operationId: 'wallet.recipients.list',
+  security: protectedSecurity,
+  responses: {
+    200: inlineJsonResponse(
+      'Saved recipients (never publicly cached).',
+      savedRecipientsResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'Save a Lightning Address as a recent send recipient.',
+  description:
+    'Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar keep the stored values.',
+  operationId: 'wallet.recipients.save',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.SavedRecipientSaveRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved address.',
+      z.object({ lightningAddress: z.string() })
     ),
     ...commonErrorResponses
   }

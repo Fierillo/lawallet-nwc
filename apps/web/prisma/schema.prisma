@@ -315,6 +315,7 @@ model User {
   transactionLabels                  TransactionLabel[]
   transactionNotes                   TransactionNote[]
   counterpartyAliases                CounterpartyAlias[]
+  savedRecipients                    SavedRecipient[]
   /// Whether a card this account holds may be used to recover the whole
   /// account onto another key (card-manager RECOVER QR). On by default; the
   /// owner turns it off in Security so a lost card can't take the account.
@@ -367,6 +368,22 @@ model CounterpartyAlias {
 
   @@unique([userId, key])
   @@index([userId])
+}
+
+/// Lightning Addresses this account paid, synced across devices as send
+/// suggestions. Profile fields are a display cache only.
+model SavedRecipient {
+  id               String   @id @default(cuid())
+  userId           String
+  lightningAddress String   @db.VarChar(200)
+  name             String?  @db.VarChar(80)
+  avatarUrl        String?  @db.VarChar(2048)
+  lastUsedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lightningAddress])
+  @@index([userId, lastUsedAt])
 }
 
 /// One Nostr pubkey belonging to an account. An account owns one or more
