@@ -78,6 +78,13 @@ export function historyRecipients(
     .map(entry => entry.recipient)
 }
 
+/** Lists this device's past recipients locally; needs no network. */
+export function seedContactsFromHistory(): SavedRecipient[] {
+  const history = historyRecipients(readContacts(), readPaymentDestinations())
+  if (history.length > 0) contactsActions.mergeRemote(history)
+  return history
+}
+
 /**
  * Once per app load: list this device's past recipients locally and upload
  * the ones the account doesn't have yet in a single request. Best effort.
@@ -89,8 +96,7 @@ export async function backfillSavedRecipients(
   if (attempted) return
   attempted = true
 
-  const history = historyRecipients(readContacts(), readPaymentDestinations())
-  if (history.length > 0) contactsActions.mergeRemote(history)
+  const history = seedContactsFromHistory()
 
   const known = new Set(server.map(r => r.lightningAddress.toLowerCase()))
   const missing = history

@@ -16,14 +16,14 @@ vi.mock('next/navigation', () => ({
 const { apiPut, apiPost, serverRecipients } = vi.hoisted(() => ({
   apiPut: vi.fn(),
   apiPost: vi.fn(),
-  serverRecipients: { current: [] as unknown[] }
+  serverRecipients: { current: [] as unknown[] | null }
 }))
 
 vi.mock('@/lib/client/hooks/use-api', () => ({
   useApi: (path: string | null) => ({
     data:
       path === '/api/wallet/recipients'
-        ? { recipients: serverRecipients.current }
+        ? serverRecipients.current && { recipients: serverRecipients.current }
         : { lightningAddress: 'me@lawallet.io' }
   })
 }))
@@ -183,5 +183,24 @@ describe('RecipientInput', () => {
         expect.objectContaining({ lightningAddress: 'ariel@lacrypta.ar' })
       ]
     })
+  })
+
+  it('lists past paid addresses even when the account list fails to load', async () => {
+    const user = userEvent.setup()
+    serverRecipients.current = null
+    rememberPaymentDestination('b'.repeat(64), {
+      address: 'fiwi@blink.sv',
+      name: null,
+      avatarUrl: null,
+      comment: null
+    })
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'fiwi@blink.sv'
+    )
+    expect(apiPost).not.toHaveBeenCalled()
   })
 })

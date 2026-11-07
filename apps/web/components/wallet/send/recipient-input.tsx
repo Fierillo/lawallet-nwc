@@ -20,7 +20,10 @@ import {
   SAVED_RECIPIENTS_PATH,
   type SavedRecipient
 } from '@/lib/client/contacts-store'
-import { backfillSavedRecipients } from '@/lib/client/recipient-backfill'
+import {
+  backfillSavedRecipients,
+  seedContactsFromHistory
+} from '@/lib/client/recipient-backfill'
 import { useT } from '@/lib/client/i18n'
 import { errorText } from '@/lib/client/i18n/errors'
 
@@ -41,6 +44,10 @@ export function RecipientInput() {
   const { data: saved } = useApi<{ recipients: SavedRecipient[] }>(
     SAVED_RECIPIENTS_PATH
   )
+  // This device's past payments count even if the account list never loads.
+  useEffect(() => {
+    seedContactsFromHistory()
+  }, [])
   // Then this device's past recipients go up once, so the others get them.
   useEffect(() => {
     if (!saved?.recipients) return
