@@ -1,6 +1,6 @@
 'use client'
 
-export type NwcErrorKind = 'relayOffline' | 'timeout'
+export type NwcErrorKind = 'relayOffline' | 'timeout' | 'noRoute'
 
 /**
  * Classifies raw `@getalby/sdk` / nostr relay-pool errors. The SDK rejects
@@ -16,6 +16,19 @@ export function nwcErrorKind(err: unknown): NwcErrorKind | null {
   const msg = (
     err instanceof Error ? err.message : String(err ?? '')
   ).toLowerCase()
+
+  // The wallet tried but found no payment path (LND's raw reason, plain
+  // "no route" text, or the NIP-47 code), whatever the wording.
+  const code = (err as { code?: unknown } | null)?.code
+  if (
+    (typeof code === 'string' && code.toUpperCase() === 'ROUTE_NOT_FOUND') ||
+    msg.includes('failure_reason_no_route') ||
+    msg.includes('no route') ||
+    msg.includes('unable to find a path') ||
+    msg.includes('route_not_found')
+  ) {
+    return 'noRoute'
+  }
 
   // Relay unreachable — publish to every relay failed, or the pool gave up.
   if (

@@ -9,6 +9,36 @@ import { BoltcardPayError } from '@/lib/client/boltcard-pay'
 import { BoltcardNfcError } from '@/lib/client/hooks/use-boltcard-nfc'
 import { PaymentInputError } from '@/lib/client/nwc/pay'
 
+describe('nwcErrorText no route', () => {
+  const noRoute = [
+    new Error('FAILURE_REASON_NO_ROUTE'),
+    new Error('payment failed: No route to destination'),
+    new Error('Unable to find a path to destination'),
+    Object.assign(new Error('Wallet error'), { code: 'ROUTE_NOT_FOUND' })
+  ]
+
+  it.each(noRoute)(
+    'explains a missing route to a node for keysend (%s)',
+    err => {
+      expect(nwcErrorText(es, err, undefined, { keysend: true })).toBe(
+        'No se encontró ruta hasta el nodo. Pedile un invoice o una LN address si tiene.'
+      )
+      expect(nwcErrorText(en, err, undefined, { keysend: true })).toBe(
+        'No route found to the node. Ask them for an invoice or a Lightning Address if they have one.'
+      )
+    }
+  )
+
+  it('uses a generic no-route message for invoices', () => {
+    expect(nwcErrorText(es, new Error('failure_reason_no_route'))).toBe(
+      'No se encontró ruta para pagar.'
+    )
+    expect(nwcErrorText(en, new Error('FAILURE_REASON_NO_ROUTE'))).toBe(
+      'No route found to pay.'
+    )
+  })
+})
+
 describe('nwcErrorText', () => {
   it('maps the "all relays rejected" publish failure to a relay-offline message', () => {
     const err = new Error(

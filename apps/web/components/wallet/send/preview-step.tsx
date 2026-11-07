@@ -252,7 +252,9 @@ export function SendPreviewStep() {
       })
       router.replace('/wallet/send/summary')
     } catch (err) {
-      const message = nwcErrorText(t, err, t.send.preview.paymentFailed)
+      const message = nwcErrorText(t, err, t.send.preview.paymentFailed, {
+        keysend: Boolean(currentQuote.quote.keysendPubkey)
+      })
       sendActions.setError(message)
       toast.error(message)
       setPaying(false)
