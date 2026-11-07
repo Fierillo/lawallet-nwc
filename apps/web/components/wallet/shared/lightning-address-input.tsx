@@ -23,11 +23,13 @@ import {
 import {
   buildLightningAddressSuggestions,
   getDomainAvatarUrl,
-  lightningAddressMatchesQuery,
+  recipientMatchesQuery,
   resolveCurrentLightningDomain,
   type LightningAddressSuggestion
 } from '@/lib/client/lightning-address-suggestions'
 import { isLightningAddress } from '@/lib/ln-address'
+import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
+import { counterpartyLnKey } from '@/lib/client/transaction-counterparty'
 import { useT } from '@/lib/client/i18n'
 import { cn } from '@/lib/utils'
 
@@ -101,6 +103,11 @@ export function LightningAddressInput({
   const t = useT()
   const contacts = useContacts()
   const { data: me } = useApi<UserMeResponse>('/api/users/me')
+  const { data: aliasData } = useApi<{ aliases?: Record<string, string> }>(
+    hideContacts ? null : COUNTERPARTY_ALIASES_PATH
+  )
+  const aliasFor = (address: string): string | null =>
+    aliasData?.aliases?.[counterpartyLnKey(address)] ?? null
   const [open, setOpen] = useState(variant === 'inline')
   const [focused, setFocused] = useState(false)
   const [highlightedOptionIndex, setHighlightedOptionIndex] = useState(-1)
@@ -121,13 +128,24 @@ export function LightningAddressInput({
 
   const recentContacts = useMemo(() => {
     if (hideContacts) return []
+    const aliases = aliasData?.aliases
     const matched = query
       ? contacts.filter(contact =>
-          lightningAddressMatchesQuery(contact.lightningAddress, query)
+          recipientMatchesQuery(
+            {
+              lightningAddress: contact.lightningAddress,
+              names: [
+                aliases?.[counterpartyLnKey(contact.lightningAddress)],
+                contact.name,
+                contact.displayName
+              ]
+            },
+            query
+          )
         )
       : contacts
     return matched.slice(0, MAX_RECENT_OPTIONS)
-  }, [contacts, hideContacts, query])
+  }, [aliasData, contacts, hideContacts, query])
   const suggestedAddresses = useMemo(
     () => buildLightningAddressSuggestions(value, currentDomain),
     [currentDomain, value]
@@ -284,6 +302,7 @@ export function LightningAddressInput({
                 key={contact.id}
                 id={optionId(listboxId, index)}
                 name={contact.lightningAddress}
+                label={aliasFor(contact.lightningAddress)}
                 avatarUrl={
                   contact.avatarUrl ??
                   getAvatarFallbackForAddress(contact.lightningAddress)
@@ -521,6 +540,7 @@ export function LightningAddressOptionGroup({
 export function LightningAddressOptionButton({
   id,
   name,
+  label,
   avatarUrl,
   active,
   buttonRef,
@@ -530,6 +550,8 @@ export function LightningAddressOptionButton({
 }: {
   id: string
   name: string
+  /** The user's private alias, shown above the address when set. */
+  label?: string | null
   avatarUrl?: string | null
   active: boolean
   buttonRef: (node: HTMLButtonElement | null) => void
@@ -567,10 +589,20 @@ export function LightningAddressOptionButton({
         </AvatarFallback>
       </Avatar>
       {/* One line only: the address already contains the username, and the
-      domain was repeating what the address ends with. */}
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {name}
-      </span>
+      domain was repeating what the address ends with. An alias is the one
+      thing the address can't say, so it gets a line of its own. */}
+      {label ? (
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm font-medium text-foreground">
+            {label}
+          </span>
+          <span className="truncate text-xs text-muted-foreground">{name}</span>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+          {name}
+        </span>
+      )}
     </button>
   )
 }
