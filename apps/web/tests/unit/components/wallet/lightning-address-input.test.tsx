@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
@@ -10,8 +10,17 @@ import {
 import { writeAvatar } from '@/lib/client/cache/avatar-cache'
 import type { Contact } from '@/lib/client/contacts-store'
 
+const { aliases } = vi.hoisted(() => ({
+  aliases: { current: {} as Record<string, string> }
+}))
+
 vi.mock('@/lib/client/hooks/use-api', () => ({
-  useApi: () => ({ data: { lightningAddress: 'me@lawallet.io' } })
+  useApi: (path: string | null) => ({
+    data:
+      path === '/api/wallet/counterparty-aliases'
+        ? { aliases: aliases.current }
+        : { lightningAddress: 'me@lawallet.io' }
+  })
 }))
 
 function seedContacts(count: number) {
@@ -37,9 +46,48 @@ describe('LightningAddressInput', () => {
   beforeEach(() => {
     window.localStorage.clear()
     __resetContactsCacheForTests()
+    aliases.current = {}
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(null, { status: 404 }))
+    )
+  })
+
+  it('finds a saved recipient by the alias the user gave it', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    aliases.current = { 'ln:user1@lawallet.io': 'Mamá' }
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'MAM')
+
+    const saved = screen.getByRole('group', { name: 'Saved' })
+    const options = within(saved).getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('Mamá')
+    expect(options[0]).toHaveTextContent('user1@lawallet.io')
+  })
+
+  it('finds a saved recipient by its contact name', async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(
+      'lawallet-contacts',
+      JSON.stringify([
+        {
+          id: 'c1',
+          name: 'Satoshi Nakamoto',
+          lightningAddress: 'sn@example.com',
+          createdAt: 1
+        }
+      ])
+    )
+    __resetContactsCacheForTests()
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'naka')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'sn@example.com'
     )
   })
 
