@@ -309,12 +309,13 @@ describe('validateNip98', () => {
     }
   )
 
-  it('on Vercel Preview also accepts a token signed for the request Host when endpoint is set', async () => {
+  it('on Vercel Preview also accepts the deployment URL pinned by system metadata', async () => {
     // Preview deploys share production DB settings (endpoint = prod URL) but
-    // clients sign NIP-98 against the preview host. Accept both origins only
-    // while VERCEL_ENV=preview so production stays endpoint-only (#364).
+    // clients sign NIP-98 against a URL pinned by trusted deployment metadata.
+    // Production stays endpoint-only (#364).
     const prev = process.env.VERCEL_ENV
     process.env.VERCEL_ENV = 'preview'
+    vi.stubEnv('VERCEL_URL', 'lawalletv2-git-dev-fierillos-projects.vercel.app')
     try {
       const { nip98 } = await import('nostr-tools')
       vi.mocked(nip98.validateEvent).mockImplementationOnce(
@@ -326,7 +327,8 @@ describe('validateNip98', () => {
         'https://lawalletilla.vercel.app'
       )
 
-      const previewJwt = 'https://lawalletv2-git-dev-fierillos-projects.vercel.app/api/jwt'
+      const previewJwt =
+        'https://lawalletv2-git-dev-fierillos-projects.vercel.app/api/jwt'
       const event = createNip98Event({
         tags: [
           ['u', previewJwt],
@@ -351,6 +353,7 @@ describe('validateNip98', () => {
         expect.any(String)
       )
     } finally {
+      vi.unstubAllEnvs()
       if (prev === undefined) delete process.env.VERCEL_ENV
       else process.env.VERCEL_ENV = prev
     }
