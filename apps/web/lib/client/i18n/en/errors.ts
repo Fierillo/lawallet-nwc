@@ -42,7 +42,9 @@ export const errors = {
   payment: {
     amountRequired: 'Enter an amount',
     zeroAmountInvoice: 'Enter an amount for this zero-amount invoice',
-    npubUnsupported: 'Zaps to npubs are not supported yet'
+    npubUnsupported: 'Zaps to npubs are not supported yet',
+    keysendUnsupported:
+      "Your wallet can't pay a node directly (keysend). Ask for an invoice or a Lightning Address instead."
   },
   nwc: {
     relayOffline:
