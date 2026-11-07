@@ -112,7 +112,7 @@ function subscribe(listener: () => void) {
   }
 }
 
-/** Device-local alerts also cover alias-only contacts and keysend nodes. */
+/** Account alerts cached on this device, including alias-only contacts and nodes. */
 export function readContactFailures(): Record<string, string> {
   if (typeof window === 'undefined') return EMPTY_FAILURES
   if (failuresCache) return failuresCache
@@ -223,7 +223,7 @@ export function savedRecipientPayload(
 
 /**
  * Subscribes to the contacts list. Returns the most-recently-added entries
- * first. Empty during SSR — the data is localStorage-only on purpose.
+ * first. Empty during SSR; localStorage caches the account recipients.
  */
 export function useContacts(): Contact[] {
   return useSyncExternalStore(subscribe, read, () => [])
@@ -367,6 +367,10 @@ export const contactsActions = {
         )
       )
     )
+    contactsActions.mergeRecipients(recipients)
+  },
+  /** Merges recipient metadata without replacing authoritative payment alerts. */
+  mergeRecipients(recipients: SavedRecipient[]) {
     const contacts = [...read()]
     for (const recipient of recipients) {
       const lightningAddress = normalizeLightningAddress(

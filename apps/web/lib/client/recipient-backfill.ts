@@ -81,7 +81,7 @@ export function historyRecipients(
 /** Lists this device's past recipients locally; needs no network. */
 export function seedContactsFromHistory(): SavedRecipient[] {
   const history = historyRecipients(readContacts(), readPaymentDestinations())
-  if (history.length > 0) contactsActions.mergeRemote(history)
+  if (history.length > 0) contactsActions.mergeRecipients(history)
   return history
 }
 
