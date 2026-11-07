@@ -11,6 +11,11 @@ import {
 import * as PopoverPrimitive from '@radix-ui/react-popover'
 import { AtSign, Network, TriangleAlert, Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { useDebouncedValue } from '@/lib/client/hooks/use-debounced-value'
@@ -118,6 +123,12 @@ export function LightningAddressInput({
   ...rest
 }: LightningAddressInputProps) {
   const t = useT()
+  const [openBadgeId, setOpenBadgeId] = useState<string | null>(null)
+  const badgeState: ContactBadgeState = {
+    openId: openBadgeId,
+    onOpenChange: (id, open) =>
+      setOpenBadgeId(current => (open ? id : current === id ? null : current))
+  }
   const contacts = useContacts()
   const failures = useContactFailures()
   const { data: me } = useApi<UserMeResponse>('/api/users/me')
@@ -132,7 +143,7 @@ export function LightningAddressInput({
   // The value last picked from the list. While the field still holds it the
   // choice is made, so the list gives way to the field alone.
   const [committedValue, setCommittedValue] = useState<string | null>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const optionRefs = useRef<Array<HTMLDivElement | null>>([])
   const localInputRef = useRef<HTMLInputElement | null>(null)
   // Unique per instance: the forwarding editor mounts several of these at once,
   // and a shared listbox id would produce duplicate DOM ids and point every
@@ -364,6 +375,7 @@ export function LightningAddressInput({
           <LightningAddressOptionGroup title={t.shared.addressInput.saved}>
             {visibleContacts.map((contact, index) => (
               <LightningAddressOptionButton
+                badgeState={badgeState}
                 key={contact.id}
                 id={optionId(listboxId, index)}
                 hasLightningAddress={isLightningAddress(
@@ -389,6 +401,7 @@ export function LightningAddressInput({
               const index = visibleContacts.length + nodeIndex
               return (
                 <LightningAddressOptionButton
+                  badgeState={badgeState}
                   key={`node:${node.pubkey}`}
                   id={optionId(listboxId, index)}
                   name={abbreviateNodePubkey(node.pubkey)}
@@ -425,6 +438,7 @@ export function LightningAddressInput({
                     suggestion.avatarUrl)
               return (
                 <LightningAddressOptionButton
+                  badgeState={badgeState}
                   key={suggestion.lightningAddress}
                   id={optionId(listboxId, optionIndex)}
                   name={suggestion.lightningAddress}
@@ -477,6 +491,7 @@ export function LightningAddressInput({
       role="combobox"
       value={value}
       onChange={e => {
+        setOpenBadgeId(null)
         // One place decides casing, so every surface agrees.
         onChange(e.target.value.toLowerCase())
         setHighlightedOptionIndex(-1)
@@ -647,7 +662,13 @@ export function LightningAddressOptionGroup({
   )
 }
 
+interface ContactBadgeState {
+  openId: string | null
+  onOpenChange: (id: string, open: boolean) => void
+}
+
 export function LightningAddressOptionButton({
+  badgeState,
   id,
   name,
   label,
@@ -662,6 +683,7 @@ export function LightningAddressOptionButton({
   onSelect,
   disabled
 }: {
+  badgeState: ContactBadgeState
   id: string
   name: string
   /** The user's private alias, shown above the address when set. */
@@ -673,7 +695,7 @@ export function LightningAddressOptionButton({
   hasLightningAddress?: boolean
   isLightningNode?: boolean
   active: boolean
-  buttonRef: (node: HTMLButtonElement | null) => void
+  buttonRef: (node: HTMLDivElement | null) => void
   onHighlight: () => void
   onSelect: () => void
   disabled?: boolean
@@ -684,23 +706,34 @@ export function LightningAddressOptionButton({
     : 'Este contacto tiene Lightning Address'
 
   return (
-    <button
+    <div
       ref={buttonRef}
       id={id}
-      type="button"
       role="option"
       tabIndex={-1}
       aria-selected={active}
       // mousedown, not click: the input's blur would close the list first.
       onMouseDown={e => e.preventDefault()}
-      onClick={onSelect}
+      onClick={event => {
+        // Let clicks reach Radix's outside-dismiss listener, but never pay a badge.
+        if ((event.target as Element).closest('[data-contact-badge]')) return
+        if (!disabled) onSelect()
+      }}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || disabled) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
       onMouseEnter={onHighlight}
-      disabled={disabled}
+      aria-disabled={disabled || undefined}
       className={cn(
         'relative flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
         (failureReason || hasDestinationBadge) && 'pr-7',
         failureReason && hasDestinationBadge && 'pr-12',
-        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-70',
+        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
+        disabled && 'pointer-events-none opacity-70',
         active
           ? 'border-(--theme-300) bg-accent/80'
           : 'border-border/70 bg-card/80 hover:border-border hover:bg-card'
@@ -721,10 +754,11 @@ export function LightningAddressOptionButton({
         </Avatar>
       )}
       {hasDestinationBadge && (
-        <span
-          title={destinationBadgeLabel}
-          aria-label={destinationBadgeLabel}
-          role="img"
+        <ContactBadge
+          badgeId={`${id}-destination`}
+          state={badgeState}
+          reason={destinationBadgeLabel}
+          disabled={disabled}
           className={cn(
             'absolute top-1',
             isLightningNode ? 'text-violet-500' : 'text-green-500',
@@ -736,17 +770,18 @@ export function LightningAddressOptionButton({
           ) : (
             <AtSign className="size-3.5" aria-hidden />
           )}
-        </span>
+        </ContactBadge>
       )}
       {failureReason && (
-        <span
-          title={failureReason}
-          aria-label={failureReason}
-          role="img"
+        <ContactBadge
+          badgeId={`${id}-failure`}
+          state={badgeState}
+          reason={failureReason}
+          disabled={disabled}
           className="absolute right-1 top-1 text-amber-500"
         >
           <TriangleAlert className="size-3.5" aria-hidden />
-        </span>
+        </ContactBadge>
       )}
       {/* One line only: the address already contains the username, and the
       domain was repeating what the address ends with. An alias is the one
@@ -763,7 +798,65 @@ export function LightningAddressOptionButton({
           {name}
         </span>
       )}
-    </button>
+    </div>
+  )
+}
+
+/** A real button, outside any button row, so touch never selects a recipient. */
+function ContactBadge({
+  badgeId,
+  state,
+  reason,
+  className,
+  disabled,
+  children
+}: {
+  badgeId: string
+  state: ContactBadgeState
+  reason: string
+  className: string
+  disabled?: boolean
+  children: ReactNode
+}) {
+  return (
+    <Popover
+      open={state.openId === badgeId}
+      onOpenChange={open => state.onOpenChange(badgeId, open)}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-contact-badge
+          title={reason}
+          aria-label={reason}
+          disabled={disabled}
+          className={cn(
+            className,
+            'rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+          )}
+          onMouseDown={event => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ')
+              event.stopPropagation()
+          }}
+        >
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        data-contact-badge
+        aria-label={reason}
+        side="top"
+        className="w-auto max-w-64 px-3 py-2 text-xs"
+        onOpenAutoFocus={event => event.preventDefault()}
+        onCloseAutoFocus={event => event.preventDefault()}
+      >
+        {reason}
+      </PopoverContent>
+    </Popover>
   )
 }
 
