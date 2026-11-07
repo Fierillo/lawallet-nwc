@@ -274,6 +274,52 @@
           "lightningAddress"
         ]
       },
+      "SavedRecipientImportRequest": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "lightningAddress": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "pattern": "^[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}$"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 80
+                },
+                "avatarUrl": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 2048,
+                  "format": "uri"
+                },
+                "lastUsedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "lightningAddress",
+                "lastUsedAt"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "recipients"
+        ]
+      },
       "CardCreateRequest": {
         "type": "object",
         "properties": {
@@ -10683,6 +10729,92 @@
                   },
                   "required": [
                     "lightningAddress"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Backfill recent send recipients from payment history.",
+        "description": "Inserts up to 50 Lightning Addresses with their own last-used time. Addresses the account already has are left untouched.",
+        "operationId": "wallet.recipients.import",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedRecipientImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of new recipients stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "inserted": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "inserted"
                   ]
                 }
               }

@@ -3,7 +3,10 @@ import { prisma } from '@/lib/prisma'
 import { requireUserId } from '@/lib/auth/account'
 import { checkRequestLimits } from '@/lib/middleware/request-limits'
 import { validateBody } from '@/lib/validation/middleware'
-import { saveRecipientSchema } from '@/lib/validation/schemas'
+import {
+  importRecipientsSchema,
+  saveRecipientSchema
+} from '@/lib/validation/schemas'
 import { withErrorHandling } from '@/types/server/error-handler'
 
 export const dynamic = 'force-dynamic'
@@ -47,4 +50,29 @@ export const PUT = withErrorHandling(async (request: Request) => {
   })
 
   return NextResponse.json({ lightningAddress }, { headers })
+})
+
+/**
+ * Backfill from a device's payment history. Only inserts addresses the
+ * account doesn't have yet, so a newer pick on another device is never
+ * overwritten by an older history entry.
+ */
+export const POST = withErrorHandling(async (request: Request) => {
+  await checkRequestLimits(request, 'json')
+  const userId = await requireUserId(request)
+  const { recipients } = await validateBody(request, importRecipientsSchema)
+  const now = Date.now()
+
+  const { count } = await prisma.savedRecipient.createMany({
+    data: recipients.map(recipient => ({
+      userId,
+      lightningAddress: recipient.lightningAddress,
+      name: recipient.name || null,
+      avatarUrl: recipient.avatarUrl || null,
+      lastUsedAt: new Date(Math.min(Date.parse(recipient.lastUsedAt), now))
+    })),
+    skipDuplicates: true
+  })
+
+  return NextResponse.json({ inserted: count }, { headers })
 })

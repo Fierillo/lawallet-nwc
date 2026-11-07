@@ -236,6 +236,32 @@ registry.registerPath({
   }
 })
 
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'post',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'Backfill recent send recipients from payment history.',
+  description:
+    'Inserts up to 50 Lightning Addresses with their own last-used time. Addresses the account already has are left untouched.',
+  operationId: 'wallet.recipients.import',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.SavedRecipientImportRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Number of new recipients stored.',
+      z.object({ inserted: z.number().int() })
+    ),
+    ...commonErrorResponses
+  }
+})
+
 const walletAddressSchema = z
   .object({
     username: z.string(),
