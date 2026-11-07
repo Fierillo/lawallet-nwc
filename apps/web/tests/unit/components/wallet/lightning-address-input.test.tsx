@@ -91,6 +91,28 @@ describe('LightningAddressInput', () => {
     )
   })
 
+  it('can hide generated domain suggestions and keep saved contacts', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    render(<Harness variant="inline" hideSuggestions />)
+
+    await user.type(screen.getByRole('combobox'), 'user')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
+  })
+
+  it('still generates domain suggestions by default', async () => {
+    const user = userEvent.setup()
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'ariel')
+
+    expect(
+      screen.getByRole('group', { name: 'Suggestions' })
+    ).toHaveTextContent('ariel@')
+  })
+
   it('keeps the list closed until the popover field is focused', async () => {
     const user = userEvent.setup()
     seedContacts(3)

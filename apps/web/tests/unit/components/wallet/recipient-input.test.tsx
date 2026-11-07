@@ -71,7 +71,7 @@ describe('RecipientInput', () => {
     expect(screen.getAllByRole('option')).toHaveLength(10)
   })
 
-  it('hides unmatched recents once the user types a new local-part', async () => {
+  it('shows no generated domain suggestions for an unknown name', async () => {
     const user = userEvent.setup()
     seedContacts(12)
     render(<RecipientInput />)
@@ -79,15 +79,11 @@ describe('RecipientInput', () => {
     await user.type(screen.getByRole('combobox'), 'satoshi')
 
     expect(screen.queryByRole('group', { name: 'Saved' })).toBeNull()
-    expect(
-      screen.getByRole('group', { name: 'Suggestions' })
-    ).toBeInTheDocument()
-    for (const option of screen.getAllByRole('option')) {
-      expect(option.textContent).toContain('satoshi@')
-    }
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
   })
 
-  it('keeps a stored recipient and domain completions when typing its local-part', async () => {
+  it('offers only the stored recipient when typing its local-part', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
       'lawallet-contacts',
@@ -105,12 +101,10 @@ describe('RecipientInput', () => {
 
     await user.type(screen.getByRole('combobox'), 'fierillo')
 
-    const saved = screen.getByRole('group', { name: 'Saved' })
-    expect(saved).toHaveTextContent('fierillo@lawallet.io')
-
-    const suggestions = screen.getByRole('group', { name: 'Suggestions' })
-    expect(suggestions).toHaveTextContent('fierillo@lawallet.io')
-    expect(suggestions).toHaveTextContent('fierillo@blink.sv')
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('fierillo@lawallet.io')
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
   })
 
   it('shows a spinner while the next screen loads', async () => {
@@ -168,7 +162,7 @@ describe('RecipientInput', () => {
     ).toBeInTheDocument()
   })
 
-  it('lists past paid addresses above generated suggestions and saves them on the account', async () => {
+  it('lists past paid addresses as saved recipients and saves them on the account', async () => {
     const user = userEvent.setup()
     rememberPaymentDestination('a'.repeat(64), {
       address: 'ariel@lacrypta.ar',
@@ -181,10 +175,7 @@ describe('RecipientInput', () => {
     await user.type(screen.getByRole('combobox'), 'ariel')
 
     const groups = screen.getAllByRole('group')
-    expect(groups.map(g => g.getAttribute('aria-label'))).toEqual([
-      'Saved',
-      'Suggestions'
-    ])
+    expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Saved'])
     expect(groups[0]).toHaveTextContent('ariel@lacrypta.ar')
     expect(apiPost).toHaveBeenCalledTimes(1)
     expect(apiPost).toHaveBeenCalledWith('/api/wallet/recipients', {
