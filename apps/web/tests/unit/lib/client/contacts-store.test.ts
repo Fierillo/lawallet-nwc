@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   contactsActions,
+  savedRecipientPayload,
   __resetContactsCacheForTests
 } from '@/lib/client/contacts-store'
 
@@ -171,5 +172,91 @@ describe('contacts-store', () => {
     expect(
       JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
     ).toHaveLength(0)
+  })
+
+  it('merges server recipients into the local cache by last use', () => {
+    contactsActions.add({
+      name: 'Local Bob',
+      lightningAddress: 'bob@example.com'
+    })
+    const local = JSON.parse(
+      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+    )[0]
+
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'carol@example.com',
+        name: 'Carol',
+        avatarUrl: 'https://example.com/carol.png',
+        lastUsedAt: new Date(local.createdAt + 60_000).toISOString()
+      },
+      {
+        lightningAddress: 'bob@example.com',
+        name: 'Server Bob',
+        avatarUrl: 'https://example.com/bob.png',
+        lastUsedAt: new Date(local.createdAt - 60_000).toISOString()
+      },
+      {
+        lightningAddress: 'dave@example.com',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date(local.createdAt - 120_000).toISOString()
+      }
+    ])
+
+    const stored = JSON.parse(
+      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+    )
+    expect(
+      stored.map((c: { lightningAddress: string }) => c.lightningAddress)
+    ).toEqual(['carol@example.com', 'bob@example.com', 'dave@example.com'])
+    // Local data wins; the server only fills what the device is missing.
+    expect(stored[1]).toMatchObject({
+      id: local.id,
+      name: 'Local Bob',
+      avatarUrl: 'https://example.com/bob.png',
+      createdAt: local.createdAt
+    })
+    expect(stored[2].name).toBe('dave')
+  })
+
+  it('ignores malformed server addresses', () => {
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'not-an-address',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString()
+      }
+    ])
+    expect(
+      JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
+    ).toHaveLength(0)
+  })
+
+  it('builds a server payload that the API accepts', () => {
+    expect(
+      savedRecipientPayload({
+        lightningAddress: 'alice@example.com',
+        name: ' Alice ',
+        avatarUrl: 'https://example.com/a.png'
+      })
+    ).toEqual({
+      lightningAddress: 'alice@example.com',
+      name: 'Alice',
+      avatarUrl: 'https://example.com/a.png'
+    })
+    // LUD-06 inline images and oversized names are dropped, not rejected.
+    expect(
+      savedRecipientPayload({
+        lightningAddress: 'alice@example.com',
+        name: 'x'.repeat(200),
+        avatarUrl: 'data:image/png;base64,AAAA'
+      })
+    ).toEqual({
+      lightningAddress: 'alice@example.com',
+      name: 'x'.repeat(80),
+      avatarUrl: null
+    })
   })
 })

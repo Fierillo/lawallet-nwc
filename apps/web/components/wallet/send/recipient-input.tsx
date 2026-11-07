@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,7 +12,14 @@ import {
   sendActions,
   type ResolvedRecipient
 } from '@/lib/client/wallet-flow-store'
-import { contactsActions } from '@/lib/client/contacts-store'
+import { useAuth } from '@/components/admin/auth-context'
+import { useApi } from '@/lib/client/hooks/use-api'
+import {
+  contactsActions,
+  savedRecipientPayload,
+  SAVED_RECIPIENTS_PATH,
+  type SavedRecipient
+} from '@/lib/client/contacts-store'
 import { useT } from '@/lib/client/i18n'
 import { errorText } from '@/lib/client/i18n/errors'
 
@@ -28,6 +35,14 @@ export function RecipientInput() {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const { apiClient } = useAuth()
+  // Recipients used on other devices, folded into this device's list.
+  const { data: saved } = useApi<{ recipients: SavedRecipient[] }>(
+    SAVED_RECIPIENTS_PATH
+  )
+  useEffect(() => {
+    if (saved?.recipients) contactsActions.mergeRemote(saved.recipients)
+  }, [saved])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -86,11 +101,17 @@ export function RecipientInput() {
       sendActions.setRecipient(recipient)
 
       if (destination.kind === 'lnurl-pay' && destination.address) {
-        contactsActions.upsertRecent({
+        const contact = contactsActions.upsertRecent({
           lightningAddress: destination.address,
           name: recipient.profile?.name ?? destination.username,
           avatarUrl: recipient.profile?.image ?? undefined
         })
+        // Best effort: the account copy must never block a payment.
+        if (contact) {
+          apiClient
+            .put(SAVED_RECIPIENTS_PATH, savedRecipientPayload(contact))
+            .catch(() => {})
+        }
         void contactsActions.hydrateNip05Profile(destination.address)
       }
 

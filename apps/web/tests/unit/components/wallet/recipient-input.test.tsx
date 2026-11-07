@@ -8,8 +8,22 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() })
 }))
 
+const { apiPut, serverRecipients } = vi.hoisted(() => ({
+  apiPut: vi.fn(),
+  serverRecipients: { current: [] as unknown[] }
+}))
+
 vi.mock('@/lib/client/hooks/use-api', () => ({
-  useApi: () => ({ data: { lightningAddress: 'me@lawallet.io' } })
+  useApi: (path: string | null) => ({
+    data:
+      path === '/api/wallet/recipients'
+        ? { recipients: serverRecipients.current }
+        : { lightningAddress: 'me@lawallet.io' }
+  })
+}))
+
+vi.mock('@/components/admin/auth-context', () => ({
+  useAuth: () => ({ apiClient: { put: apiPut } })
 }))
 
 function seedContacts(count: number) {
@@ -27,6 +41,8 @@ describe('RecipientInput', () => {
   beforeEach(() => {
     window.localStorage.clear()
     __resetContactsCacheForTests()
+    serverRecipients.current = []
+    apiPut.mockReset().mockResolvedValue({})
     // The list hydrates NIP-05 profiles on mount — keep it off the network.
     vi.stubGlobal(
       'fetch',
@@ -99,5 +115,47 @@ describe('RecipientInput', () => {
       screen.getByRole('status', { name: 'Loading next screen' })
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
+  it('suggests recipients saved on the account from other devices', () => {
+    serverRecipients.current = [
+      {
+        lightningAddress: 'carol@blink.sv',
+        name: 'Carol',
+        avatarUrl: null,
+        lastUsedAt: '2026-11-06T12:00:00.000Z'
+      }
+    ]
+    render(<RecipientInput />)
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'carol@blink.sv'
+    )
+  })
+
+  it('saves a used Lightning Address on the account', async () => {
+    const user = userEvent.setup()
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'satoshi@lawallet.ar')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(apiPut).toHaveBeenCalledWith('/api/wallet/recipients', {
+      lightningAddress: 'satoshi@lawallet.ar',
+      name: 'satoshi',
+      avatarUrl: null
+    })
+  })
+
+  it('keeps going when saving on the account fails', async () => {
+    const user = userEvent.setup()
+    apiPut.mockRejectedValue(new Error('offline'))
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'satoshi@lawallet.ar')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(
+      screen.getByRole('status', { name: 'Loading next screen' })
+    ).toBeInTheDocument()
   })
 })

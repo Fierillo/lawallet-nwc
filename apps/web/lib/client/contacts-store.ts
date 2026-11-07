@@ -2,13 +2,19 @@
 
 import { useSyncExternalStore } from 'react'
 import {
+  isHttpUrl,
+  MEDIA_URL_MAX_LENGTH,
+  SAVED_RECIPIENT_NAME_MAX_LENGTH
+} from '@lawallet-nwc/shared'
+import {
   DEFAULT_NOSTR_RELAYS,
   normalizeNostrPubkey,
   parseKind0Content
 } from '@/lib/nostr/profile'
 
 const STORAGE_KEY = 'lawallet-contacts'
-const MAX_RECENT_CONTACTS = 12
+/** Matches the server cap in `/api/wallet/recipients`. */
+const MAX_RECENT_CONTACTS = 50
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LN_ADDRESS_RE = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i
 
@@ -132,6 +138,38 @@ function needsProfileRefresh(contact: Contact): boolean {
   )
 }
 
+/** Row returned by `GET /api/wallet/recipients`. */
+export interface SavedRecipient {
+  lightningAddress: string
+  name: string | null
+  avatarUrl: string | null
+  lastUsedAt: string
+}
+
+export const SAVED_RECIPIENTS_PATH = '/api/wallet/recipients'
+
+/**
+ * Body for `PUT /api/wallet/recipients`. Drops what the API would reject
+ * (LUD-06 `data:` images, oversized URLs) and truncates long names, so the
+ * best-effort sync never fails on profile noise.
+ */
+export function savedRecipientPayload(
+  contact: Pick<Contact, 'lightningAddress' | 'name' | 'avatarUrl'>
+) {
+  const avatarUrl = contact.avatarUrl?.trim()
+  return {
+    lightningAddress: contact.lightningAddress,
+    name:
+      contact.name?.trim().slice(0, SAVED_RECIPIENT_NAME_MAX_LENGTH) || null,
+    avatarUrl:
+      avatarUrl &&
+      avatarUrl.length <= MEDIA_URL_MAX_LENGTH &&
+      isHttpUrl(avatarUrl)
+        ? avatarUrl
+        : null
+  }
+}
+
 /**
  * Subscribes to the contacts list. Returns the most-recently-added entries
  * first. Empty during SSR — the data is localStorage-only on purpose.
@@ -218,6 +256,41 @@ export const contactsActions = {
       profileFetchedAt: Date.now(),
       touch: false
     })
+  },
+  /**
+   * Folds the account's server-side recipients into this device's cache.
+   * Local entries win; the server only adds unknown addresses and fills a
+   * missing avatar. Order is most recent use across both sources.
+   */
+  mergeRemote(recipients: SavedRecipient[]) {
+    const contacts = [...read()]
+    for (const recipient of recipients) {
+      const lightningAddress = normalizeLightningAddress(
+        recipient.lightningAddress
+      )
+      if (!lightningAddress) continue
+      const usedAt = Date.parse(recipient.lastUsedAt) || 0
+      const index = contacts.findIndex(
+        c => c.lightningAddress === lightningAddress
+      )
+      if (index >= 0) {
+        const existing = contacts[index]
+        contacts[index] = {
+          ...existing,
+          avatarUrl: existing.avatarUrl ?? recipient.avatarUrl,
+          createdAt: Math.max(existing.createdAt, usedAt)
+        }
+        continue
+      }
+      contacts.push({
+        id: genId(),
+        createdAt: usedAt,
+        name: recipient.name?.trim() || displayNameFor(lightningAddress),
+        lightningAddress,
+        avatarUrl: recipient.avatarUrl
+      })
+    }
+    write(contacts.sort((a, b) => b.createdAt - a.createdAt))
   },
   update(id: string, patch: Partial<Omit<Contact, 'id' | 'createdAt'>>) {
     write(read().map(c => (c.id === id ? { ...c, ...patch } : c)))
