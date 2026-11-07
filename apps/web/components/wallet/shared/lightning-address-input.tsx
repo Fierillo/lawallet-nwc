@@ -6,7 +6,8 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode
+  type ReactNode,
+  type PointerEvent
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
 import { AtSign, Network, TriangleAlert, Zap } from 'lucide-react'
@@ -818,22 +819,79 @@ function ContactBadge({
   disabled?: boolean
   children: ReactNode
 }) {
+  const isOpen = state.openId === badgeId
+  const pinned = useRef(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function clearHoverTimer() {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current)
+    hoverTimer.current = null
+  }
+
+  useEffect(() => {
+    if (!isOpen) {
+      pinned.current = false
+      clearHoverTimer()
+    }
+  }, [isOpen])
+  useEffect(() => () => clearHoverTimer(), [])
+
+  function isFineMouse(event: PointerEvent) {
+    return (
+      event.pointerType === 'mouse' &&
+      window.matchMedia?.('(hover: hover) and (pointer: fine)').matches
+    )
+  }
+
+  function hoverEnter(event: PointerEvent) {
+    if (disabled || !isFineMouse(event)) return
+    clearHoverTimer()
+    if (!isOpen) {
+      hoverTimer.current = setTimeout(
+        () => state.onOpenChange(badgeId, true),
+        200
+      )
+    }
+  }
+
+  function hoverLeave(event: PointerEvent) {
+    if (!isFineMouse(event) || pinned.current) return
+    clearHoverTimer()
+    hoverTimer.current = setTimeout(
+      () => state.onOpenChange(badgeId, false),
+      150
+    )
+  }
+
   return (
     <Popover
-      open={state.openId === badgeId}
-      onOpenChange={open => state.onOpenChange(badgeId, open)}
+      open={isOpen}
+      onOpenChange={open => {
+        clearHoverTimer()
+        pinned.current = open
+        state.onOpenChange(badgeId, open)
+      }}
     >
       <PopoverTrigger asChild>
         <button
           type="button"
           data-contact-badge
-          title={reason}
           aria-label={reason}
           disabled={disabled}
           className={cn(
             className,
             'rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
           )}
+          onPointerEnter={hoverEnter}
+          onPointerLeave={hoverLeave}
+          onClick={event => {
+            clearHoverTimer()
+            if (isOpen && !pinned.current) {
+              // A click pins a hover-open explanation instead of toggling it shut.
+              pinned.current = true
+              event.preventDefault()
+            }
+          }}
           onMouseDown={event => {
             event.preventDefault()
             event.stopPropagation()
@@ -850,6 +908,8 @@ function ContactBadge({
         data-contact-badge
         aria-label={reason}
         side="top"
+        onPointerEnter={hoverEnter}
+        onPointerLeave={hoverLeave}
         className="w-auto max-w-64 px-3 py-2 text-xs"
         onOpenAutoFocus={event => event.preventDefault()}
         onCloseAutoFocus={event => event.preventDefault()}

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import {
@@ -69,15 +69,13 @@ describe('LightningAddressInput', () => {
       'No se encontró ruta hasta el nodo.'
     )
     render(<Harness variant="inline" hideSuggestions allowNodes />)
-    expect(screen.getByTitle('Pedile una LN address.')).toHaveAttribute(
+    expect(screen.getByLabelText('Pedile una LN address.')).toHaveAttribute(
       'aria-label',
       'Pedile una LN address.'
     )
-    expect(screen.getByTitle('No se encontró ruta hasta el nodo.')).toHaveClass(
-      'absolute',
-      'right-1',
-      'top-1'
-    )
+    expect(
+      screen.getByLabelText('No se encontró ruta hasta el nodo.')
+    ).toHaveClass('absolute', 'right-1', 'top-1')
     expect(screen.getAllByRole('option')).toHaveLength(2)
   })
 
@@ -95,7 +93,7 @@ describe('LightningAddressInput', () => {
     const addressOption = within(saved).getByRole('option', {
       name: /user0@lawallet.io/
     })
-    const badge = within(addressOption).getByTitle(
+    const badge = within(addressOption).getByLabelText(
       'Este contacto tiene Lightning Address'
     )
     expect(badge).toHaveAttribute(
@@ -104,22 +102,25 @@ describe('LightningAddressInput', () => {
     )
     expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-green-500')
     expect(badge.querySelector('svg')).toHaveClass('size-3.5')
-    expect(within(addressOption).getByTitle('Pedile un invoice.')).toHaveClass(
-      'right-1',
-      'top-1'
-    )
+    expect(
+      within(addressOption).getByLabelText('Pedile un invoice.')
+    ).toHaveClass('right-1', 'top-1')
     expect(addressOption).toHaveClass('pr-12')
 
     const aliasOption = within(saved).getByRole('option', { name: /Alice/ })
     expect(
-      within(aliasOption).getByTitle('Este contacto tiene Lightning Address')
+      within(aliasOption).getByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
     ).toHaveClass('right-1')
     const nodeOption = within(saved).getByRole('option', { name: /Fiwind/ })
     expect(
-      within(nodeOption).queryByTitle('Este contacto tiene Lightning Address')
+      within(nodeOption).queryByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
     ).toBeNull()
     expect(
-      screen.getAllByTitle('Este contacto tiene Lightning Address')
+      screen.getAllByLabelText('Este contacto tiene Lightning Address')
     ).toHaveLength(2)
   })
 
@@ -135,7 +136,7 @@ describe('LightningAddressInput', () => {
     render(<Harness variant="inline" hideSuggestions allowNodes />)
 
     const failedOption = screen.getByRole('option', { name: /Fiwind/ })
-    const badge = within(failedOption).getByTitle(
+    const badge = within(failedOption).getByLabelText(
       'Este contacto es un nodo Lightning'
     )
     expect(badge).toHaveAttribute(
@@ -144,27 +145,30 @@ describe('LightningAddressInput', () => {
     )
     expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-violet-500')
     expect(badge.querySelector('svg')).toHaveClass('size-3.5', 'lucide-network')
-    expect(within(failedOption).getByTitle('No se encontró ruta.')).toHaveClass(
-      'right-1',
-      'top-1'
-    )
+    expect(
+      within(failedOption).getByLabelText('No se encontró ruta.')
+    ).toHaveClass('right-1', 'top-1')
     expect(failedOption).toHaveClass('pr-12')
     expect(
-      within(failedOption).queryByTitle('Este contacto tiene Lightning Address')
+      within(failedOption).queryByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
     ).toBeNull()
 
     const normalOption = screen.getByRole('option', { name: /Otro nodo/ })
     expect(
-      within(normalOption).getByTitle('Este contacto es un nodo Lightning')
+      within(normalOption).getByLabelText('Este contacto es un nodo Lightning')
     ).toHaveClass('right-1')
     const addressOption = screen.getByRole('option', {
       name: /user0@lawallet.io/
     })
     expect(
-      within(addressOption).queryByTitle('Este contacto es un nodo Lightning')
+      within(addressOption).queryByLabelText(
+        'Este contacto es un nodo Lightning'
+      )
     ).toBeNull()
     expect(
-      screen.getAllByTitle('Este contacto es un nodo Lightning')
+      screen.getAllByLabelText('Este contacto es un nodo Lightning')
     ).toHaveLength(2)
   })
 
@@ -192,7 +196,7 @@ describe('LightningAddressInput', () => {
           <button type="button">Fuera</button>
         </>
       )
-      const badge = screen.getByTitle(reason)
+      const badge = screen.getByLabelText(reason)
       expect(badge.tagName).toBe('BUTTON')
       expect(badge.closest('[role="option"]')?.tagName).not.toBe('BUTTON')
       await user.pointer({ keys: '[TouchA]', target: badge })
@@ -228,14 +232,14 @@ describe('LightningAddressInput', () => {
     render(<Harness variant="inline" hideSuggestions />)
     await user.pointer({
       keys: '[TouchA]',
-      target: screen.getByTitle('Este contacto tiene Lightning Address')
+      target: screen.getByLabelText('Este contacto tiene Lightning Address')
     })
     await screen.findByRole('dialog', {
       name: 'Este contacto tiene Lightning Address'
     })
     await user.pointer({
       keys: '[TouchA]',
-      target: screen.getByTitle('Pedile un invoice.')
+      target: screen.getByLabelText('Pedile un invoice.')
     })
     expect(
       await screen.findByRole('dialog', { name: 'Pedile un invoice.' })
@@ -245,6 +249,98 @@ describe('LightningAddressInput', () => {
         name: 'Este contacto tiene Lightning Address'
       })
     ).toBeNull()
+  })
+
+  it.each([
+    'Este contacto tiene Lightning Address',
+    'Este contacto es un nodo Lightning',
+    'No se encontró ruta.'
+  ])(
+    'uses the same popover for fine-pointer hover and pinned clicks: %s',
+    reason => {
+      vi.useFakeTimers()
+      vi.stubGlobal(
+        'matchMedia',
+        vi.fn(() => ({ matches: true }))
+      )
+      try {
+        const onSelect = vi.fn()
+        seedContacts(1)
+        const node = '02' + 'ab'.repeat(32)
+        aliases.current = { [`node:${node}`]: 'Fiwind' }
+        contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+        render(
+          <Harness
+            variant="inline"
+            hideSuggestions
+            allowNodes
+            onSelect={onSelect}
+          />
+        )
+        const badge = screen.getByRole('button', { name: reason })
+        expect(badge).not.toHaveAttribute('title')
+        fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        const explanation = screen.getByRole('dialog', { name: reason })
+        expect(explanation).toHaveTextContent(reason)
+        fireEvent.pointerLeave(badge, { pointerType: 'mouse' })
+        fireEvent.pointerEnter(explanation, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(explanation).toBeInTheDocument()
+        fireEvent.pointerLeave(explanation, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+        fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.getByRole('dialog', { name: reason })).toHaveClass(
+          'px-3',
+          'py-2',
+          'text-xs'
+        )
+        fireEvent.click(badge)
+        fireEvent.pointerLeave(badge, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.getByRole('dialog', { name: reason })).toBeInTheDocument()
+        expect(onSelect).not.toHaveBeenCalled()
+        fireEvent.click(badge)
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+  )
+
+  it('ignores touch hover and coarse-pointer compatibility hover', () => {
+    vi.useFakeTimers()
+    const media = vi.fn(() => ({ matches: true }))
+    vi.stubGlobal('matchMedia', media)
+    try {
+      seedContacts(1)
+      render(<Harness variant="inline" hideSuggestions />)
+      const badge = screen.getByRole('button', {
+        name: 'Este contacto tiene Lightning Address'
+      })
+      fireEvent.pointerEnter(badge, { pointerType: 'touch' })
+      act(() => vi.advanceTimersByTime(250))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      media.mockReturnValue({ matches: false })
+      fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+      act(() => vi.advanceTimersByTime(250))
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('finds a saved recipient by the alias the user gave it', async () => {
