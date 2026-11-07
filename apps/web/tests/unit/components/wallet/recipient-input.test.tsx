@@ -2,14 +2,20 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
+import { __resetRecipientBackfillForTests } from '@/lib/client/recipient-backfill'
+import {
+  __resetPaymentDestinationsForTests,
+  rememberPaymentDestination
+} from '@/lib/client/payment-destinations'
 import { RecipientInput } from '@/components/wallet/send/recipient-input'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() })
 }))
 
-const { apiPut, serverRecipients } = vi.hoisted(() => ({
+const { apiPut, apiPost, serverRecipients } = vi.hoisted(() => ({
   apiPut: vi.fn(),
+  apiPost: vi.fn(),
   serverRecipients: { current: [] as unknown[] }
 }))
 
@@ -23,7 +29,7 @@ vi.mock('@/lib/client/hooks/use-api', () => ({
 }))
 
 vi.mock('@/components/admin/auth-context', () => ({
-  useAuth: () => ({ apiClient: { put: apiPut } })
+  useAuth: () => ({ apiClient: { put: apiPut, post: apiPost } })
 }))
 
 function seedContacts(count: number) {
@@ -43,6 +49,9 @@ describe('RecipientInput', () => {
     __resetContactsCacheForTests()
     serverRecipients.current = []
     apiPut.mockReset().mockResolvedValue({})
+    apiPost.mockReset().mockResolvedValue({ inserted: 0 })
+    __resetPaymentDestinationsForTests()
+    __resetRecipientBackfillForTests()
     // The list hydrates NIP-05 profiles on mount — keep it off the network.
     vi.stubGlobal(
       'fetch',
@@ -157,5 +166,31 @@ describe('RecipientInput', () => {
     expect(
       screen.getByRole('status', { name: 'Loading next screen' })
     ).toBeInTheDocument()
+  })
+
+  it('lists past paid addresses above generated suggestions and saves them on the account', async () => {
+    const user = userEvent.setup()
+    rememberPaymentDestination('a'.repeat(64), {
+      address: 'ariel@lacrypta.ar',
+      name: 'Ariel',
+      avatarUrl: null,
+      comment: null
+    })
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'ariel')
+
+    const groups = screen.getAllByRole('group')
+    expect(groups.map(g => g.getAttribute('aria-label'))).toEqual([
+      'Saved',
+      'Suggestions'
+    ])
+    expect(groups[0]).toHaveTextContent('ariel@lacrypta.ar')
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith('/api/wallet/recipients', {
+      recipients: [
+        expect.objectContaining({ lightningAddress: 'ariel@lacrypta.ar' })
+      ]
+    })
   })
 })

@@ -91,7 +91,7 @@ function contactIdentityKeys(contact: Contact): string[] {
   return keys
 }
 
-function normalizeLightningAddress(address: string): string | null {
+export function normalizeLightningAddress(address: string): string | null {
   const normalized = address.trim().toLowerCase()
   return LN_ADDRESS_RE.test(normalized) ? normalized : null
 }
@@ -136,6 +136,11 @@ function needsProfileRefresh(contact: Contact): boolean {
     !contact.profileFetchedAt ||
     Date.now() - contact.profileFetchedAt > PROFILE_TTL_MS
   )
+}
+
+/** Current contacts, outside React. Empty during SSR. */
+export function readContacts(): Contact[] {
+  return read()
 }
 
 /** Row returned by `GET /api/wallet/recipients`. */
