@@ -14,6 +14,8 @@ import {
 } from '@/lib/client/wallet-flow-store'
 import { useAuth } from '@/components/admin/auth-context'
 import { useApi } from '@/lib/client/hooks/use-api'
+import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
+import { counterpartyNodeKey } from '@/lib/client/transaction-counterparty'
 import {
   contactsActions,
   savedRecipientPayload,
@@ -40,6 +42,9 @@ export function RecipientInput() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const { apiClient } = useAuth()
+  const { data: aliasData } = useApi<{ aliases?: Record<string, string> }>(
+    COUNTERPARTY_ALIASES_PATH
+  )
   // Recipients used on other devices, folded into this device's list.
   const { data: saved } = useApi<{ recipients: SavedRecipient[] }>(
     SAVED_RECIPIENTS_PATH
@@ -111,6 +116,13 @@ export function RecipientInput() {
         }
       }
 
+      // A node has no profile to fetch; the user's alias is its name.
+      if (destination.kind === 'keysend') {
+        const alias =
+          aliasData?.aliases?.[counterpartyNodeKey(destination.pubkey)]
+        if (alias) recipient.profile = { name: alias, image: null }
+      }
+
       sendActions.setRecipient(recipient)
 
       if (destination.kind === 'lnurl-pay' && destination.address) {
@@ -165,6 +177,7 @@ export function RecipientInput() {
           variant="inline"
           allowNonAddress
           hideSuggestions
+          allowNodes
           value={value}
           onChange={next => {
             setValue(next)

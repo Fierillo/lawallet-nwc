@@ -9,6 +9,7 @@ import {
   type ReactNode
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
+import { Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
@@ -29,7 +30,10 @@ import {
 } from '@/lib/client/lightning-address-suggestions'
 import { isLightningAddress } from '@/lib/ln-address'
 import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
-import { counterpartyLnKey } from '@/lib/client/transaction-counterparty'
+import {
+  abbreviateNodePubkey,
+  counterpartyLnKey
+} from '@/lib/client/transaction-counterparty'
 import { useT } from '@/lib/client/i18n'
 import { cn } from '@/lib/utils'
 
@@ -37,7 +41,7 @@ const RECENT_PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_RECENT_OPTIONS = 10
 const AVATAR_LOOKUP_DEBOUNCE_MS = 400
 const NAME_QUERY_RE = /^[a-z0-9._-]+(@[a-z0-9.-]*)?$/
-const NON_ADDRESS_PREFIX_RE = /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile)/
+const NON_ADDRESS_PREFIX_RE = /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile|0[23][0-9a-f]{64}$)/
 
 interface UserMeResponse {
   lightningAddress: string | null
@@ -64,6 +68,11 @@ export interface LightningAddressInputProps {
   hideContacts?: boolean
   /** Hide generated `name@domain` completions, showing only saved contacts. */
   hideSuggestions?: boolean
+  /**
+   * Also offer Lightning nodes the user aliased (picked as their pubkey, for
+   * keysend). Only surfaces that can pay a node should set this.
+   */
+  allowNodes?: boolean
   id?: string
   name?: string
   placeholder?: string
@@ -93,6 +102,7 @@ export function LightningAddressInput({
   allowNonAddress = false,
   hideContacts = false,
   hideSuggestions = false,
+  allowNodes = false,
   id,
   name,
   placeholder = 'satoshi@lawallet.ar',
@@ -201,17 +211,39 @@ export function LightningAddressInput({
     : exactMatch
       ? exactContacts
       : recentContacts
+  const visibleNodes = useMemo(() => {
+    if (!allowNodes || hideContacts || committed) return []
+    const nodes: Array<{ pubkey: string; alias: string }> = []
+    for (const [key, alias] of Object.entries(aliasData?.aliases ?? {})) {
+      if (!key.startsWith('node:')) continue
+      const pubkey = key.slice(5)
+      if (
+        query &&
+        !recipientMatchesQuery(
+          { lightningAddress: pubkey, names: [alias] },
+          query
+        )
+      )
+        continue
+      nodes.push({ pubkey, alias })
+    }
+    return nodes.slice(0, MAX_RECENT_OPTIONS)
+  }, [aliasData, allowNodes, committed, hideContacts, query])
   const visibleSuggestions = committed
     ? []
     : exactMatch
       ? exactSuggestions
       : suggestedAddresses
 
-  const hasOptions = visibleContacts.length > 0 || visibleSuggestions.length > 0
+  const hasOptions =
+    visibleContacts.length > 0 ||
+    visibleNodes.length > 0 ||
+    visibleSuggestions.length > 0
   const listVisible = hasOptions && (variant === 'inline' || open)
 
   const optionValues = [
     ...visibleContacts.map(contact => contact.lightningAddress),
+    ...visibleNodes.map(node => node.pubkey),
     ...visibleSuggestions.map(suggestion => suggestion.lightningAddress)
   ]
   const activeOptionIndex =
@@ -325,7 +357,7 @@ export function LightningAddressInput({
             : 'flex flex-col gap-2'
         }
       >
-        {visibleContacts.length > 0 && (
+        {(visibleContacts.length > 0 || visibleNodes.length > 0) && (
           <LightningAddressOptionGroup title={t.shared.addressInput.saved}>
             {visibleContacts.map((contact, index) => (
               <LightningAddressOptionButton
@@ -346,6 +378,25 @@ export function LightningAddressInput({
                 disabled={disabled}
               />
             ))}
+            {visibleNodes.map((node, nodeIndex) => {
+              const index = visibleContacts.length + nodeIndex
+              return (
+                <LightningAddressOptionButton
+                  key={`node:${node.pubkey}`}
+                  id={optionId(listboxId, index)}
+                  name={abbreviateNodePubkey(node.pubkey)}
+                  label={node.alias}
+                  icon={<Zap className="size-3.5" aria-hidden />}
+                  active={activeOptionIndex === index}
+                  buttonRef={el => {
+                    optionRefs.current[index] = el
+                  }}
+                  onHighlight={() => setHighlightedOptionIndex(index)}
+                  onSelect={() => commit(node.pubkey)}
+                  disabled={disabled}
+                />
+              )
+            })}
           </LightningAddressOptionGroup>
         )}
 
@@ -354,7 +405,8 @@ export function LightningAddressInput({
             title={t.shared.addressInput.suggestions}
           >
             {visibleSuggestions.map((suggestion, index) => {
-              const optionIndex = visibleContacts.length + index
+              const optionIndex =
+                visibleContacts.length + visibleNodes.length + index
               // The exact typed address is the only one worth a real avatar.
               const resolved =
                 typedAvatar.avatarUrl &&
@@ -590,6 +642,7 @@ export function LightningAddressOptionButton({
   id,
   name,
   label,
+  icon,
   avatarUrl,
   active,
   buttonRef,
@@ -601,6 +654,8 @@ export function LightningAddressOptionButton({
   name: string
   /** The user's private alias, shown above the address when set. */
   label?: string | null
+  /** Replaces the avatar, for options that aren't people (e.g. nodes). */
+  icon?: ReactNode
   avatarUrl?: string | null
   active: boolean
   buttonRef: (node: HTMLButtonElement | null) => void
@@ -629,14 +684,20 @@ export function LightningAddressOptionButton({
           : 'border-border/70 bg-card/80 hover:border-border hover:bg-card'
       )}
     >
-      <Avatar className="size-7 border border-border/70">
-        {avatarUrl && (
-          <AvatarImage src={avatarUrl} alt="" className="object-cover" />
-        )}
-        <AvatarFallback className="text-[10px]">
-          {initialsFor(name)}
-        </AvatarFallback>
-      </Avatar>
+      {icon ? (
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted text-muted-foreground">
+          {icon}
+        </span>
+      ) : (
+        <Avatar className="size-7 border border-border/70">
+          {avatarUrl && (
+            <AvatarImage src={avatarUrl} alt="" className="object-cover" />
+          )}
+          <AvatarFallback className="text-[10px]">
+            {initialsFor(name)}
+          </AvatarFallback>
+        </Avatar>
+      )}
       {/* One line only: the address already contains the username, and the
       domain was repeating what the address ends with. An alias is the one
       thing the address can't say, so it gets a line of its own. */}
