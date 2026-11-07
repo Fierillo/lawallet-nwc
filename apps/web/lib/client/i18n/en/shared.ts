@@ -111,6 +111,7 @@ export const shared = {
     options: 'Lightning address options',
     saved: 'Saved',
     suggestions: 'Suggestions',
-    change: 'Change'
+    change: 'Change',
+    noMatches: 'No matching contacts'
   }
 }

@@ -112,6 +112,7 @@ export const shared: typeof En = {
     options: 'Opciones de dirección Lightning',
     saved: 'Guardadas',
     suggestions: 'Sugerencias',
-    change: 'Cambiar'
+    change: 'Cambiar',
+    noMatches: 'Sin contactos que coincidan'
   }
 }

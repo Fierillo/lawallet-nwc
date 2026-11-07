@@ -203,4 +203,26 @@ describe('RecipientInput', () => {
     )
     expect(apiPost).not.toHaveBeenCalled()
   })
+
+  it('says so when no saved contact matches a typed name', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'zzz')
+
+    expect(screen.getByText('No matching contacts')).toBeInTheDocument()
+  })
+
+  it.each(['satoshi@lawallet.ar', 'lnbc10n1pexample', 'lnurl1dp68gurn'])(
+    'shows no hint for a complete destination (%s)',
+    async input => {
+      const user = userEvent.setup()
+      render(<RecipientInput />)
+
+      await user.type(screen.getByRole('combobox'), input)
+
+      expect(screen.queryByText('No matching contacts')).toBeNull()
+    }
+  )
 })
