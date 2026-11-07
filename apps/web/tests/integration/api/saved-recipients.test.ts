@@ -159,4 +159,114 @@ describe('saved recipients', () => {
     expect(response.status).toBe(400)
     expect(prismaMock.savedRecipient.upsert).not.toHaveBeenCalled()
   })
+
+  describe('POST (backfill from history)', () => {
+    const older = '2026-10-01T10:00:00.000Z'
+
+    it('inserts only missing addresses, keeping their own last-used time', async () => {
+      vi.mocked(prismaMock.savedRecipient.createMany).mockResolvedValue({
+        count: 2
+      })
+      const response = await route.POST(
+        createNextRequest(path, {
+          method: 'POST',
+          body: {
+            userId: 'x',
+            recipients: [
+              {
+                lightningAddress: 'Ariel@LaCrypta.ar',
+                name: 'Ariel',
+                lastUsedAt: older
+              },
+              { lightningAddress: 'bob@example.com', lastUsedAt: older }
+            ]
+          }
+        })
+      )
+      expect(await assertResponse(response, 200)).toEqual({ inserted: 2 })
+      expect(prismaMock.savedRecipient.createMany).toHaveBeenCalledWith({
+        data: [
+          {
+            userId: 'owner',
+            lightningAddress: 'ariel@lacrypta.ar',
+            name: 'Ariel',
+            avatarUrl: null,
+            lastUsedAt: new Date(older)
+          },
+          {
+            userId: 'owner',
+            lightningAddress: 'bob@example.com',
+            name: null,
+            avatarUrl: null,
+            lastUsedAt: new Date(older)
+          }
+        ],
+        skipDuplicates: true
+      })
+    })
+
+    it('clamps a future last-used time to now', async () => {
+      vi.useFakeTimers({ now: usedAt })
+      try {
+        await route.POST(
+          createNextRequest(path, {
+            method: 'POST',
+            body: {
+              recipients: [
+                {
+                  lightningAddress: 'bob@example.com',
+                  lastUsedAt: '2099-01-01T00:00:00.000Z'
+                }
+              ]
+            }
+          })
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+      const call = vi.mocked(prismaMock.savedRecipient.createMany).mock
+        .calls[0][0] as { data: Array<{ lastUsedAt: Date }> }
+      expect(call.data[0].lastUsedAt).toEqual(usedAt)
+    })
+
+    it('requires authentication', async () => {
+      vi.mocked(authenticate).mockRejectedValue(
+        new AuthenticationError('Unauthorized')
+      )
+      const response = await route.POST(
+        createNextRequest(path, {
+          method: 'POST',
+          body: {
+            recipients: [
+              { lightningAddress: 'bob@example.com', lastUsedAt: older }
+            ]
+          }
+        })
+      )
+      expect(response.status).toBe(401)
+      expect(prismaMock.savedRecipient.createMany).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { recipients: [] },
+      {
+        recipients: Array.from({ length: 51 }, (_, i) => ({
+          lightningAddress: `u${i}@example.com`,
+          lastUsedAt: older
+        }))
+      },
+      { recipients: [{ lightningAddress: 'nope', lastUsedAt: older }] },
+      {
+        recipients: [
+          { lightningAddress: 'bob@example.com', lastUsedAt: 'yesterday' }
+        ]
+      }
+    ])('rejects invalid batches (%#)', async body => {
+      const response = await route.POST(
+        createNextRequest(path, { method: 'POST', body })
+      )
+      expect(response.status).toBe(400)
+      expect(prismaMock.savedRecipient.createMany).not.toHaveBeenCalled()
+    })
+  })
 })

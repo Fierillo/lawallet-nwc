@@ -126,6 +126,20 @@ export const saveRecipientSchema = z.object({
   avatarUrl: imageUrlSchema.nullish()
 })
 
+export const SAVED_RECIPIENTS_IMPORT_MAX = 50
+
+/** Past recipients found in a device's history, uploaded once to the account. */
+export const importRecipientsSchema = z.object({
+  recipients: z
+    .array(
+      saveRecipientSchema.extend({
+        lastUsedAt: z.string().datetime()
+      })
+    )
+    .min(1)
+    .max(SAVED_RECIPIENTS_IMPORT_MAX)
+})
+
 /**
  * A URL accepted from API input and later rendered as a clickable link.
  *

@@ -169,6 +169,9 @@ export const OPERATION_POLICY: Record<string, OperationPolicy> = {
   'wallet.recipients.save': exclude(
     'private payment history is not exposed to delegated agents'
   ),
+  'wallet.recipients.import': exclude(
+    'private payment history is not exposed to delegated agents'
+  ),
   'wallet.addresses.list': READ,
   'wallet.addresses.create': WRITE,
   'wallet.addresses.proxyBalance.get': READ,
