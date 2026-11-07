@@ -78,6 +78,7 @@ import {
   updateTransactionNoteSchema,
   updateCounterpartyAliasSchema,
   counterpartyAliasKeySchema,
+  saveRecipientSchema,
   walletAddressUsernameParam
 } from '@lawallet-nwc/shared'
 import { z } from 'zod'
@@ -111,6 +112,10 @@ export const schemas = {
   CounterpartyAliasUpdateRequest: registry.register(
     'CounterpartyAliasUpdateRequest',
     updateCounterpartyAliasSchema
+  ),
+  SavedRecipientSaveRequest: registry.register(
+    'SavedRecipientSaveRequest',
+    saveRecipientSchema
   ),
 
   // ── Cards ──────────────────────────────────────────────────────────────

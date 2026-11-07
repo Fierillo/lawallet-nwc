@@ -195,6 +195,7 @@ export const routeManifest: Record<string, () => Promise<RouteModule>> = {
   '/api/wallet/cards/{id}': () => import('@/app/api/wallet/cards/[id]/route'),
   '/api/wallet/counterparty-aliases': () =>
     import('@/app/api/wallet/counterparty-aliases/route'),
+  '/api/wallet/recipients': () => import('@/app/api/wallet/recipients/route'),
   '/api/wallet/transaction-tags': () =>
     import('@/app/api/wallet/transaction-tags/route'),
   '/api/wallet/transactions/{paymentHash}/label': () =>
