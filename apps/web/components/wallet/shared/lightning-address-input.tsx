@@ -60,6 +60,8 @@ export interface LightningAddressInputProps {
   allowNonAddress?: boolean
   /** Hide the saved-contacts group, showing only generated suggestions. */
   hideContacts?: boolean
+  /** Hide generated `name@domain` completions, showing only saved contacts. */
+  hideSuggestions?: boolean
   id?: string
   name?: string
   placeholder?: string
@@ -88,6 +90,7 @@ export function LightningAddressInput({
   variant = 'popover',
   allowNonAddress = false,
   hideContacts = false,
+  hideSuggestions = false,
   id,
   name,
   placeholder = 'satoshi@lawallet.ar',
@@ -147,8 +150,11 @@ export function LightningAddressInput({
     return matched.slice(0, MAX_RECENT_OPTIONS)
   }, [aliasData, contacts, hideContacts, query])
   const suggestedAddresses = useMemo(
-    () => buildLightningAddressSuggestions(value, currentDomain),
-    [currentDomain, value]
+    () =>
+      hideSuggestions
+        ? []
+        : buildLightningAddressSuggestions(value, currentDomain),
+    [currentDomain, hideSuggestions, value]
   )
 
   // Once the typed value IS one of the options, offering the other domains is

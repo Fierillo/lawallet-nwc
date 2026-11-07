@@ -157,6 +157,7 @@ export function RecipientInput() {
           id="recipient"
           variant="inline"
           allowNonAddress
+          hideSuggestions
           value={value}
           onChange={next => {
             setValue(next)
