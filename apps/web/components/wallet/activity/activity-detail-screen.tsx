@@ -300,6 +300,26 @@ export function ActivityDetailScreen({
     )
   }
 
+  const sendAgainButton = recipientAddress ? (
+    <button
+      type="button"
+      onClick={() => payAgain(recipientAddress)}
+      aria-label={d.sendAgain(recipientAddress)}
+      className="-my-1 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background/60 py-1 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--theme-300)] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Avatar className="size-6">
+        {recipientAvatar && (
+          <AvatarImage src={recipientAvatar} alt="" className="object-cover" />
+        )}
+        <AvatarFallback className="text-[10px] uppercase">
+          {recipientAddress.slice(0, 2)}
+        </AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 truncate">{recipientAddress}</span>
+      <Send className="size-3.5 shrink-0 text-muted-foreground" />
+    </button>
+  ) : null
+
   const details: ReceiptDetailItem[] = incoming
     ? [
         noteDetail,
@@ -327,53 +347,11 @@ export function ActivityDetailScreen({
                   full
                   className="ml-auto text-right"
                 />
-                {recipientAddress ? (
-                  <button
-                    type="button"
-                    onClick={() => payAgain(recipientAddress)}
-                    aria-label={d.sendAgain(recipientAddress)}
-                    className="-my-1 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background/60 py-1 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--theme-300)] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <Avatar className="size-6">
-                      {recipientAvatar && (
-                        <AvatarImage
-                          src={recipientAvatar}
-                          alt=""
-                          className="object-cover"
-                        />
-                      )}
-                      <AvatarFallback className="text-[10px] uppercase">
-                        {recipientAddress.slice(0, 2)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="min-w-0 truncate">{recipientAddress}</span>
-                    <Send className="size-3.5 shrink-0 text-muted-foreground" />
-                  </button>
-                ) : null}
+                {sendAgainButton}
               </span>
-            ) : recipientAddress ? (
-              <button
-                type="button"
-                onClick={() => payAgain(recipientAddress)}
-                aria-label={d.sendAgain(recipientAddress)}
-                className="-my-1 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background/60 py-1 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--theme-300)] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Avatar className="size-6">
-                  {recipientAvatar && (
-                    <AvatarImage
-                      src={recipientAvatar}
-                      alt=""
-                      className="object-cover"
-                    />
-                  )}
-                  <AvatarFallback className="text-[10px] uppercase">
-                    {recipientAddress.slice(0, 2)}
-                  </AvatarFallback>
-                </Avatar>
-                <span className="min-w-0 truncate">{recipientAddress}</span>
-                <Send className="size-3.5 shrink-0 text-muted-foreground" />
-              </button>
-            ) : undefined
+            ) : (
+              (sendAgainButton ?? undefined)
+            )
         },
         noteDetail,
         {
