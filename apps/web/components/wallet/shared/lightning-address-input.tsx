@@ -36,6 +36,8 @@ import { cn } from '@/lib/utils'
 const RECENT_PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_RECENT_OPTIONS = 10
 const AVATAR_LOOKUP_DEBOUNCE_MS = 400
+const NAME_QUERY_RE = /^[a-z0-9._-]+(@[a-z0-9.-]*)?$/
+const NON_ADDRESS_PREFIX_RE = /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile)/
 
 interface UserMeResponse {
   lightningAddress: string | null
@@ -511,11 +513,30 @@ export function LightningAddressInput({
     </div>
   )
 
+  // Contacts-only lists (send) would otherwise go silently blank on a name
+  // that matches nobody. Not for a bolt11/LNURL/npub or a full address.
+  const showNoMatches =
+    hideSuggestions &&
+    !hideContacts &&
+    !hasOptions &&
+    !committed &&
+    NAME_QUERY_RE.test(query) &&
+    !NON_ADDRESS_PREFIX_RE.test(query) &&
+    !isLightningAddress(query)
+
   if (variant === 'inline') {
     return (
       <>
         {fieldWithAffordances}
-        {optionList ?? <div className="min-h-0 flex-1" />}
+        {optionList ?? (
+          <div className="min-h-0 flex-1">
+            {showNoMatches && (
+              <p className="px-0.5 text-sm text-muted-foreground">
+                {t.shared.addressInput.noMatches}
+              </p>
+            )}
+          </div>
+        )}
       </>
     )
   }
