@@ -8,7 +8,7 @@ import {
   sendActions,
   useSendFlow
 } from '@/lib/client/wallet-flow-store'
-import type { PaymentQuote } from '@/lib/client/nwc/pay'
+import { PaymentInputError, type PaymentQuote } from '@/lib/client/nwc/pay'
 
 const replaceMock = vi.hoisted(() => vi.fn())
 const quotePaymentMock = vi.hoisted(() => vi.fn())
@@ -77,6 +77,7 @@ function ResultProbe() {
     <div
       data-testid="send-result"
       data-comment={flow.result?.comment ?? ''}
+      data-hash={flow.result?.paymentHash ?? ''}
     />
   )
 }
@@ -125,7 +126,8 @@ describe('SendPreviewStep payer note', () => {
       expect(quotePaymentMock).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'lnurl-pay', address: ADDRESS }),
         1000,
-        'Coffee'
+        'Coffee',
+        'nostr+walletconnect://test'
       )
     })
   })
@@ -181,5 +183,67 @@ describe('SendPreviewStep payer note', () => {
         'Coffee'
       )
     })
+  })
+})
+
+describe('SendPreviewStep keysend', () => {
+  const PUBKEY = '02' + 'ab'.repeat(32)
+
+  beforeEach(() => {
+    window.localStorage.clear()
+    __resetContactsCacheForTests()
+    resetAllFlows()
+    replaceMock.mockReset()
+    quotePaymentMock.mockReset()
+    payQuotedInvoiceMock.mockReset()
+    sendActions.setRecipient({
+      raw: PUBKEY,
+      destination: { kind: 'keysend', pubkey: PUBKEY },
+      profile: { name: 'fiwi', image: null }
+    })
+    sendActions.setAmount(1000)
+  })
+
+  it('names the node by its alias and pays it, keeping the derived hash', async () => {
+    const user = userEvent.setup()
+    quotePaymentMock.mockResolvedValue({
+      ...quote(null),
+      paymentRequest: '',
+      keysendPubkey: PUBKEY
+    })
+    payQuotedInvoiceMock.mockResolvedValue({
+      preimage: 'ab',
+      feesPaidSats: 0,
+      paymentHash: 'cd'.repeat(32)
+    })
+    render(
+      <>
+        <ResultProbe />
+        <SendPreviewStep />
+      </>
+    )
+
+    expect(await screen.findByText('fiwi')).toBeInTheDocument()
+    expect(screen.getAllByText('Lightning node').length).toBeGreaterThan(0)
+    await user.click(
+      await screen.findByRole('button', { name: /Pay 1,000 sats/ })
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('send-result')).toHaveAttribute(
+        'data-hash',
+        'cd'.repeat(32)
+      )
+    })
+  })
+
+  it('explains when the wallet cannot keysend', async () => {
+    quotePaymentMock.mockRejectedValue(
+      new PaymentInputError('keysendUnsupported', 'nope')
+    )
+    render(<SendPreviewStep />)
+
+    expect(
+      await screen.findByText(/Your wallet can't pay a node directly/)
+    ).toBeInTheDocument()
   })
 })

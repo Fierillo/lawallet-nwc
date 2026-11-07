@@ -164,7 +164,8 @@ export function SendPreviewStep() {
     void quotePayment(
       flow.recipient.destination,
       flow.amountSats,
-      flow.comment || undefined
+      flow.comment || undefined,
+      effectiveNwc
     ).then(
       quote => {
         if (!cancelled) setQuoteState({ key: quoteKey, status: 'ready', quote })
@@ -179,7 +180,7 @@ export function SendPreviewStep() {
     return () => {
       cancelled = true
     }
-  }, [quoteKey, flow.recipient, flow.amountSats, flow.comment, t])
+  }, [quoteKey, flow.recipient, flow.amountSats, flow.comment, effectiveNwc, t])
 
   const typedNote = flow.comment.trim()
   const acceptedNote =
@@ -228,9 +229,9 @@ export function SendPreviewStep() {
         return
       }
       const result = await payQuotedInvoice(nwc, currentQuote.quote)
-      const paymentHash = paymentHashFromBolt11(
-        currentQuote.quote.paymentRequest
-      )
+      const paymentHash =
+        result.paymentHash ??
+        paymentHashFromBolt11(currentQuote.quote.paymentRequest)
       if (lightningAddress) {
         rememberPaymentDestination(paymentHash, {
           address: lightningAddress,
@@ -667,6 +668,8 @@ function labelForRecipient(recipient: ResolvedRecipient, t: Dict): string {
       return t.send.kind.address
     case 'npub':
       return t.send.kind.nostrProfile
+    case 'keysend':
+      return t.send.kind.node
     default:
       return recipient.raw
   }
@@ -690,6 +693,8 @@ function labelForKind(kind: string, t: Dict): string {
       return t.send.kind.address
     case 'npub':
       return t.send.kind.nostrZap
+    case 'keysend':
+      return t.send.kind.node
     default:
       return kind
   }
