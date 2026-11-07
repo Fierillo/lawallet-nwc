@@ -9,7 +9,7 @@ import {
   type ReactNode
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
-import { TriangleAlert, Zap } from 'lucide-react'
+import { AtSign, TriangleAlert, Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
@@ -366,6 +366,9 @@ export function LightningAddressInput({
               <LightningAddressOptionButton
                 key={contact.id}
                 id={optionId(listboxId, index)}
+                hasLightningAddress={isLightningAddress(
+                  contact.lightningAddress
+                )}
                 failureReason={failures[contact.lightningAddress.toLowerCase()]}
                 name={contact.lightningAddress}
                 label={aliasFor(contact.lightningAddress)}
@@ -650,6 +653,7 @@ export function LightningAddressOptionButton({
   icon,
   avatarUrl,
   failureReason,
+  hasLightningAddress = false,
   active,
   buttonRef,
   onHighlight,
@@ -664,6 +668,7 @@ export function LightningAddressOptionButton({
   icon?: ReactNode
   avatarUrl?: string | null
   failureReason?: string
+  hasLightningAddress?: boolean
   active: boolean
   buttonRef: (node: HTMLButtonElement | null) => void
   onHighlight: () => void
@@ -685,7 +690,8 @@ export function LightningAddressOptionButton({
       disabled={disabled}
       className={cn(
         'relative flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
-        failureReason && 'pr-7',
+        (failureReason || hasLightningAddress) && 'pr-7',
+        failureReason && hasLightningAddress && 'pr-12',
         'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-70',
         active
           ? 'border-(--theme-300) bg-accent/80'
@@ -705,6 +711,19 @@ export function LightningAddressOptionButton({
             {initialsFor(name)}
           </AvatarFallback>
         </Avatar>
+      )}
+      {hasLightningAddress && (
+        <span
+          title="Este contacto tiene Lightning Address"
+          aria-label="Este contacto tiene Lightning Address"
+          role="img"
+          className={cn(
+            'absolute top-1 text-green-500',
+            failureReason ? 'right-6' : 'right-1'
+          )}
+        >
+          <AtSign className="size-3.5" aria-hidden />
+        </span>
       )}
       {failureReason && (
         <span

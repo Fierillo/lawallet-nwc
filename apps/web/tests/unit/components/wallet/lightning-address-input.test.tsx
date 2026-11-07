@@ -81,6 +81,48 @@ describe('LightningAddressInput', () => {
     expect(screen.getAllByRole('option')).toHaveLength(2)
   })
 
+  it('marks saved Lightning Addresses with a green @ beside any warning, but not keysend nodes', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    aliases.current = {
+      [`node:${node}`]: 'Fiwind',
+      'ln:alice@example.com': 'Alice'
+    }
+    contactsActions.setPaymentFailure('user0@lawallet.io', 'Pedile un invoice.')
+    render(<Harness variant="inline" allowNodes />)
+
+    const saved = screen.getByRole('group', { name: 'Saved' })
+    const addressOption = within(saved).getByRole('option', {
+      name: /user0@lawallet.io/
+    })
+    const badge = within(addressOption).getByTitle(
+      'Este contacto tiene Lightning Address'
+    )
+    expect(badge).toHaveAttribute(
+      'aria-label',
+      'Este contacto tiene Lightning Address'
+    )
+    expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-green-500')
+    expect(badge.querySelector('svg')).toHaveClass('size-3.5')
+    expect(within(addressOption).getByTitle('Pedile un invoice.')).toHaveClass(
+      'right-1',
+      'top-1'
+    )
+    expect(addressOption).toHaveClass('pr-12')
+
+    const aliasOption = within(saved).getByRole('option', { name: /Alice/ })
+    expect(
+      within(aliasOption).getByTitle('Este contacto tiene Lightning Address')
+    ).toHaveClass('right-1')
+    const nodeOption = within(saved).getByRole('option', { name: /Fiwind/ })
+    expect(
+      within(nodeOption).queryByTitle('Este contacto tiene Lightning Address')
+    ).toBeNull()
+    expect(
+      screen.getAllByTitle('Este contacto tiene Lightning Address')
+    ).toHaveLength(2)
+  })
+
   it('finds a saved recipient by the alias the user gave it', async () => {
     const user = userEvent.setup()
     seedContacts(3)
