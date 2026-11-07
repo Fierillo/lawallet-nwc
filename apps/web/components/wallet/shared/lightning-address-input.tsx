@@ -9,7 +9,7 @@ import {
   type ReactNode
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
-import { AtSign, TriangleAlert, Zap } from 'lucide-react'
+import { AtSign, Network, TriangleAlert, Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
@@ -393,6 +393,7 @@ export function LightningAddressInput({
                   id={optionId(listboxId, index)}
                   name={abbreviateNodePubkey(node.pubkey)}
                   label={node.alias}
+                  isLightningNode
                   failureReason={failures[node.pubkey.toLowerCase()]}
                   icon={<Zap className="size-3.5" aria-hidden />}
                   active={activeOptionIndex === index}
@@ -654,6 +655,7 @@ export function LightningAddressOptionButton({
   avatarUrl,
   failureReason,
   hasLightningAddress = false,
+  isLightningNode = false,
   active,
   buttonRef,
   onHighlight,
@@ -669,12 +671,18 @@ export function LightningAddressOptionButton({
   avatarUrl?: string | null
   failureReason?: string
   hasLightningAddress?: boolean
+  isLightningNode?: boolean
   active: boolean
   buttonRef: (node: HTMLButtonElement | null) => void
   onHighlight: () => void
   onSelect: () => void
   disabled?: boolean
 }) {
+  const hasDestinationBadge = hasLightningAddress || isLightningNode
+  const destinationBadgeLabel = isLightningNode
+    ? 'Este contacto es un nodo Lightning'
+    : 'Este contacto tiene Lightning Address'
+
   return (
     <button
       ref={buttonRef}
@@ -690,8 +698,8 @@ export function LightningAddressOptionButton({
       disabled={disabled}
       className={cn(
         'relative flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
-        (failureReason || hasLightningAddress) && 'pr-7',
-        failureReason && hasLightningAddress && 'pr-12',
+        (failureReason || hasDestinationBadge) && 'pr-7',
+        failureReason && hasDestinationBadge && 'pr-12',
         'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-70',
         active
           ? 'border-(--theme-300) bg-accent/80'
@@ -712,17 +720,22 @@ export function LightningAddressOptionButton({
           </AvatarFallback>
         </Avatar>
       )}
-      {hasLightningAddress && (
+      {hasDestinationBadge && (
         <span
-          title="Este contacto tiene Lightning Address"
-          aria-label="Este contacto tiene Lightning Address"
+          title={destinationBadgeLabel}
+          aria-label={destinationBadgeLabel}
           role="img"
           className={cn(
-            'absolute top-1 text-green-500',
+            'absolute top-1',
+            isLightningNode ? 'text-violet-500' : 'text-green-500',
             failureReason ? 'right-6' : 'right-1'
           )}
         >
-          <AtSign className="size-3.5" aria-hidden />
+          {isLightningNode ? (
+            <Network className="size-3.5" aria-hidden />
+          ) : (
+            <AtSign className="size-3.5" aria-hidden />
+          )}
         </span>
       )}
       {failureReason && (

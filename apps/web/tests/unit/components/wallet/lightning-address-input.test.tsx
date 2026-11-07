@@ -123,6 +123,51 @@ describe('LightningAddressInput', () => {
     ).toHaveLength(2)
   })
 
+  it('marks Lightning nodes with a violet network badge before any warning, without an @', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    const otherNode = '03' + 'cd'.repeat(32)
+    aliases.current = {
+      [`node:${node}`]: 'Fiwind',
+      [`node:${otherNode}`]: 'Otro nodo'
+    }
+    contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+    render(<Harness variant="inline" hideSuggestions allowNodes />)
+
+    const failedOption = screen.getByRole('option', { name: /Fiwind/ })
+    const badge = within(failedOption).getByTitle(
+      'Este contacto es un nodo Lightning'
+    )
+    expect(badge).toHaveAttribute(
+      'aria-label',
+      'Este contacto es un nodo Lightning'
+    )
+    expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-violet-500')
+    expect(badge.querySelector('svg')).toHaveClass('size-3.5', 'lucide-network')
+    expect(within(failedOption).getByTitle('No se encontró ruta.')).toHaveClass(
+      'right-1',
+      'top-1'
+    )
+    expect(failedOption).toHaveClass('pr-12')
+    expect(
+      within(failedOption).queryByTitle('Este contacto tiene Lightning Address')
+    ).toBeNull()
+
+    const normalOption = screen.getByRole('option', { name: /Otro nodo/ })
+    expect(
+      within(normalOption).getByTitle('Este contacto es un nodo Lightning')
+    ).toHaveClass('right-1')
+    const addressOption = screen.getByRole('option', {
+      name: /user0@lawallet.io/
+    })
+    expect(
+      within(addressOption).queryByTitle('Este contacto es un nodo Lightning')
+    ).toBeNull()
+    expect(
+      screen.getAllByTitle('Este contacto es un nodo Lightning')
+    ).toHaveLength(2)
+  })
+
   it('finds a saved recipient by the alias the user gave it', async () => {
     const user = userEvent.setup()
     seedContacts(3)
