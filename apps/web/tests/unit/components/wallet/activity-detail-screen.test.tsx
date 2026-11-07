@@ -14,6 +14,7 @@ import {
 import type { NwcTransaction } from '@/lib/client/nwc/transactions'
 
 const replaceMock = vi.hoisted(() => vi.fn())
+const pushMock = vi.hoisted(() => vi.fn())
 const lookupTransactionMock = vi.hoisted(() => vi.fn())
 const readByPaymentHashMock = vi.hoisted(() => vi.fn())
 const shareMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
@@ -48,7 +49,7 @@ const PREIMAGE =
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     replace: replaceMock,
-    push: vi.fn(),
+    push: pushMock,
     back: vi.fn(),
     prefetch: vi.fn()
   })
@@ -440,6 +441,31 @@ describe('ActivityDetailScreen', () => {
       screen.getByRole('button', { name: 'Show preimage' })
     ).toBeInTheDocument()
   })
+
+  it.each([false, true])(
+    'keeps one working send-again action with alias editor=%s',
+    async withAliasEditor => {
+      rememberActivityTx(SETTLED_OUT)
+      if (withAliasEditor)
+        rememberPaymentDestination(HASH, {
+          address: 'satoshi@example.com',
+          name: null,
+          avatarUrl: null,
+          comment: null
+        })
+      render(<ActivityDetailScreen paymentHash={HASH} />)
+      const button = await screen.findByRole('button', {
+        name: 'Send again to satoshi@example.com'
+      })
+      expect(
+        screen.getAllByRole('button', {
+          name: 'Send again to satoshi@example.com'
+        })
+      ).toHaveLength(1)
+      await userEvent.click(button)
+      expect(pushMock).toHaveBeenCalledWith('/wallet/send/amount')
+    }
+  )
 
   it('renders a send-style receipt for an outgoing transaction', async () => {
     rememberActivityTx(SETTLED_OUT)
