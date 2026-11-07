@@ -36,6 +36,11 @@ function read(): DestinationMap {
   return cache
 }
 
+/** Every remembered Lightning Address payment, keyed by payment hash. */
+export function readPaymentDestinations(): Readonly<DestinationMap> {
+  return typeof window === 'undefined' ? {} : read()
+}
+
 export function rememberPaymentDestination(
   paymentHash: string | null,
   destination: Omit<PaymentDestination, 'savedAt'>

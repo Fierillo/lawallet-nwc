@@ -20,6 +20,7 @@ import {
   SAVED_RECIPIENTS_PATH,
   type SavedRecipient
 } from '@/lib/client/contacts-store'
+import { backfillSavedRecipients } from '@/lib/client/recipient-backfill'
 import { useT } from '@/lib/client/i18n'
 import { errorText } from '@/lib/client/i18n/errors'
 
@@ -40,9 +41,14 @@ export function RecipientInput() {
   const { data: saved } = useApi<{ recipients: SavedRecipient[] }>(
     SAVED_RECIPIENTS_PATH
   )
+  // Then this device's past recipients go up once, so the others get them.
   useEffect(() => {
-    if (saved?.recipients) contactsActions.mergeRemote(saved.recipients)
-  }, [saved])
+    if (!saved?.recipients) return
+    contactsActions.mergeRemote(saved.recipients)
+    void backfillSavedRecipients(saved.recipients, body =>
+      apiClient.post(SAVED_RECIPIENTS_PATH, body)
+    )
+  }, [apiClient, saved])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
