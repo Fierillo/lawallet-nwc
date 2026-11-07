@@ -103,12 +103,16 @@ export function ActivityDetailScreen({
     ? `/api/wallet/transactions/${hash.toLowerCase()}/note`
     : null
   const noteResult = useApi<{ note: string | null }>(notePath)
-  const [savedNote, setSavedNote] = useState<string | null | undefined>()
+  const noteScope = `${pubkey}:${hash.toLowerCase()}`
+  const [savedNote, setSavedNote] = useState<{
+    scope: string
+    note: string | null
+  }>()
   const privateNote =
-    savedNote === undefined ? noteResult.data?.note : savedNote
+    savedNote?.scope === noteScope ? savedNote.note : noteResult.data?.note
   const { get: getAlias } = useCounterpartyAliases()
   const [savedAlias, setSavedAlias] = useState<
-    { key: string; alias: string | null } | undefined
+    { pubkey: string | null; key: string; alias: string | null } | undefined
   >()
 
   const [loading, setLoading] = useState(() => !recallActivityTx(hash))
@@ -241,7 +245,7 @@ export function ActivityDetailScreen({
   )
   const aliasFromApi = getAlias(baseCounterparty.key)
   const privateAlias =
-    savedAlias && savedAlias.key === baseCounterparty.key
+    savedAlias?.pubkey === pubkey && savedAlias.key === baseCounterparty.key
       ? savedAlias.alias
       : aliasFromApi
   const defaultCounterpartLabel = baseCounterparty.nodePubkey
@@ -284,7 +288,7 @@ export function ActivityDetailScreen({
         paymentHash={hash.toLowerCase()}
         note={privateNote}
         originalComment={originalMessage}
-        onSaved={setSavedNote}
+        onSaved={note => setSavedNote({ scope: noteScope, note })}
         className="ml-auto"
       />
     ) : displayMessage ? (
@@ -318,7 +322,7 @@ export function ActivityDetailScreen({
                   alias={privateAlias}
                   defaultLabel={defaultCounterpartLabel}
                   onSaved={alias =>
-                    setSavedAlias({ key: baseCounterparty.key!, alias })
+                    setSavedAlias({ pubkey, key: baseCounterparty.key!, alias })
                   }
                   full
                   className="ml-auto text-right"
