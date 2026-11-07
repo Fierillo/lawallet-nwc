@@ -11,7 +11,8 @@ export const send = {
     invoice: 'Lightning invoice',
     address: 'Lightning address',
     nostrProfile: 'Nostr profile',
-    nostrZap: 'Nostr zap'
+    nostrZap: 'Nostr zap',
+    node: 'Lightning node'
   },
   amount: {
     notePlaceholder: 'Add a note (optional)',

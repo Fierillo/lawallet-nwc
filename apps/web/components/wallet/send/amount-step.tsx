@@ -434,6 +434,8 @@ function labelForRecipient(recipient: ResolvedRecipient, t: Dict): string {
       return t.send.kind.address
     case 'npub':
       return t.send.kind.nostrProfile
+    case 'keysend':
+      return t.send.kind.node
     default:
       return recipient.raw
   }
