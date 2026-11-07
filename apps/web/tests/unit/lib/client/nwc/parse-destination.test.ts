@@ -77,4 +77,18 @@ describe('parseDestination', () => {
     if (result.kind !== 'npub') return
     expect(result.npub).toBe(npub)
   })
+
+  it('parses a node public key as a keysend destination', () => {
+    const pubkey = '02' + 'AB'.repeat(32)
+    expect(parseDestination(`  ${pubkey} `)).toEqual({
+      kind: 'keysend',
+      pubkey: pubkey.toLowerCase()
+    })
+  })
+
+  it('does not take a 64-hex Nostr key for a node', () => {
+    expect(() => parseDestination('ab'.repeat(32))).toThrow(
+      DestinationParseError
+    )
+  })
 })

@@ -34,8 +34,19 @@ export interface NpubDestination {
   npub: string
 }
 
+/** A Lightning node paid directly (NIP-47 `pay_keysend`), no invoice. */
+export interface KeysendDestination {
+  kind: 'keysend'
+  /** Compressed secp256k1 node public key, lowercase hex. */
+  pubkey: string
+}
+
 export type ParsedDestination =
-  InvoiceDestination | LnAddressDestination | LnurlDestination | NpubDestination
+  | InvoiceDestination
+  | LnAddressDestination
+  | LnurlDestination
+  | NpubDestination
+  | KeysendDestination
 
 /** Stable reason, so the wallet can show localized copy instead of `message`. */
 export type DestinationErrorCode =
@@ -63,6 +74,7 @@ function normalize(input: string): string {
 }
 
 const LN_ADDRESS_RE = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i
+const NODE_PUBKEY_RE = /^0[23][0-9a-f]{64}$/
 
 /**
  * Parses an arbitrary user-supplied recipient string into a typed destination.
@@ -74,6 +86,7 @@ const LN_ADDRESS_RE = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i
  *   2. bech32 `lnurl1…`
  *   3. LUD-16 lightning address `user@host`
  *   4. bech32 `npub1…` (future — returns descriptor, payment not yet wired)
+ *   5. 66-hex node public key → keysend
  */
 export function parseDestination(rawInput: string): ParsedDestination {
   const input = normalize(rawInput)
@@ -95,6 +108,10 @@ export function parseDestination(rawInput: string): ParsedDestination {
 
   if (lower.startsWith('npub1')) {
     return { kind: 'npub', npub: input }
+  }
+
+  if (NODE_PUBKEY_RE.test(lower)) {
+    return { kind: 'keysend', pubkey: lower }
   }
 
   throw new DestinationParseError(
