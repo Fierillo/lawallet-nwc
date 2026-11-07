@@ -43,7 +43,9 @@ export const errors: typeof En = {
   payment: {
     amountRequired: 'Ingresa un monto',
     zeroAmountInvoice: 'Ingresa un monto para esta factura sin monto',
-    npubUnsupported: 'Todavía no se pueden enviar zaps a npubs'
+    npubUnsupported: 'Todavía no se pueden enviar zaps a npubs',
+    keysendUnsupported:
+      'Tu billetera no puede pagar directamente a un nodo (keysend). Pide una factura o una Lightning Address.'
   },
   nwc: {
     relayOffline:
