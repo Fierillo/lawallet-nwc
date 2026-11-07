@@ -29,7 +29,6 @@ export const CATEGORY_TABLES: Record<BackupCategory, BackupTableName[]> = {
     'users',
     'transactionLabels',
     'transactionNotes',
-    'transactionNotes',
     'cardDesigns',
     'ntag424s',
     'remoteWallets',
