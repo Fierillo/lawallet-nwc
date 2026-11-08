@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { validateVercelButtons } from './vercel-button-contract.mjs'
 
 import { execFile as execFileCallback } from 'node:child_process'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
@@ -388,11 +389,7 @@ for (const [contents, label] of [
   [readme, 'README Vercel button'],
   [deployIndex, 'docs Vercel button']
 ]) {
-  requireMatch(
-    contents,
-    /env=JWT_SECRET%2CNWC_VAULT_SECRET/,
-    `${label} must request both runtime secrets`
-  )
+  validateVercelButtons(contents, label, label === 'docs Vercel button')
 }
 
 requireMatch(
