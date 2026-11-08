@@ -91,19 +91,19 @@ describe('counterparty aliases', () => {
     })
   })
 
-  it('accepts a node pubkey key and a 40-character alias', async () => {
+  it('accepts a node pubkey key and an 80-character alias', async () => {
     const response = await route.PUT(
       createNextRequest(path, {
         method: 'PUT',
-        body: { key: nodeKey, alias: 'x'.repeat(40) }
+        body: { key: nodeKey, alias: 'x'.repeat(80) }
       })
     )
     expect(response.status).toBe(200)
   })
 
-  it('accepts a counterparty key at the 200-character database limit', async () => {
-    const key = `ln:${'a'.repeat(185)}@example.com`
-    expect(key).toHaveLength(200)
+  it('accepts a counterparty key at the 80-character API limit', async () => {
+    const key = `ln:${'a'.repeat(65)}@example.com`
+    expect(key).toHaveLength(80)
     const response = await route.PUT(
       createNextRequest(path, {
         method: 'PUT',
@@ -114,9 +114,9 @@ describe('counterparty aliases', () => {
   })
 
   it.each([
-    { key: lnKey, alias: 'x'.repeat(41) },
+    { key: lnKey, alias: 'x'.repeat(81) },
     { key: 'ln:not-an-address', alias: 'Ana' },
-    { key: `ln:${'a'.repeat(186)}@example.com`, alias: 'Ana' },
+    { key: `ln:${'a'.repeat(66)}@example.com`, alias: 'Ana' },
     { key: 'node:zz', alias: 'Ana' },
     { key: lnKey, alias: 42 },
     { alias: 'Ana' }

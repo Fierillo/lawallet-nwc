@@ -32,14 +32,14 @@ export const updateTransactionNoteSchema = z.object({
   note: z.string().trim().max(TRANSACTION_NOTE_MAX_LENGTH)
 })
 
-export const COUNTERPARTY_ALIAS_MAX_LENGTH = 40
+export const COUNTERPARTY_ALIAS_MAX_LENGTH = 80
 
 /** `ln:<address>` or `node:<66-hex compressed pubkey>`. */
 export const counterpartyAliasKeySchema = z
   .string()
   .trim()
   .toLowerCase()
-  .max(200)
+  .max(80)
   .refine(
     value =>
       /^ln:[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ||

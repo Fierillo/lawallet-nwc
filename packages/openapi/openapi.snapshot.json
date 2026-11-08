@@ -229,18 +229,18 @@
       },
       "CounterpartyAliasKey": {
         "type": "string",
-        "maxLength": 200
+        "maxLength": 80
       },
       "CounterpartyAliasUpdateRequest": {
         "type": "object",
         "properties": {
           "key": {
             "type": "string",
-            "maxLength": 200
+            "maxLength": 80
           },
           "alias": {
             "type": "string",
-            "maxLength": 40
+            "maxLength": 80
           }
         },
         "required": [
