@@ -361,7 +361,7 @@ model CounterpartyAlias {
   userId    String
   /// `ln:<address>` or `node:<pubkey hex>`
   key       String   @db.VarChar(200)
-  alias     String   @db.VarChar(40)
+  alias     String   @db.VarChar(80)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)

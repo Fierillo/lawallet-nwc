@@ -253,6 +253,7 @@ describe('ActivityDetailScreen', () => {
       })
     )
     const input = screen.getByRole('textbox', { name: 'Counterparty alias' })
+    expect(input).toHaveAttribute('maxLength', '80')
     await user.clear(input)
     await user.type(input, 'Private saved alias{Enter}')
     await screen.findByRole('button', {
