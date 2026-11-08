@@ -3,7 +3,7 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
 
 concurrency:
@@ -31,75 +31,33 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run lint
 
-  typecheck:
-    name: Type Check
+  verification:
+    name: Verification
     runs-on: ubuntu-latest
+    env:
+      VERIFY_MODE: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.base_ref == 'main') && 'pre-main' || 'dev' }}
+      VERIFY_BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'origin/main' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v6
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run typecheck
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      # Turbo skips packages that do not define this script. Every package
-      # with a `test` script must also define `test:coverage`, or PR CI never
-      # runs those tests (v2.7.1's first Release dispatch failed on react
-      # tests that CI had never executed).
-      - run: pnpm turbo run test:coverage
+      # Ubuntu runners supply native PostgreSQL binaries. The verification
+      # runner starts its own private, socket-only temporary cluster: no shared
+      # service, DATABASE_URL, production credentials or E2E secrets required.
+      - run: pnpm "verify:${VERIFY_MODE}" --base "$VERIFY_BASE"
+      - name: Validate deployment config (not a deployment)
+        if: env.VERIFY_MODE == 'pre-main'
+        run: pnpm deploy:check
       - name: Upload coverage report
-        if: always()
+        if: always() && env.VERIFY_MODE == 'pre-main'
         uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: apps/web/coverage/
           retention-days: 30
-
-  docs:
-    name: Docs Drift
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      # Fails when an API route lacks an OpenAPI operation (beyond the
-      # ratchet allowlist), an MDX page is orphaned from its meta.json, or
-      # the committed OpenAPI snapshot is stale. Fix: pnpm docs:sync.
-      - run: pnpm docs:check
-      - run: pnpm deploy:check
-
-  # Independent peer of lint/typecheck/test: a broken lint must not hide a
-  # broken build (and vice versa), and the remote cache already deduplicates
-  # any shared work between jobs.
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: '.nvmrc'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run build --filter=@lawallet-nwc/web
-        env:
-          DATABASE_URL: 'postgresql://ci:ci@localhost:5432/ci'
-          JWT_SECRET: 'ci-build-secret-minimum-32-characters-long'

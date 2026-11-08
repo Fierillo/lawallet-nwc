@@ -3,10 +3,44 @@ import path from 'path'
 
 export default defineConfig({
   test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          setupFiles: ['./tests/setup.ts'],
+          include: [
+            'tests/unit/**/*.test.ts',
+            'tests/unit/**/*.test.tsx',
+            'tests/*.test.ts',
+            'tests/*.test.tsx'
+          ]
+        }
+      },
+      // These retain their explicit per-file Prisma/auth mocks: route contracts,
+      // not proof of real SQL persistence. The database project is separate.
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          setupFiles: ['./tests/setup.ts'],
+          include: ['tests/integration/**/*.test.ts']
+        }
+      },
+      {
+        extends: true,
+        test: {
+          name: 'critical-flows',
+          include: [
+            'tests/critical-flows/**/*.test.ts',
+            'tests/critical-flows/**/*.test.tsx'
+          ],
+          setupFiles: ['./tests/critical-setup.ts']
+        }
+      }
+    ],
     globals: true,
     environment: 'happy-dom',
-    setupFiles: ['./tests/setup.ts'],
-    include: ['tests/**/*.test.ts', 'tests/**/*.test.tsx'],
     exclude: ['node_modules', '.next', 'dist'],
     coverage: {
       provider: 'v8',

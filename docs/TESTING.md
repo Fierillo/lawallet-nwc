@@ -1,459 +1,86 @@
-# Testing Guide
+# Walletilla verification: development and promotion
 
-This document is the practical guide to testing in **lawallet-nwc**: how to run the suite, how it is organized, how to write new tests, what to mock, and the coverage bar new code is expected to clear.
+## Responsibilities, not interchangeable green checks
 
-> **Audience:** contributors writing or maintaining tests in `apps/web/`. Other apps (`apps/listener/`, `apps/docs/`) are stubs and have no test suite yet.
+| Layer          | Command (web workspace)                               | What is real / what is doubled                                                                                                                                                                                     |
+| -------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Unit           | `pnpm --filter @lawallet-nwc/web test:unit`           | Pure logic/component contracts. Existing explicit collaborator mocks remain. Includes the historical root-level domain-onboarding tests.                                                                           |
+| Integration    | `pnpm --filter @lawallet-nwc/web test:integration`    | Existing route contracts, usually Prisma/auth doubles. Asserting a `where` argument is **not** proof that real persistence or authentication is isolated.                                                          |
+| Critical flows | `pnpm --filter @lawallet-nwc/web test:critical`       | Real browser storage, stores, backfill, component and API-cache lifecycle. Only session/network boundaries are controlled; unexpected network requests fail. No globally authenticated fixture.                    |
+| Database       | `node scripts/verify-database.mjs --base origin/main` | Disposable real PostgreSQL, actual Prisma and handlers, real JWT verification/ownership, DB constraints and migration compatibility. Also activates all twelve pre-existing PostgreSQL suites; no skips permitted. |
+| Harness        | `pnpm test:harness`                                   | Git selection, orchestration/failure propagation, migration tripwires, complete project discovery, duplicate-project detection, real runner rejection of empty selections, and coverage gaps.                      |
 
-> **Snapshot:** the suite currently sits at **50 files / 585 tests** and runs in well under five seconds. Keep it that way — fast tests get run, slow tests get skipped.
+The ordinary web `test`/`test:coverage` commands run unit, integration and critical projects exactly once. Database tests run separately with their own provisioned fixture; they are **not** silently skipped in pre-main. Existing tests were not deleted or broadly rewritten. Shared recipient-session/storage factories replace duplicate seeds, but never fake the stores or authenticated ownership resolution in the new critical/database contracts.
 
----
+Previously, one broad Vitest configuration mixed these responsibilities, route mocks concealed ownership/persistence boundaries, 44 PostgreSQL tests were opt-in skips, and coverage-only CI depended on every tested package maintaining a coverage script. All current test packages, including CLI, already have one; a past omission is documented in the existing CI comments. CI repeated installation in five jobs. The new CI retains independent lint and one verification job using the same two profiles as local development. Coverage thresholds/artifacts are preserved on promotion, without executing both uninstrumented and instrumented full suites redundantly.
 
-## Table of Contents
+## Fast development
 
-- [Quick Start](#quick-start)
-- [Testing Stack](#testing-stack)
-- [Testing Pyramid](#testing-pyramid)
-- [Directory Layout](#directory-layout)
-- [Running Tests](#running-tests)
-- [Writing Unit Tests](#writing-unit-tests)
-- [Writing API Integration Tests](#writing-api-integration-tests)
-- [Mocking Strategies](#mocking-strategies)
-- [Helpers Reference](#helpers-reference)
-- [Coverage Requirements](#coverage-requirements)
-- [Best Practices](#best-practices)
-- [Common Pitfalls](#common-pitfalls)
-- [CI Integration](#ci-integration)
-
----
-
-## Quick Start
-
-From the repo root:
-
-```bash
-pnpm --filter @lawallet-nwc/web test                  # run the whole suite once
-pnpm --filter @lawallet-nwc/web test:watch            # rerun on file change
-pnpm --filter @lawallet-nwc/web test:coverage         # generate coverage report
-pnpm --filter @lawallet-nwc/web test -- tests/unit/lib/jwt.test.ts   # one file
+```sh
+COREPACK_HOME=/tmp/walletilla-corepack pnpm verify:dev --base origin/main
 ```
 
-All scripts are defined in [apps/web/package.json](../apps/web/package.json). Tests live under [apps/web/tests/](../apps/web/tests/).
+Fetch the intended base first. A base is mandatory and is resolved to a commit; an absent/invalid base fails, rather than selecting nothing. Selection combines merge-base-to-HEAD commits, **all staged and unstaged changes (even inverse edits that cancel in a net HEAD diff)**, and nonignored untracked files. Filenames use NUL-delimited Git output, not shell splitting.
 
----
+Every fast run executes harness contracts plus critical recipient/session flows, real-signature Preview-origin invariants and recipient route ownership contracts. Changed tests run directly; Vitest's real import graph selects related source tests. An empty affected suite fails: do not add `--passWithNoTests` to make it green. Write the missing contract or use the full profile while reviewing why selection could not establish coverage.
 
-## Testing Stack
+Config, lockfile, scripts, CI, shared packages, schema/migrations, shared test helpers/setup/database cases, auth/public-origin boundaries, deleted paths and unknown file types conservatively trigger the complete monorepo tests/typecheck plus migration and real PostgreSQL contracts. CSS uses the full fallback too. Markdown/docs changes keep critical invariants and docs validation. Fast is an editing feedback loop, **not promotion approval**, and does not normally build or provision a DB. `--base HEAD` checks current index/worktree edits (only smoke invariants when clean); it must not be used to claim review of already committed branch changes.
 
-| Tool                                                                     | Role                                                     |
-| ------------------------------------------------------------------------ | -------------------------------------------------------- |
-| [Vitest 5](https://vitest.dev)                                           | Test runner, assertion library, watch mode, UI, coverage |
-| [happy-dom](https://github.com/capricorn86/happy-dom)                    | Lightweight DOM for hook/component tests                 |
-| [MSW](https://mswjs.io)                                                  | HTTP mocking for outbound calls (Alby, third-party)      |
-| [@faker-js/faker](https://fakerjs.dev)                                   | Random fixture data                                      |
-| [@testing-library/jest-dom](https://github.com/testing-library/jest-dom) | DOM matchers (`toBeInTheDocument`, etc.)                 |
-| [fake-indexeddb](https://github.com/dumbmatter/fakeIndexedDB)            | IndexedDB polyfill for client-side cache modules         |
+## Complete pre-main profile
 
-Configuration lives in [apps/web/vitest.config.ts](../apps/web/vitest.config.ts). Key settings:
-
-- `globals: true` — `describe`, `it`, `expect` are global (no per-file imports needed)
-- `environment: 'happy-dom'` — DOM is available in every test
-- `setupFiles: ['./tests/setup.ts']` — boots MSW + jest-dom matchers + fake IndexedDB
-- `@/*` path alias resolves to `apps/web/`
-
----
-
-## Testing Pyramid
-
-| Layer       | Tool                                                                  | Scope                                         | Target                                                    |
-| ----------- | --------------------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------- |
-| Unit        | Vitest                                                                | Hooks, utilities, lib functions               | 80%                                                       |
-| Component   | Vitest + RTL + happy-dom                                              | UI components                                 | 70%                                                       |
-| API         | Vitest + MSW + Prisma mock                                            | Route handlers, middleware, auth              | 90%                                                       |
-| Integration | Vitest + Prisma mock                                                  | DB-touching flows, auth chains                | 70%                                                       |
-| E2E         | Playwright (`apps/web/e2e/` — see [TESTING-E2E.md](./TESTING-E2E.md)) | Real server + DB + auth, multi-browser opt-in | Critical paths                                            |
-| Bench       | Vitest bench (`apps/web/bench/` — see [BENCHMARK.md](./BENCHMARK.md)) | CPU-bound hot paths                           | Observational                                             |
-| Overall     | v8 coverage                                                           | Whole codebase                                | 60% statements / 70% branches / 70% functions / 60% lines |
-
-The pyramid widens at the bottom — **most coverage should come from fast unit and API tests**. Reserve heavier integration tests for flows that genuinely cross module boundaries (auth chain, payment routing, NWC).
-
----
-
-## Directory Layout
-
-```
-apps/web/tests/
-├── setup.ts                       # Vitest setup — MSW, IDB polyfill, jest-dom
-├── helpers/
-│   ├── api-helpers.ts             # createNextRequest, assertResponse
-│   ├── auth-helpers.ts            # mockAdminAuth, mockNip98, JWT payload helpers
-│   ├── fixtures.ts                # faker-backed fixtures: User, Card, Design, etc.
-│   ├── prisma-mock.ts             # Deep PrismaClient mock + resetPrismaMock
-│   └── route-helpers.ts           # createParamsPromise, createDefaultConfig
-├── mocks/
-│   ├── handlers.ts                # MSW handlers for outbound HTTP
-│   └── server.ts                  # MSW server instance
-├── unit/
-│   ├── lib/                       # Pure utility / lib tests
-│   │   ├── client/                # Browser-side modules (cache, NWC parsing, stores)
-│   │   ├── auth.test.ts
-│   │   ├── jwt.test.ts
-│   │   └── ... (~20 files)
-│   └── components/                # Component-level tests (currently `wallet/`)
-└── integration/
-    └── api/                       # Route handler tests (one file per resource)
-        ├── cards.test.ts
-        ├── jwt.test.ts
-        ├── lud16.test.ts
-        └── ... (~24 files)
+```sh
+COREPACK_HOME=/tmp/walletilla-corepack pnpm verify:pre-main --base origin/main
 ```
 
-**Naming:** mirror the path of the source file. `lib/jwt.ts` → `tests/unit/lib/jwt.test.ts`. `app/api/cards/route.ts` → `tests/integration/api/cards.test.ts`. Co-located patterns are not used.
+In order:
 
----
+1. Harness tests, including real Git staged/untracked fixtures and actual Vitest discovery/empty-selection checks.
+2. Historical migration immutability and conservative additive-SQL tripwires relative to the explicit base.
+3. Complete monorepo **coverage** suites and typecheck, forced execution rather than cached green test output. Every workspace with `test` but no `test:coverage` is discovered from the actual workspace and its tests run separately, so future regressions cannot silently omit a package (current CLI already defines `test:coverage`).
+4. A private native PostgreSQL cluster: all 72 historical migrations, representative baseline data, new migrations, column compatibility and data-preservation checks, real JWT→owner→recipient API→Prisma→SQL contracts, plus the twelve existing DB suites. Zero selected/pending DB tests is a failure.
+5. Complete monorepo build (including docs), with build-time env validation bypass only; no migrations or deploy command.
+6. Docs/OpenAPI drift validation (always, even for a supposedly unrelated patch).
 
-## Running Tests
+`initdb`, `postgres` and `psql` must be available, unprivileged. The runner discovers `/usr/lib/postgresql/*/bin`, `$WALLETILLA_PG_BIN`, or the shared tools directory (`$HERRAMIENTAS_DIR/postgresql-17.11/bin`). No Docker/service/new credentials are needed. Missing binaries fail closed; the script never installs anything or connects to an operator-supplied production URL. It creates its own temporary database and socket-only cluster, strips inherited libpq routing/service/password variables, overrides DB URLs/secrets **only for its synthetic child process**, waits for readiness, and cleans up that cluster after success/failure. Ubuntu CI runners supply native PostgreSQL. Locally a checksum-verified lightweight 17.11 binary bundle can live once in the shared tools directory; no system service is installed.
 
-From `apps/web/`:
+CI runs fast on dev/non-main PRs, complete on PRs targeting main, main pushes and manual dispatch. Checkout fetches complete history and passes PR base SHA or push-before SHA explicitly. Invalid/missing history fails. Main-push verification is defense in depth **after** the push, not proof of a pre-promotion gate. This change does not configure repository branch protection; require the Verification check on main PRs separately if policy enforcement is desired. Never promote a different SHA than the clean-tree full run reviewed.
 
-```bash
-pnpm test                        # full suite, single run
-pnpm test:watch                  # interactive watch mode
-pnpm test:ui                     # Vitest browser UI
-pnpm test:coverage               # generate coverage/ report
-pnpm test -- tests/unit/lib/jwt.test.ts     # single file
-pnpm test -- -t 'verifies a valid token'    # filter by test name
-pnpm test -- tests/integration/api          # whole folder
-```
+## The privacy regression and legacy strategy
 
-Coverage output lands in `apps/web/coverage/` (HTML at `coverage/index.html`, lcov at `coverage/lcov.info`). The HTML report is the friendliest way to find untested branches.
+The critical contract persists A's recipient, switches to B **without clearing storage**, verifies that B neither reads nor uploads A's recipients, then returns to A and recovers its history. Other contracts retain unattributed legacy bytes without importing them; reject successful late A profile responses after A→B and A→B→A; exercise real `useApi`/recipient UI with a late A response; discard late LNURL submissions on A→B and A→B→A; detach storage on signed-out resume even if cached pubkey remains; and reject late payment/quote metadata at a changed session boundary. Production AuthProvider wiring is checked separately, not replaced by a global default account fixture.
 
----
-
-## Writing Unit Tests
-
-Unit tests live under `tests/unit/lib/`. They cover one module, mock everything across the boundary, and aim to be fast and deterministic.
-
-**Skeleton:**
-
-```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createJwtToken, verifyJwtToken } from '@/lib/jwt'
+New contacts, alerts and payment destinations use an authenticated-identity namespace. Session cleanup invalidates memory but preserves each identity's records. Legacy global keys are retained unchanged and inert: there is no trustworthy owner to assign automatically. Exposing/migrating legacy data needs a separate explicit ownership/recovery design. Linked identities may have separate local history namespaces; account-level server contacts remain authoritative. This is application-level view/sync isolation, **not encryption against same-origin scripts, XSS or someone inspecting the same browser profile**. A payment already sent is not reversed/retried when its late UI result is discarded.
 
-const SECRET = 'test-secret-that-is-long-enough'
-
-describe('createJwtToken', () => {
-  it('encodes the payload', () => {
-    const token = createJwtToken({ userId: 'u1' }, SECRET, { expiresIn: '1h' })
-    expect(verifyJwtToken(token, SECRET).payload.userId).toBe('u1')
-  })
+## Honest review checklist before promoting main
 
-  it('rejects an invalid secret', () => {
-    const token = createJwtToken({ userId: 'u1' }, SECRET, { expiresIn: '1h' })
-    expect(() => verifyJwtToken(token, 'wrong')).toThrow('Invalid token')
-  })
-})
-```
+- [ ] Record fetched base and reviewed commit; rerun complete profile on the final clean committed tree. Review all commits promoted, not only the last staged patch.
+- [ ] Review missing/duplicate tests and mock boundaries. Existing route mocks and client-code coverage exclusions are not evidence of real session persistence or authorization.
+- [ ] Read the actual auth→account-resolution→query/write path. Inspect owner-controlled fields, delegated scopes and cross-account/cache/session races, including delayed success and error responses.
+- [ ] Review migrations for narrowing/truncation/backfills, constraints, ordering, old-writer compatibility and real deployment data. The SQL tripwire is intentionally conservative, **not a SQL parser, exhaustive compatibility proof or human security audit**. Unknown/destructive SQL requires a human decision, never a silent bypass. Historical migrations are not rewritten; previously accepted historical note truncation is not newly approved by this script.
+- [ ] Inspect secrets/logging, XSS/URL sinks and dependency advisories. A scanner's exit status is not adversarial review, and a green suite is not a security approval.
+- [ ] Record a separate local security review with severity, evidence, proposed fixes and limits. Stop on unresolved high/critical findings. Obtain the owner's promotion approval; never label an automated review as a human audit.
+- [ ] Confirm Preview health and deployment DB strategy separately. The existing Playwright CI (`e2e.yml`, unchanged, using its existing PostgreSQL service) remains a separate PR/main check. This local profile does not run Playwright or claim WebAuthn/relay/live-payment/live-domain behavior passed, or run payments against real services.
 
-**Conventions:**
+No profile changes `.env`, Vercel variables, main/personalized refs, or production data, or performs a manual deployment. Network/dependency security checks and the independent lint job remain distinct from functional verification.
 
-- One `describe` per public function or behavior cluster.
-- Test names start with a verb: `'returns ...'`, `'throws ...'`, `'rejects ...'`.
-- Reset shared state in `beforeEach` (`vi.clearAllMocks()`, `resetPrismaMock()`).
-- Prefer many small `it()` cases over a few long ones with multiple assertions.
-- Cover **golden path + error path + edge cases** for every public export.
+## Contributor reference retained from the previous guide
 
-See [apps/web/tests/unit/lib/jwt.test.ts](../apps/web/tests/unit/lib/jwt.test.ts) for a representative example.
+The stack remains Vitest 5, happy-dom, Testing Library/jest-dom, MSW and fake-indexeddb; no new test framework was installed. `@/*` resolves to `apps/web/`. Name files `*.test.ts`/`*.test.tsx` and mirror the production path under the appropriate responsibility. The discovery contract fails if a new test falls outside all configured projects or is owned by multiple projects.
 
----
+| Existing/shared helper                                       | Use and boundary                                                                                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/helpers/api-helpers.ts`                               | `createNextRequest`, `assertResponse`, `getResponseJson`: actual Request/Response shape.                                       |
+| `tests/helpers/route-helpers.ts`                             | `createParamsPromise` for async App Router params; `createDefaultConfig` for focused unit contracts.                           |
+| `tests/helpers/fixtures.ts`                                  | Existing model factories; declare fields that the contract depends on rather than coupling to random defaults.                 |
+| `tests/helpers/prisma-mock.ts`                               | `prismaMock` / `resetPrismaMock`: query-shape contracts only; its transaction callback is not a database transaction.          |
+| `tests/helpers/auth-helpers.ts`                              | Legacy auth stubs and request/payload factories. A stubbed validator must not be counted as an authentication check.           |
+| `tests/helpers/recipient-fixtures.ts`                        | Explicit identity switches, namespaced contact seeds, payment data and deferred network replies, using real production stores. |
+| `tests/helpers/database-api-fixtures.ts`, `test-database.ts` | Synthetic JWT/config and the runner-owned real SQL client, not Prisma/authenticator stubs.                                     |
 
-## Writing API Integration Tests
+Use the existing watch/UI commands (`test:watch`, `test:ui`) for focused work. `vitest run <file>` or `-t <name>` is useful for red/green development, not a substitute for either profile. Keep mocks hoisted before their dependent route loads; logger/config initialization can happen at import time. `vi.clearAllMocks()` clears calls, **not implementations**; `resetPrismaMock()`/`mockReset()` reset stored behavior. Restore env/global/network doubles after every case. Avoid mocking the module under test, and never replace storage/authentication while claiming to verify that boundary. Legacy MSW setup warns on unhandled frames; the critical project deliberately has a stricter network boundary instead of silently reclassifying all existing mocks as real integrations.
 
-API tests live under `tests/integration/api/`. They import the route handlers (`GET`, `POST`, etc.) directly and exercise them with a fabricated `NextRequest` — no live server, no live database.
+Coverage thresholds remain 60% statements / 70% branches / 70% functions / 60% lines. Reports are `apps/web/coverage/index.html` and `lcov.info`. Existing `lib/client/**`, Prisma, config/type and test-file exclusions are not broadened or treated as correctness proof; client correctness is demonstrated by the actual critical contracts. No new regression is skipped or focused. For broader browser and benchmark instructions, retain [TESTING-E2E.md](TESTING-E2E.md) and [BENCHMARK.md](BENCHMARK.md). Examples remain [jwt.test.ts](../apps/web/tests/unit/lib/jwt.test.ts), [cards.test.ts](../apps/web/tests/integration/api/cards.test.ts), and the new critical/database flows.
 
-**Skeleton (adapted from [cards.test.ts](../apps/web/tests/integration/api/cards.test.ts)):**
+Obsolete claims from the previous guide (50 files/585 tests, listener as a stub, mock-everything/no-real-DB as a global rule, Codecov upload/secret and assumed branch protection) were intentionally replaced, not retained as misleading instructions. Numeric coverage, artifact upload and branch-protection policy are separate things.
 
-```ts
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createNextRequest, assertResponse } from '@/tests/helpers/api-helpers'
-import { prismaMock, resetPrismaMock } from '@/tests/helpers/prisma-mock'
-import { createCardFixture } from '@/tests/helpers/fixtures'
-import { AuthorizationError } from '@/types/server/errors'
-
-// 1. Mock cross-cutting concerns BEFORE importing the route
-vi.mock('@/lib/config', () => ({
-  getConfig: vi.fn(() => ({
-    maintenance: { enabled: false },
-    requestLimits: { maxBodySize: 1048576, maxJsonSize: 1048576 }
-  }))
-}))
-
-vi.mock('@/lib/logger', () => ({
-  logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-  withRequestLogging: (fn: any) => fn
-}))
-
-vi.mock('@/lib/middleware/maintenance', () => ({ checkMaintenance: vi.fn() }))
-vi.mock('@/lib/middleware/request-limits', () => ({
-  checkRequestLimits: vi.fn()
-}))
-vi.mock('@/lib/auth/unified-auth', () => ({ authenticateWithRole: vi.fn() }))
-
-// 2. Import AFTER mocks are in place
-import { GET } from '@/app/api/cards/route'
-import { authenticateWithRole } from '@/lib/auth/unified-auth'
-
-const ADMIN_PUBKEY = 'a'.repeat(64)
-
-beforeEach(() => {
-  resetPrismaMock()
-  vi.clearAllMocks()
-})
-
-describe('GET /api/cards', () => {
-  it('returns cards for an admin caller', async () => {
-    vi.mocked(authenticateWithRole).mockResolvedValue({
-      pubkey: ADMIN_PUBKEY,
-      role: 'ADMIN' as any,
-      method: 'nip98'
-    })
-    const card = createCardFixture()
-    vi.mocked(prismaMock.card.findMany).mockResolvedValue([card] as any)
-
-    const res = await GET(createNextRequest('/api/cards'))
-    const body: any = await assertResponse(res, 200)
-    expect(body).toHaveLength(1)
-  })
-
-  it('rejects unauthorized callers with 403', async () => {
-    vi.mocked(authenticateWithRole).mockRejectedValue(
-      new AuthorizationError('Not authorized')
-    )
-    const res = await GET(createNextRequest('/api/cards'))
-    expect(res.status).toBe(403)
-  })
-})
-```
-
-**Order matters:** every `vi.mock()` must run _before_ the route module is imported, because Next.js route handlers wire up middleware at module load. Get this wrong and your mocks silently no-op.
-
-For dynamic routes like `/api/cards/[id]`, wrap params with `createParamsPromise` from [route-helpers.ts](../apps/web/tests/helpers/route-helpers.ts):
-
-```ts
-const ctx = createParamsPromise({ id: 'card_123' })
-const res = await GET(req, ctx)
-```
-
----
-
-## Mocking Strategies
-
-### Prisma — `tests/helpers/prisma-mock.ts`
-
-Every Prisma model is replaced with a deep mock that has independent `vi.fn()` stubs per method (`findUnique`, `findMany`, `create`, …). The mock is wired in automatically via:
-
-```ts
-vi.mock('@/lib/prisma', () => ({ prisma: prismaMock }))
-```
-
-Inside [`prisma-mock.ts`](../apps/web/tests/helpers/prisma-mock.ts) — so route tests get the mock for free. Override return values per test:
-
-```ts
-vi.mocked(prismaMock.user.findUnique).mockResolvedValue(
-  createUserFixture({ role: 'ADMIN' })
-)
-vi.mocked(prismaMock.card.create).mockRejectedValue(new Error('db down'))
-```
-
-`$transaction` is pre-wired to invoke the callback with the same mock client. Always call `resetPrismaMock()` in `beforeEach` — `vi.clearAllMocks()` only clears call history, not stored return values.
-
-### MSW — outbound HTTP
-
-Default handlers live in [tests/mocks/handlers.ts](../apps/web/tests/mocks/handlers.ts) and currently mock Alby and Veintiuno. The server is started in [setup.ts](../apps/web/tests/setup.ts) and resets handlers after every test. Override per test:
-
-```ts
-import { http, HttpResponse } from 'msw'
-import { server } from '@/tests/mocks/server'
-
-it('handles Alby 5xx', async () => {
-  server.use(
-    http.post('https://api.getalby.com/*', () =>
-      HttpResponse.json({ error: 'down' }, { status: 503 })
-    )
-  )
-  // ... call the route, assert
-})
-```
-
-### Config — `vi.mock('@/lib/config')`
-
-`getConfig()` caches its result, so always mock it explicitly when the code under test reads config. For tests that need to flip env values per case (config/env modules themselves), use `vi.resetModules()` plus dynamic `await import(...)`:
-
-```ts
-beforeEach(() => {
-  vi.resetModules()
-})
-
-it('reads MAINTENANCE_MODE from env', async () => {
-  process.env.MAINTENANCE_MODE = 'true'
-  const { getConfig } = await import('@/lib/config')
-  expect(getConfig().maintenance.enabled).toBe(true)
-})
-```
-
-For typical tests, use [`createDefaultConfig()`](../apps/web/tests/helpers/route-helpers.ts) to get a sane baseline and override only what matters.
-
-### Logger — must mock before import
-
-`lib/logger.ts` calls `getConfig()` at module load. If a test imports the logger before config is mocked, you get the real config and a confusing error. Always mock the logger as a no-op in route tests:
-
-```ts
-vi.mock('@/lib/logger', () => ({
-  logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
-  withRequestLogging: (fn: any) => fn
-}))
-```
-
-### Auth — NIP-98 / JWT / unified
-
-Three flavors, all in [auth-helpers.ts](../apps/web/tests/helpers/auth-helpers.ts):
-
-- `mockNip98(pubkey?)` — replaces `validateNip98` with a stub that returns a valid result.
-- `mockAdminAuth(pubkey?)` — replaces both NIP-98 and admin-auth validators.
-- `createJwtPayload(overrides)` — builds a payload object for JWT-related assertions.
-
-For route handlers that go through the unified auth chain, mock `authenticateWithRole` directly:
-
-```ts
-vi.mocked(authenticateWithRole).mockResolvedValue({
-  pubkey: 'a'.repeat(64),
-  role: 'ADMIN' as any,
-  method: 'nip98'
-})
-```
-
-### Fixtures — `tests/helpers/fixtures.ts`
-
-Faker-backed factories for every Prisma model. Always pass overrides for fields the test asserts on; let the rest randomize. This catches accidental coupling to specific data values.
-
-```ts
-const card = createCardFixture({ otc: 'test-otc-value' })
-const admin = createAdminUserFixture({ pubkey: 'a'.repeat(64) })
-```
-
----
-
-## Helpers Reference
-
-| Helper                                     | File               | Purpose                                        |
-| ------------------------------------------ | ------------------ | ---------------------------------------------- |
-| `createNextRequest(url, opts)`             | `api-helpers.ts`   | Build a `NextRequest` for route tests          |
-| `assertResponse(res, status)`              | `api-helpers.ts`   | Assert status + parse JSON, throws on mismatch |
-| `getResponseJson(res)`                     | `api-helpers.ts`   | Parse JSON without status assertion            |
-| `prismaMock`                               | `prisma-mock.ts`   | Deep PrismaClient mock                         |
-| `resetPrismaMock()`                        | `prisma-mock.ts`   | Reset mock state in `beforeEach`               |
-| `createParamsPromise(params)`              | `route-helpers.ts` | Wrap dynamic route params (App Router style)   |
-| `createDefaultConfig(overrides)`           | `route-helpers.ts` | Sane `AppConfig` for tests                     |
-| `mockNip98(pubkey?)`                       | `auth-helpers.ts`  | Stub NIP-98 validation                         |
-| `mockAdminAuth(pubkey?)`                   | `auth-helpers.ts`  | Stub admin auth                                |
-| `createJwtPayload(overrides)`              | `auth-helpers.ts`  | Build a JWT payload object                     |
-| `createMockRequest(url, opts)`             | `auth-helpers.ts`  | Plain `Request` (not Next-specific)            |
-| `createJsonRequest(url, body)`             | `auth-helpers.ts`  | `Request` with JSON body                       |
-| `createUserFixture(overrides)`             | `fixtures.ts`      | Faker User                                     |
-| `createAdminUserFixture(overrides)`        | `fixtures.ts`      | Faker User with `role: 'ADMIN'`                |
-| `createCardFixture(overrides)`             | `fixtures.ts`      | Faker Card                                     |
-| `createCardDesignFixture(overrides)`       | `fixtures.ts`      | Faker CardDesign                               |
-| `createLightningAddressFixture(overrides)` | `fixtures.ts`      | Faker LightningAddress                         |
-| `createSettingsFixture(overrides)`         | `fixtures.ts`      | Faker Settings KV                              |
-| `createNtag424Fixture(overrides)`          | `fixtures.ts`      | Faker NTAG424                                  |
-
----
-
-## Coverage Requirements
-
-The Vitest config enforces global thresholds:
-
-| Metric     | Threshold |
-| ---------- | --------- |
-| Statements | 60%       |
-| Branches   | 70%       |
-| Functions  | 70%       |
-| Lines      | 60%       |
-
-Coverage is computed over `app/api/**`, `lib/**`, and `hooks/**`. The following are excluded by design: `tests/`, `mocks/`, `**/*.config.*`, `**/types/**`, `prisma/`, and `lib/client/**` (the latter is browser code that requires a real DOM and component-level testing — covered separately as the component test suite grows).
-
-**A PR fails CI if any threshold drops.** Always run `pnpm test:coverage` locally before opening a PR that touches lib or API code. If you intentionally lower coverage (e.g. removing a tested module), call it out in the PR description.
-
-The numbers above are a floor, not a target. New API routes and lib utilities should aim for 90%+ — the global threshold is intentionally lower to absorb hard-to-test code (third-party adapters, error fallback branches).
-
----
-
-## Best Practices
-
-1. **Test behavior, not implementation.** Assert what callers observe (return value, response body, side effect on the mock). Do not assert internal call counts unless the side effect _is_ the contract.
-2. **One assertion concept per `it`.** Multiple `expect()` lines are fine when they describe one outcome ("response is 200 _and_ body has shape X"); avoid unrelated assertions in one case.
-3. **Name tests as sentences.** `it('returns 404 when card is missing')` is better than `it('not found')`.
-4. **Always mock at the boundary.** Mock `@/lib/prisma`, `@/lib/config`, `@/lib/logger`, third-party SDKs. Do not mock the module under test — that produces tautological tests.
-5. **Use fixtures over literal objects.** Fixtures fill in irrelevant fields with random data, which catches accidental coupling and forces tests to declare what they actually care about.
-6. **Reset state in `beforeEach`.** `resetPrismaMock()` + `vi.clearAllMocks()`. Assume nothing carries over from the previous test.
-7. **Prefer `mockReset()` over `mockClear()`** when you need to drop both call history and stored return values. `vi.clearAllMocks()` is the former; `vi.resetAllMocks()` is the latter.
-8. **Test the unhappy path.** For every public function: golden case, validation failure, auth failure, dependency failure. The error path is where bugs hide.
-9. **Keep tests fast.** No `setTimeout`, no real network, no real DB. Total wall time today is ~4 seconds — guard it.
-10. **Co-locate test data with the test.** Inline fixtures and constants, unless they are reused across files. A test that requires reading three other files to understand is broken.
-11. **Skip with intent.** `it.skip()` and `it.todo()` are fine for tracking; CI will surface the count. Never commit `.only()`.
-
----
-
-## Common Pitfalls
-
-**Mocks declared after the import.** `vi.mock()` is hoisted by Vitest, but only when called at the _top_ of a file. Mixing `vi.mock` with imports that depend on it in unexpected order produces silent test failures where the real module loads instead of the mock. Rule of thumb: mocks first, imports second, never the reverse.
-
-**Logger imports at module load.** `lib/logger.ts` calls `getConfig()` synchronously. If a route test doesn't mock the logger, importing the route handler also resolves config — and the test crashes if `JWT_SECRET` is unset in the test env. Mock the logger every time.
-
-**`vi.clearAllMocks()` vs `mockReset()`.** `clearAllMocks()` only zeroes call history. If a previous test set `mockResolvedValue(x)` and the next test doesn't override it, `x` carries over. Use `resetPrismaMock()` (which calls `mockReset()` internally) to fully reset Prisma between tests, and `vi.resetAllMocks()` if you need to reset everything.
-
-**Caching in `getConfig` / `getEnv`.** Both cache after first call. To re-read env in a test, use `vi.resetModules()` and dynamic `await import()` so the module is re-loaded with the new env.
-
-**Async route params.** Next.js App Router 15+ requires params to be a `Promise`. Use `createParamsPromise({ id: '...' })` — passing a plain object will compile but explode at runtime.
-
-**MSW `onUnhandledFrame: 'warn'`** (MSW 3 renamed `onUnhandledRequest`). A test that hits an unmocked URL prints a warning but doesn't fail. If a third-party call lands silently in the test logs, add a handler to `mocks/handlers.ts` or `server.use()` it inline.
-
-**`process.env` mutation.** Set in `beforeEach`, restore in `afterEach`. Tests that stomp `process.env` without restoring it leak state into every later test in the file.
-
----
-
-## CI Integration
-
-GitHub Actions runs `lint → typecheck → test` on every PR. Branch protection requires green status checks before merge to `main`. Vitest writes `apps/web/coverage/lcov.info`; the Test job uploads it to [Codecov](https://codecov.io/gh/lawalletio/lawallet-nwc) via `codecov/codecov-action`. That upload needs the `CODECOV_TOKEN` repository secret (Codecov repo settings → GitHub Actions secrets).
-
-Locally, the pre-flight check before opening a PR:
-
-```bash
-pnpm --filter @lawallet-nwc/web lint
-pnpm --filter @lawallet-nwc/web typecheck
-pnpm --filter @lawallet-nwc/web test
-pnpm --filter @lawallet-nwc/web test:coverage
-```
-
-If any of these fail, fix the cause — never disable the check.
-
----
-
-## Roadmap
-
-| Month | Addition                                                                        |
-| ----- | ------------------------------------------------------------------------------- |
-| 3     | Playwright multi-browser smoke, visual regression baseline, admin dashboard E2E |
-| 4     | User dashboard E2E, NWC redirect flows, visual regression updates               |
-| 5     | Lightning compliance flows, webhook delivery, redirect resolution               |
-| 6     | Deployment smoke tests, full regression across all three services               |
-
-See [docs/ROADMAP.md](ROADMAP.md) for the broader plan.
-
----
-
-## Reference
-
-- [Vitest docs](https://vitest.dev)
-- [MSW docs](https://mswjs.io/docs)
-- [Testing Library](https://testing-library.com)
-- [Faker.js](https://fakerjs.dev)
-- Codebase examples: [cards.test.ts](../apps/web/tests/integration/api/cards.test.ts), [jwt.test.ts](../apps/web/tests/unit/lib/jwt.test.ts), [config.test.ts](../apps/web/tests/unit/lib/config.test.ts)
+Affected selection includes index changes, but tests execute the working tree, not a hidden copy of the index. Before recording/promoting changes, stage the intended final content and run the complete profile on a clean committed tree.

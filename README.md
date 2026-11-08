@@ -65,3 +65,9 @@ desarrollado por sus contribuidores y mantenido por
 Las personalizaciones de este fork son de [Fierillo](https://github.com/Fierillo).
 
 [Licencia MIT](./LICENSE).
+
+## Verification
+
+Use `pnpm verify:dev --base origin/main` while editing and
+`pnpm verify:pre-main --base origin/main` before promotion. See
+[the test architecture and honest promotion checklist](docs/TESTING.md).
