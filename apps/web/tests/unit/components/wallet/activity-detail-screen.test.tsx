@@ -1,3 +1,4 @@
+import { recipientSession } from '@/tests/helpers/recipient-fixtures'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -178,6 +179,7 @@ function mockShare() {
 
 describe('ActivityDetailScreen', () => {
   beforeEach(() => {
+    recipientSession()
     vi.clearAllMocks()
     window.localStorage.clear()
     __resetCurrenciesCacheForTests()

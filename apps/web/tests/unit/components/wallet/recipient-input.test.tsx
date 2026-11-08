@@ -1,3 +1,8 @@
+import {
+  recipientSession,
+  recipientKey,
+  seedRecipientContacts as seedContacts
+} from '@/tests/helpers/recipient-fixtures'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -38,19 +43,9 @@ vi.mock('@/components/admin/auth-context', () => ({
   useAuth: () => ({ apiClient: { put: apiPut, post: apiPost } })
 }))
 
-function seedContacts(count: number) {
-  const contacts = Array.from({ length: count }, (_, i) => ({
-    id: `c${i}`,
-    name: `user${i}`,
-    lightningAddress: `user${i}@lawallet.io`,
-    createdAt: 1000 - i
-  }))
-  window.localStorage.setItem('lawallet-contacts', JSON.stringify(contacts))
-  __resetContactsCacheForTests()
-}
-
 describe('RecipientInput', () => {
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
     serverRecipients.current = []
@@ -94,7 +89,7 @@ describe('RecipientInput', () => {
   it('offers only the stored recipient when typing its local-part', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
-      'lawallet-contacts',
+      recipientKey('lawallet-contacts'),
       JSON.stringify([
         {
           id: 'c-fierillo',

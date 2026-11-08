@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { getRecipientSession } from '@/lib/client/recipient-session'
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
@@ -68,6 +69,7 @@ export function RecipientInput() {
   }
 
   async function submitRecipient(nextValue: string) {
+    const session = getRecipientSession()
     const trimmedValue = nextValue.trim()
     if (!trimmedValue) return
 
@@ -116,6 +118,8 @@ export function RecipientInput() {
         }
       }
 
+      if (session !== getRecipientSession()) return
+
       // A node has no profile to fetch; the user's alias is its name.
       if (destination.kind === 'keysend') {
         const alias =
@@ -153,6 +157,7 @@ export function RecipientInput() {
       }
       // Leave the spinner up — this screen unmounts when the next one loads.
     } catch (err) {
+      if (session !== getRecipientSession()) return
       const message = errorText(t, err, t.send.invalidRecipient)
       void contactsActions.syncPaymentFailure(trimmedValue, message, body =>
         apiClient

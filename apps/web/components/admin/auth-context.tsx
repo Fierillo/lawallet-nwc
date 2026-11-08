@@ -5,6 +5,7 @@ import React, {
   useContext,
   useState,
   useEffect,
+  useLayoutEffect,
   useCallback,
   useMemo,
   useRef
@@ -32,6 +33,7 @@ import {
   clearSessionCaches,
   waitForSessionCacheCleanup
 } from '@/lib/client/cache/session-cache'
+import { setRecipientSession } from '@/lib/client/recipient-session'
 import { trackEvent } from '@/lib/analytics/gtag'
 import { AnalyticsEvent } from '@/lib/analytics/events'
 
@@ -282,6 +284,11 @@ function installHistoryRestoreGuard() {
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>(EMPTY_AUTH_STATE)
+  const recipientOwner = state.status === 'authenticated' ? state.pubkey : null
+  useLayoutEffect(() => {
+    setRecipientSession(recipientOwner)
+    return () => setRecipientSession(null)
+  }, [recipientOwner])
 
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 

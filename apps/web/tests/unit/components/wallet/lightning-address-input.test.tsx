@@ -1,3 +1,8 @@
+import {
+  recipientSession,
+  recipientKey,
+  seedRecipientContacts as seedContacts
+} from '@/tests/helpers/recipient-fixtures'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -26,17 +31,6 @@ vi.mock('@/lib/client/hooks/use-api', () => ({
   })
 }))
 
-function seedContacts(count: number) {
-  const contacts = Array.from({ length: count }, (_, i) => ({
-    id: `c${i}`,
-    name: `user${i}`,
-    lightningAddress: `user${i}@lawallet.io`,
-    createdAt: 1000 - i
-  }))
-  window.localStorage.setItem('lawallet-contacts', JSON.stringify(contacts))
-  __resetContactsCacheForTests()
-}
-
 /** The component is controlled; tests need a host that owns the value. */
 function Harness(
   props: Partial<React.ComponentProps<typeof LightningAddressInput>>
@@ -47,6 +41,7 @@ function Harness(
 
 describe('LightningAddressInput', () => {
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
     aliases.current = {}
@@ -361,7 +356,7 @@ describe('LightningAddressInput', () => {
   it('finds a saved recipient by its contact name', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
-      'lawallet-contacts',
+      recipientKey('lawallet-contacts'),
       JSON.stringify([
         {
           id: 'c1',
@@ -530,7 +525,7 @@ describe('LightningAddressInput', () => {
   it('collapses a saved exact match to one row and leaves only the field once picked', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
-      'lawallet-contacts',
+      recipientKey('lawallet-contacts'),
       JSON.stringify([
         {
           id: 'c-agustin',
@@ -624,7 +619,7 @@ describe('LightningAddressInput', () => {
   it('unions a matching saved recipient with domain autocomplete', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
-      'lawallet-contacts',
+      recipientKey('lawallet-contacts'),
       JSON.stringify([
         {
           id: 'c-fierillo',

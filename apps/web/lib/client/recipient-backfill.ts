@@ -1,5 +1,6 @@
 'use client'
 
+import { getRecipientSession } from './recipient-session'
 import { SAVED_RECIPIENTS_IMPORT_MAX } from '@lawallet-nwc/shared'
 import {
   contactsActions,
@@ -14,7 +15,7 @@ import {
   type PaymentDestination
 } from '@/lib/client/payment-destinations'
 
-let attempted = false
+let attempted: ReturnType<typeof getRecipientSession> | null = null
 
 /**
  * Past recipients this device knows about: Lightning Addresses it paid (the
@@ -93,8 +94,9 @@ export async function backfillSavedRecipients(
   server: SavedRecipient[],
   post: (body: { recipients: SavedRecipient[] }) => Promise<unknown>
 ): Promise<void> {
-  if (attempted) return
-  attempted = true
+  const session = getRecipientSession()
+  if (!session.owner || attempted === session) return
+  attempted = session
 
   const history = seedContactsFromHistory()
 
@@ -113,5 +115,5 @@ export async function backfillSavedRecipients(
 
 /** Test-only. */
 export function __resetRecipientBackfillForTests(): void {
-  attempted = false
+  attempted = null
 }

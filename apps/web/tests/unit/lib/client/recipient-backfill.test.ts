@@ -1,3 +1,7 @@
+import {
+  recipientSession,
+  recipientKey
+} from '@/tests/helpers/recipient-fixtures'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   backfillSavedRecipients,
@@ -72,6 +76,7 @@ describe('historyRecipients', () => {
 
 describe('backfillSavedRecipients', () => {
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
     __resetPaymentDestinationsForTests()
@@ -109,7 +114,7 @@ describe('backfillSavedRecipients', () => {
       ]
     })
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(
       stored.map((c: { lightningAddress: string }) => c.lightningAddress)

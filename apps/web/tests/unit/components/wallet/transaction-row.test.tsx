@@ -1,3 +1,7 @@
+import {
+  recipientSession,
+  recipientKey
+} from '@/tests/helpers/recipient-fixtures'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -27,6 +31,7 @@ const TX: NwcTransaction = {
 
 describe('TransactionRow', () => {
   beforeEach(() => {
+    recipientSession()
     __resetActivityDetailStoreForTests()
     window.localStorage.clear()
     __resetPaymentDestinationsForTests()
@@ -78,7 +83,9 @@ describe('TransactionRow', () => {
     expect(screen.getByText('“for lunch”')).toBeInTheDocument()
     expect(
       JSON.parse(
-        window.localStorage.getItem('lawallet-payment-destinations') ?? '{}'
+        window.localStorage.getItem(
+          recipientKey('lawallet-payment-destinations')
+        ) ?? '{}'
       )[HASH].avatarUrl
     ).toBeNull()
   })

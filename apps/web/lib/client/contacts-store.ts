@@ -2,6 +2,11 @@
 
 import { useSyncExternalStore } from 'react'
 import {
+  getRecipientSession,
+  recipientStorageKey,
+  subscribeRecipientSession
+} from './recipient-session'
+import {
   isHttpUrl,
   MEDIA_URL_MAX_LENGTH,
   SAVED_RECIPIENT_NAME_MAX_LENGTH
@@ -38,12 +43,23 @@ export interface Contact {
 
 let cache: Contact[] | null = null
 const listeners = new Set<() => void>()
+let cacheSession = getRecipientSession()
+const EMPTY_CONTACTS: Contact[] = []
+function checkSession() {
+  if (cacheSession !== getRecipientSession()) {
+    cacheSession = getRecipientSession()
+    cache = null
+    failuresCache = null
+  }
+}
 
 function read(): Contact[] {
-  if (typeof window === 'undefined') return []
+  checkSession()
+  const key = recipientStorageKey(STORAGE_KEY)
+  if (!key || typeof window === 'undefined') return EMPTY_CONTACTS
   if (cache) return cache
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(key)
     const parsed = raw ? (JSON.parse(raw) as Contact[]) : []
     cache = dedupeContacts(parsed)
   } catch {
@@ -53,11 +69,14 @@ function read(): Contact[] {
 }
 
 function write(next: Contact[]) {
+  checkSession()
+  const key = recipientStorageKey(STORAGE_KEY)
+  if (!key) return
   const normalized = dedupeContacts(next).slice(0, MAX_RECENT_CONTACTS)
   cache = normalized
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+      window.localStorage.setItem(key, JSON.stringify(normalized))
     } catch {
       // ignore quota errors — in-memory cache still serves reads
     }
@@ -101,11 +120,13 @@ export function normalizeLightningAddress(address: string): string | null {
 
 function subscribe(listener: () => void) {
   listeners.add(listener)
+  const unsubscribe = subscribeRecipientSession(listener)
   if (typeof window !== 'undefined' && listeners.size === 1) {
     window.addEventListener('storage', onStorage)
   }
   return () => {
     listeners.delete(listener)
+    unsubscribe()
     if (typeof window !== 'undefined' && listeners.size === 0) {
       window.removeEventListener('storage', onStorage)
     }
@@ -114,12 +135,12 @@ function subscribe(listener: () => void) {
 
 /** Account alerts cached on this device, including alias-only contacts and nodes. */
 export function readContactFailures(): Record<string, string> {
-  if (typeof window === 'undefined') return EMPTY_FAILURES
+  checkSession()
+  const key = recipientStorageKey(FAILURES_KEY)
+  if (!key || typeof window === 'undefined') return EMPTY_FAILURES
   if (failuresCache) return failuresCache
   try {
-    const parsed: unknown = JSON.parse(
-      window.localStorage.getItem(FAILURES_KEY) ?? '{}'
-    )
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(key) ?? '{}')
     failuresCache =
       parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? Object.fromEntries(
@@ -143,9 +164,12 @@ export function useContactFailures() {
 }
 
 function writeContactFailures(next: Record<string, string>) {
+  checkSession()
+  const key = recipientStorageKey(FAILURES_KEY)
+  if (!key) return
   failuresCache = next
   try {
-    window.localStorage.setItem(FAILURES_KEY, JSON.stringify(next))
+    window.localStorage.setItem(key, JSON.stringify(next))
   } catch {
     // Best effort, like the contact cache; payment results must never depend on storage.
   }
@@ -153,7 +177,12 @@ function writeContactFailures(next: Record<string, string>) {
 }
 
 function onStorage(e: StorageEvent) {
-  if (e.key !== STORAGE_KEY && e.key !== FAILURES_KEY && e.key !== null) return
+  if (
+    e.key !== recipientStorageKey(STORAGE_KEY) &&
+    e.key !== recipientStorageKey(FAILURES_KEY) &&
+    e.key !== null
+  )
+    return
   cache = null
   failuresCache = null
   for (const listener of listeners) listener()
@@ -325,6 +354,7 @@ export const contactsActions = {
     return contact
   },
   async hydrateNip05Profile(lightningAddress: string): Promise<Contact | null> {
+    const session = getRecipientSession()
     const normalizedAddress = normalizeLightningAddress(lightningAddress)
     if (!normalizedAddress) return null
 
@@ -332,6 +362,7 @@ export const contactsActions = {
     if (current && !needsProfileRefresh(current)) return current
 
     const profile = await resolveNip05Profile(normalizedAddress)
+    if (session !== getRecipientSession()) return null
     if (!profile) return current ?? null
 
     const displayName = firstUseful(profile.displayName, profile.name)
@@ -413,21 +444,15 @@ export const contactsActions = {
 }
 
 /**
- * Removes persisted recipients and resets the module snapshot immediately.
- * Unlike the user-facing `contactsActions.clear()`, this removes the storage
- * key entirely because it is part of the authenticated session cleanup.
+ * Invalidates in-memory recipient snapshots at the session boundary.
+ * Identity-partitioned records and unattributed legacy storage are retained;
+ * the next identity cannot read them through this store.
  */
 export function clearContactsCache(): void {
-  cache = []
-  failuresCache = {}
-  if (typeof window !== 'undefined') {
-    try {
-      window.localStorage.removeItem(STORAGE_KEY)
-      window.localStorage.removeItem(FAILURES_KEY)
-    } catch {
-      // ignore unavailable storage
-    }
-  }
+  // Session cleanup invalidates memory, never deletes another identity's
+  // persisted history or assigns unattributed legacy storage to the next login.
+  cache = null
+  failuresCache = null
   for (const listener of listeners) listener()
 }
 

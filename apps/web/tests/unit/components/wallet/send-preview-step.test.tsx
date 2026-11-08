@@ -1,5 +1,11 @@
+import { readPaymentDestinations } from '@/lib/client/payment-destinations'
+import {
+  recipientSession,
+  ACCOUNT_B,
+  deferred
+} from '@/tests/helpers/recipient-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SendPreviewStep } from '@/components/wallet/send/preview-step'
 import {
@@ -93,6 +99,7 @@ function ResultProbe() {
 
 describe('SendPreviewStep payer note', () => {
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
     resetAllFlows()
@@ -135,6 +142,51 @@ describe('SendPreviewStep payer note', () => {
     expect(readContactFailures()[ADDRESS]).toBe(
       'No Lightning Address available'
     )
+  })
+
+  it('drops a late quote failure after a session switch', async () => {
+    let reject!: (error: Error) => void
+    quotePaymentMock.mockReturnValue(
+      new Promise((_resolve, fail) => {
+        reject = fail
+      })
+    )
+    render(<SendPreviewStep />)
+    await waitFor(() => expect(quotePaymentMock).toHaveBeenCalled())
+    act(() => recipientSession(ACCOUNT_B))
+    await act(async () => {
+      reject(new Error('Private A failure'))
+      await Promise.resolve()
+    })
+    expect(readContactFailures()).toEqual({})
+    expect(accountClient.put).not.toHaveBeenCalled()
+  })
+
+  it('drops a late payment result after the authenticated recipient session changes', async () => {
+    const result = deferred<{
+      preimage: string
+      feesPaidSats: number
+      paymentHash: string
+    }>()
+    quotePaymentMock.mockResolvedValue(quote('Coffee'))
+    payQuotedInvoiceMock.mockReturnValue(result.promise)
+    render(<SendPreviewStep />)
+    await userEvent.click(
+      await screen.findByRole('button', { name: /Pay 1,000 sats/ })
+    )
+    await waitFor(() => expect(payQuotedInvoiceMock).toHaveBeenCalled())
+    act(() => recipientSession(ACCOUNT_B))
+    await act(async () => {
+      result.resolve({
+        preimage: 'ab',
+        feesPaidSats: 1,
+        paymentHash: 'a'.repeat(64)
+      })
+      await result.promise
+    })
+    expect(readPaymentDestinations()).toEqual({})
+    expect(accountClient.put).not.toHaveBeenCalled()
+    expect(replaceMock).not.toHaveBeenCalledWith('/wallet/send/summary')
   })
 
   it('quotes with the note and shows it before paying', async () => {
@@ -213,6 +265,7 @@ describe('SendPreviewStep keysend', () => {
   const PUBKEY = '02' + 'ab'.repeat(32)
 
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
     resetAllFlows()

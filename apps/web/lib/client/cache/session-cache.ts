@@ -5,6 +5,7 @@ import { clearAllBalances } from '@/lib/client/cache/balance-cache'
 import { clearAllSeenNotifications } from '@/lib/client/cache/nwc-notification-dedupe'
 import { clearAll as clearAllActivity } from '@/lib/client/cache/activity-cache'
 import { clearNwcCacheKeyMemo } from '@/lib/client/cache/key'
+import { setRecipientSession } from '@/lib/client/recipient-session'
 import { clearContactsCache } from '@/lib/client/contacts-store'
 import { clearCurrencyPreferences } from '@/lib/client/currencies-store'
 import { clearNostrProfileCache } from '@/lib/client/cache/nostr-profile-cache'
@@ -82,6 +83,7 @@ function notifyServiceWorker(): void {
  * through the returned promise.
  */
 export function clearSessionCaches(): Promise<void> {
+  setRecipientSession(null)
   clearApiCache()
   clearAllBalances()
   clearAllSeenNotifications()

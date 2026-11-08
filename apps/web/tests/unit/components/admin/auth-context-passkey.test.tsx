@@ -1,3 +1,4 @@
+import { getRecipientSession } from '@/lib/client/recipient-session'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import type { NostrSigner } from '@nostrify/nostrify'
@@ -163,6 +164,7 @@ describe('AuthProvider passkey sessions (PRF model)', () => {
 
       expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
       expect(screen.getByTestId('pubkey')).toHaveTextContent(PUBKEY)
+      expect(getRecipientSession().owner).toBe(PUBKEY)
       expect(screen.getByTestId('method')).toHaveTextContent('passkey')
       expect(screen.getByTestId('signer')).toHaveTextContent('yes')
       expect(mocks.exchangeNip98ForJwt).toHaveBeenCalledWith(STUB_SIGNER)
@@ -275,6 +277,7 @@ describe('AuthProvider passkey sessions (PRF model)', () => {
       act(() => {
         held.ctx!.logout()
       })
+      expect(getRecipientSession().owner).toBeNull()
 
       await waitFor(() =>
         expect(screen.getByTestId('status')).toHaveTextContent(
@@ -298,6 +301,20 @@ function fireVisibilityChange(state: DocumentVisibilityState = 'visible') {
 }
 
 describe('AuthProvider visibility recheck', () => {
+  it('detaches recipient storage on a signed-out resume even if the cached pubkey remains', async () => {
+    localStorage.setItem(JWT_KEY, 'stored-tok')
+    localStorage.setItem(METHOD_KEY, 'passkey')
+    renderProvider()
+    await waitFor(() => expect(held.ctx!.status).toBe('authenticated'))
+    expect(getRecipientSession().owner).toBe(PUBKEY)
+    localStorage.removeItem(JWT_KEY)
+    await act(async () => {
+      fireVisibilityChange('visible')
+    })
+    await waitFor(() => expect(held.ctx!.status).toBe('unauthenticated'))
+    expect(getRecipientSession().owner).toBeNull()
+  })
+
   it('keeps a live in-memory signer and does not rebuild it', async () => {
     renderProvider()
     await waitFor(() =>

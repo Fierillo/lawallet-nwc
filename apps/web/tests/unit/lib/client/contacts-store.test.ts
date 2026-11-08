@@ -1,3 +1,7 @@
+import {
+  recipientSession,
+  recipientKey
+} from '@/tests/helpers/recipient-fixtures'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   contactsActions,
@@ -8,6 +12,7 @@ import {
 
 describe('contacts-store', () => {
   beforeEach(() => {
+    recipientSession()
     window.localStorage.clear()
     __resetContactsCacheForTests()
   })
@@ -22,7 +27,7 @@ describe('contacts-store', () => {
     expect(contact.createdAt).toBeGreaterThan(0)
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored).toHaveLength(1)
     expect(stored[0].lightningAddress).toBe('satoshi@example.com')
@@ -44,7 +49,7 @@ describe('contacts-store', () => {
     })
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored).toHaveLength(2)
     expect(stored[0]).toMatchObject({
@@ -72,7 +77,7 @@ describe('contacts-store', () => {
     })
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(
       stored.map(
@@ -98,7 +103,7 @@ describe('contacts-store', () => {
     })
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored).toHaveLength(1)
     expect(stored[0]).toMatchObject({
@@ -128,7 +133,7 @@ describe('contacts-store', () => {
     })
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored).toHaveLength(1)
     expect(stored[0]).toMatchObject({
@@ -146,7 +151,7 @@ describe('contacts-store', () => {
     contactsActions.update(contact.id, { name: 'Nakamoto' })
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored[0].name).toBe('Nakamoto')
   })
@@ -160,7 +165,7 @@ describe('contacts-store', () => {
     contactsActions.remove(a.id)
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(stored).toHaveLength(1)
     expect(stored[0].name).toBe('B')
@@ -171,7 +176,9 @@ describe('contacts-store', () => {
     contactsActions.add({ name: 'B', lightningAddress: 'b@example.com' })
     contactsActions.clear()
     expect(
-      JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
+      JSON.parse(
+        window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
+      )
     ).toHaveLength(0)
   })
 
@@ -181,7 +188,7 @@ describe('contacts-store', () => {
       lightningAddress: 'bob@example.com'
     })
     const local = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )[0]
 
     contactsActions.mergeRemote([
@@ -206,7 +213,7 @@ describe('contacts-store', () => {
     ])
 
     const stored = JSON.parse(
-      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+      window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
     )
     expect(
       stored.map((c: { lightningAddress: string }) => c.lightningAddress)
@@ -231,7 +238,9 @@ describe('contacts-store', () => {
       }
     ])
     expect(
-      JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
+      JSON.parse(
+        window.localStorage.getItem(recipientKey('lawallet-contacts')) ?? '[]'
+      )
     ).toHaveLength(0)
   })
 

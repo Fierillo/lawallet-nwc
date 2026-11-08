@@ -1,6 +1,11 @@
 'use client'
 
 import { useSyncExternalStore } from 'react'
+import {
+  getRecipientSession,
+  recipientStorageKey,
+  subscribeRecipientSession
+} from './recipient-session'
 import { useContacts } from '@/lib/client/contacts-store'
 import { getDomainAvatarUrl } from '@/lib/client/lightning-address-suggestions'
 
@@ -23,12 +28,20 @@ export interface PaymentDestination {
 type DestinationMap = Record<string, PaymentDestination>
 
 let cache: DestinationMap | null = null
+let cacheSession = getRecipientSession()
+const EMPTY: DestinationMap = {}
 const listeners = new Set<() => void>()
 
 function read(): DestinationMap {
+  const key = recipientStorageKey(STORAGE_KEY)
+  if (!key) return EMPTY
+  if (cacheSession !== getRecipientSession()) {
+    cacheSession = getRecipientSession()
+    cache = null
+  }
   if (cache) return cache
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(key)
     cache = raw ? (JSON.parse(raw) as DestinationMap) : {}
   } catch {
     cache = {}
@@ -46,7 +59,8 @@ export function rememberPaymentDestination(
   destination: Omit<PaymentDestination, 'savedAt'>
 ): void {
   const hash = paymentHash?.trim()
-  if (!hash || typeof window === 'undefined') return
+  const key = recipientStorageKey(STORAGE_KEY)
+  if (!hash || !key || typeof window === 'undefined') return
   // LUD-06 metadata images arrive as base64 `data:` URIs; hundreds of those
   // would blow the localStorage quota, so the row falls back to the domain.
   const avatarUrl = destination.avatarUrl?.startsWith('data:')
@@ -66,7 +80,7 @@ export function rememberPaymentDestination(
         )
       : next
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cache))
+    window.localStorage.setItem(key, JSON.stringify(cache))
   } catch {
     // quota errors — the in-memory cache still serves this session
   }
@@ -75,14 +89,16 @@ export function rememberPaymentDestination(
 
 function subscribe(listener: () => void) {
   listeners.add(listener)
+  const unsubscribe = subscribeRecipientSession(listener)
   function onStorage(e: StorageEvent) {
-    if (e.key !== STORAGE_KEY) return
+    if (e.key !== recipientStorageKey(STORAGE_KEY) && e.key !== null) return
     cache = null
     listener()
   }
   window.addEventListener('storage', onStorage)
   return () => {
     listeners.delete(listener)
+    unsubscribe()
     window.removeEventListener('storage', onStorage)
   }
 }

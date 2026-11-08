@@ -1,5 +1,7 @@
 'use client'
 
+import { getRecipientSession } from '@/lib/client/recipient-session'
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
@@ -162,6 +164,7 @@ export function SendPreviewStep() {
 
     let cancelled = false
 
+    const session = getRecipientSession()
     void quotePayment(
       flow.recipient.destination,
       flow.amountSats,
@@ -169,11 +172,12 @@ export function SendPreviewStep() {
       effectiveNwc
     ).then(
       quote => {
-        if (!cancelled) setQuoteState({ key: quoteKey, status: 'ready', quote })
+        if (!cancelled && session === getRecipientSession())
+          setQuoteState({ key: quoteKey, status: 'ready', quote })
       },
       err => {
         const message = errorText(t, err, t.send.preview.quoteFailed)
-        if (!cancelled) {
+        if (!cancelled && session === getRecipientSession()) {
           void contactsActions.syncPaymentFailure(
             flow.recipient!.raw,
             message,
@@ -225,6 +229,7 @@ export function SendPreviewStep() {
         : t.send.preview.quotingPayment
 
   async function confirm() {
+    const session = getRecipientSession()
     if (paying) return
     if (currentQuote.status !== 'ready') {
       toast.error(
@@ -240,6 +245,7 @@ export function SendPreviewStep() {
         () => apiClient.get<UserMeResponse>('/api/users/me'),
         effectiveNwc
       )
+      if (session !== getRecipientSession()) return
       invalidateApiPath('/api/users/me')
       if (!nwc) {
         toast.error(t.send.preview.noWallet)
@@ -247,6 +253,7 @@ export function SendPreviewStep() {
         return
       }
       const result = await payQuotedInvoice(nwc, currentQuote.quote)
+      if (session !== getRecipientSession()) return
       void contactsActions.syncPaymentFailure(flow.recipient!.raw, null, body =>
         apiClient
           .put(SAVED_RECIPIENTS_PATH, body)
@@ -275,6 +282,7 @@ export function SendPreviewStep() {
       })
       router.replace('/wallet/send/summary')
     } catch (err) {
+      if (session !== getRecipientSession()) return
       const message = nwcErrorText(t, err, t.send.preview.paymentFailed, {
         keysend: Boolean(currentQuote.quote.keysendPubkey)
       })
