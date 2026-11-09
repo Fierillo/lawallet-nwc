@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionLabel } from './transaction-label'
+import { TransactionNoteEditor } from './transaction-note-editor'
 import { Send } from 'lucide-react'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { resolveUserNwc } from '@/lib/client/wallet-nwc'
@@ -34,6 +35,9 @@ import {
   useAddressAvatar,
   usePaymentDestination
 } from '@/lib/client/payment-destinations'
+import { resolveTransactionCounterparty } from '@/lib/client/transaction-counterparty'
+import { useCounterpartyAliases } from '@/lib/client/hooks/use-counterparty-aliases'
+import { CounterpartyAliasEditor } from './counterparty-alias-editor'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { parseDestination } from '@/lib/client/nwc/parse-destination'
 import { sendActions } from '@/lib/client/wallet-flow-store'
@@ -93,6 +97,23 @@ export function ActivityDetailScreen({
   const nwcString = resolveUserNwc(me)
   const { activeCurrencies, rates, activeCode, setCurrencyCode } =
     useReceiptCurrency()
+  const canAnnotate =
+    !isActivityPreviewRequested() && /^[0-9a-fA-F]{64}$/.test(hash)
+  const notePath = canAnnotate
+    ? `/api/wallet/transactions/${hash.toLowerCase()}/note`
+    : null
+  const noteResult = useApi<{ note: string | null }>(notePath)
+  const noteScope = `${pubkey}:${hash.toLowerCase()}`
+  const [savedNote, setSavedNote] = useState<{
+    scope: string
+    note: string | null
+  }>()
+  const privateNote =
+    savedNote?.scope === noteScope ? savedNote.note : noteResult.data?.note
+  const { get: getAlias } = useCounterpartyAliases()
+  const [savedAlias, setSavedAlias] = useState<
+    { pubkey: string | null; key: string; alias: string | null } | undefined
+  >()
 
   const [loading, setLoading] = useState(() => !recallActivityTx(hash))
   const [notFound, setNotFound] = useState(false)
@@ -217,19 +238,91 @@ export function ActivityDetailScreen({
   const amountLabel = `${formatSatsAmount(tx.amountSats, activeCode, rates)} ${currencyUnitLabel(activeCode)}`
   const feeLabel = `${formatSatsAmount(tx.feesPaidSats, activeCode, rates)} ${currencyUnitLabel(activeCode)}`
   const described = splitPaymentDescription(tx.description)
-  const counterpart = incoming
-    ? described.comment || described.label || null
-    : destination?.address || described.label || null
+  const baseCounterparty = resolveTransactionCounterparty(
+    tx,
+    incoming ? null : destination,
+    null
+  )
+  const aliasFromApi = getAlias(baseCounterparty.key)
+  const privateAlias =
+    savedAlias?.pubkey === pubkey && savedAlias.key === baseCounterparty.key
+      ? savedAlias.alias
+      : aliasFromApi
+  const defaultCounterpartLabel = baseCounterparty.nodePubkey
+    ? baseCounterparty.nodePubkey
+    : baseCounterparty.label
+  const counterpart =
+    privateAlias ||
+    defaultCounterpartLabel ||
+    (incoming ? described.comment || null : null)
   const outgoingNote = destination ? destination.comment : described.comment
+  const originalMessage = incoming
+    ? described.comment || described.label || null
+    : outgoingNote
+  const displayMessage = privateNote || originalMessage
   const timestamp = tx.settledAt ?? tx.createdAt
   const preimage = tx.preimage?.trim() || null
   const showPreimage = Boolean(
     preimage && (incoming ? preimage !== tx.paymentHash : true)
   )
 
+  // Tapping the recipient starts a fresh send to the same address.
+  function payAgain(address: string) {
+    try {
+      const next = parseDestination(address)
+      sendActions.reset()
+      sendActions.setRecipient({ raw: address, destination: next })
+      router.push('/wallet/send/amount')
+    } catch {
+      router.push('/wallet/send')
+    }
+  }
+
+  const noteDetail: ReceiptDetailItem = {
+    label: d.note,
+    value: displayMessage,
+    include: Boolean(displayMessage) || canAnnotate,
+    valueNode: canAnnotate ? (
+      <TransactionNoteEditor
+        key={`note:${pubkey}:${hash}`}
+        paymentHash={hash.toLowerCase()}
+        note={privateNote}
+        originalComment={originalMessage}
+        onSaved={note => setSavedNote({ scope: noteScope, note })}
+        className="ml-auto"
+      />
+    ) : displayMessage ? (
+      <span className="min-w-0 break-all">{displayMessage}</span>
+    ) : (
+      <span className="text-muted-foreground">
+        {t.shared.receipt.unavailable}
+      </span>
+    )
+  }
+
+  const sendAgainButton = recipientAddress ? (
+    <button
+      type="button"
+      onClick={() => payAgain(recipientAddress)}
+      aria-label={d.sendAgain(recipientAddress)}
+      className="-my-1 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background/60 py-1 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--theme-300)] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <Avatar className="size-6">
+        {recipientAvatar && (
+          <AvatarImage src={recipientAvatar} alt="" className="object-cover" />
+        )}
+        <AvatarFallback className="text-[10px] uppercase">
+          {recipientAddress.slice(0, 2)}
+        </AvatarFallback>
+      </Avatar>
+      <span className="min-w-0 truncate">{recipientAddress}</span>
+      <Send className="size-3.5 shrink-0 text-muted-foreground" />
+    </button>
+  ) : null
+
   const details: ReceiptDetailItem[] = incoming
     ? [
-        { label: d.note, value: counterpart, include: Boolean(counterpart) },
+        noteDetail,
         {
           label: d.time,
           value: timestamp ? formatDateTime(timestamp) : null,
@@ -240,31 +333,27 @@ export function ActivityDetailScreen({
         {
           label: d.to,
           value: counterpart,
-          valueNode: recipientAddress ? (
-            <button
-              type="button"
-              onClick={() => payAgain(recipientAddress)}
-              aria-label={d.sendAgain(recipientAddress)}
-              className="-my-1 inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background/60 py-1 pl-1 pr-2.5 text-left transition-colors hover:border-[var(--theme-300)] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <Avatar className="size-6">
-                {recipientAvatar && (
-                  <AvatarImage
-                    src={recipientAvatar}
-                    alt=""
-                    className="object-cover"
-                  />
-                )}
-                <AvatarFallback className="text-[10px] uppercase">
-                  {recipientAddress.slice(0, 2)}
-                </AvatarFallback>
-              </Avatar>
-              <span className="min-w-0 truncate">{recipientAddress}</span>
-              <Send className="size-3.5 shrink-0 text-muted-foreground" />
-            </button>
-          ) : undefined
+          valueNode:
+            canAnnotate && baseCounterparty.key && defaultCounterpartLabel ? (
+              <span className="flex min-w-0 flex-col items-end gap-1">
+                <CounterpartyAliasEditor
+                  key={`alias:${pubkey}:${baseCounterparty.key}`}
+                  counterpartyKey={baseCounterparty.key}
+                  alias={privateAlias}
+                  defaultLabel={defaultCounterpartLabel}
+                  onSaved={alias =>
+                    setSavedAlias({ pubkey, key: baseCounterparty.key!, alias })
+                  }
+                  full
+                  className="ml-auto text-right"
+                />
+                {sendAgainButton}
+              </span>
+            ) : (
+              (sendAgainButton ?? undefined)
+            )
         },
-        { label: d.note, value: outgoingNote, include: Boolean(outgoingNote) },
+        noteDetail,
         {
           label: d.networkFee,
           value: feeLabel,
@@ -279,18 +368,6 @@ export function ActivityDetailScreen({
   const showDetails = details.some(item => item.include !== false)
   const receipt = tx
 
-  // Tapping the recipient starts a fresh send to the same address.
-  function payAgain(address: string) {
-    try {
-      const next = parseDestination(address)
-      sendActions.reset()
-      sendActions.setRecipient({ raw: address, destination: next })
-      router.push('/wallet/send/amount')
-    } catch {
-      router.push('/wallet/send')
-    }
-  }
-
   function share() {
     void shareReceiptText(
       buildPaymentReceiptText(
@@ -298,7 +375,7 @@ export function ActivityDetailScreen({
           amountLabel,
           feeLabel: incoming ? null : feeLabel,
           recipient: incoming ? undefined : (counterpart ?? undefined),
-          comment: incoming ? counterpart : outgoingNote,
+          comment: incoming ? originalMessage : outgoingNote,
           settledAt: timestamp,
           paymentHash: receipt.paymentHash,
           preimage: showPreimage ? preimage : null,
@@ -338,7 +415,7 @@ export function ActivityDetailScreen({
             <ReceiptProofRow label={d.preimage} value={preimage} secret />
           )}
         </PaymentProofCard>
-        {!isActivityPreviewRequested() && /^[0-9a-fA-F]{64}$/.test(hash) ? (
+        {canAnnotate ? (
           <TransactionLabel
             key={`${pubkey}:${hash}`}
             paymentHash={hash.toLowerCase()}

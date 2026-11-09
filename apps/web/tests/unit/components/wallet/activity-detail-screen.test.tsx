@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ActivityDetailScreen } from '@/components/wallet/activity/activity-detail-screen'
 import {
@@ -7,15 +7,26 @@ import {
   __resetActivityDetailStoreForTests
 } from '@/lib/client/activity-detail-store'
 import { __resetCurrenciesCacheForTests } from '@/lib/client/currencies-store'
+import {
+  rememberPaymentDestination,
+  __resetPaymentDestinationsForTests
+} from '@/lib/client/payment-destinations'
 import type { NwcTransaction } from '@/lib/client/nwc/transactions'
 
 const replaceMock = vi.hoisted(() => vi.fn())
+const pushMock = vi.hoisted(() => vi.fn())
 const lookupTransactionMock = vi.hoisted(() => vi.fn())
 const readByPaymentHashMock = vi.hoisted(() => vi.fn())
 const shareMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const saveLabelMock = vi.hoisted(() => vi.fn())
 const privateLabel = vi.hoisted(() => ({
   label: 'Personal groceries' as string | null
+}))
+const privateAliases = vi.hoisted(() => ({
+  aliases: {} as Record<string, string>
+}))
+const privateNote = vi.hoisted(() => ({
+  note: 'Split with Ana' as string | null
 }))
 const refetchLabelMock = vi.hoisted(() => vi.fn(async () => undefined))
 const labelState = vi.hoisted(() => ({
@@ -38,7 +49,7 @@ const PREIMAGE =
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     replace: replaceMock,
-    push: vi.fn(),
+    push: pushMock,
     back: vi.fn(),
     prefetch: vi.fn()
   })
@@ -47,22 +58,36 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/lib/client/hooks/use-api', () => ({
   invalidateApiPath: vi.fn(),
   useApi: (path: string) =>
-    path?.endsWith('/label')
+    path === '/api/wallet/counterparty-aliases'
       ? {
-          data: privateLabel,
-          loading: labelState.loading,
-          error: labelState.error,
-          refetch: refetchLabelMock
-        }
-      : {
-          data: {
-            effectiveNwcString: 'nostr+walletconnect://test',
-            nwcString: 'nostr+walletconnect://test'
-          },
+          data: privateAliases,
           loading: false,
           error: null,
-          refetch: async () => undefined
+          refetch: refetchLabelMock
         }
+      : path?.endsWith('/note')
+        ? {
+            data: privateNote,
+            loading: false,
+            error: null,
+            refetch: refetchLabelMock
+          }
+        : path?.endsWith('/label')
+          ? {
+              data: privateLabel,
+              loading: labelState.loading,
+              error: labelState.error,
+              refetch: refetchLabelMock
+            }
+          : {
+              data: {
+                effectiveNwcString: 'nostr+walletconnect://test',
+                nwcString: 'nostr+walletconnect://test'
+              },
+              loading: false,
+              error: null,
+              refetch: async () => undefined
+            }
 }))
 
 vi.mock('@/lib/client/nwc', async importOriginal => {
@@ -159,6 +184,9 @@ describe('ActivityDetailScreen', () => {
     __resetActivityDetailStoreForTests()
     lookupTransactionMock.mockResolvedValue(null)
     privateLabel.label = 'Personal groceries'
+    privateNote.note = 'Split with Ana'
+    privateAliases.aliases = {}
+    __resetPaymentDestinationsForTests()
     labelState.pubkey = 'test-owner'
     labelState.loading = false
     labelState.error = null
@@ -166,6 +194,144 @@ describe('ActivityDetailScreen', () => {
     readByPaymentHashMock.mockResolvedValue(null)
     mockShare()
     window.history.replaceState({}, '', '/')
+  })
+
+  it.each(['account', 'transaction'])(
+    'does not reuse a saved private note after switching %s',
+    async scope => {
+      const user = userEvent.setup()
+      rememberActivityTx(SETTLED_IN)
+      const view = render(<ActivityDetailScreen paymentHash={HASH} />)
+      saveLabelMock.mockResolvedValue({ note: 'Private owner note' })
+      await user.click(
+        await screen.findByRole('button', { name: 'Edit note: Split with Ana' })
+      )
+      const input = screen.getByRole('textbox', { name: 'Note' })
+      await user.clear(input)
+      await user.type(input, 'Private owner note{Enter}')
+      await screen.findByRole('button', {
+        name: 'Edit note: Private owner note'
+      })
+
+      privateNote.note = 'Different note from API'
+      let nextHash = HASH
+      if (scope === 'account') labelState.pubkey = 'second-owner'
+      else {
+        nextHash = 'b'.repeat(64)
+        rememberActivityTx({ ...SETTLED_IN, paymentHash: nextHash })
+      }
+      view.rerender(<ActivityDetailScreen paymentHash={nextHash} />)
+      expect(
+        await screen.findByRole('button', {
+          name: 'Edit note: Different note from API'
+        })
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: 'Edit note: Private owner note' })
+      ).toBeNull()
+    }
+  )
+
+  it('does not reuse a saved counterparty alias after switching accounts', async () => {
+    const user = userEvent.setup()
+    rememberActivityTx(SETTLED_OUT)
+    rememberPaymentDestination(HASH, {
+      address: 'satoshi@example.com',
+      name: null,
+      avatarUrl: null,
+      comment: null
+    })
+    privateAliases.aliases = { 'ln:satoshi@example.com': 'First account alias' }
+    const view = render(<ActivityDetailScreen paymentHash={HASH} />)
+    saveLabelMock.mockResolvedValue({
+      key: 'ln:satoshi@example.com',
+      alias: 'Private saved alias'
+    })
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Edit alias: First account alias'
+      })
+    )
+    const input = screen.getByRole('textbox', { name: 'Counterparty alias' })
+    expect(input).toHaveAttribute('maxLength', '80')
+    await user.clear(input)
+    await user.type(input, 'Private saved alias{Enter}')
+    await screen.findByRole('button', {
+      name: 'Edit alias: Private saved alias'
+    })
+
+    labelState.pubkey = 'second-owner'
+    privateAliases.aliases = {
+      'ln:satoshi@example.com': 'Second account alias'
+    }
+    view.rerender(<ActivityDetailScreen paymentHash={HASH} />)
+    expect(
+      await screen.findByRole('button', {
+        name: 'Edit alias: Second account alias'
+      })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Edit alias: Private saved alias' })
+    ).toBeNull()
+  })
+
+  it('edits the Message/Note field in place by tapping it', async () => {
+    const user = userEvent.setup()
+    saveLabelMock.mockResolvedValue({ note: 'Rent for May' })
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+
+    const noteText = await screen.findByRole('button', {
+      name: 'Edit note: Split with Ana'
+    })
+    expect(noteText.querySelector('svg')).toBeNull()
+    expect(screen.queryByText('Coffee')).not.toBeInTheDocument()
+    await user.click(noteText)
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(input).toHaveValue('Split with Ana')
+    expect(input).toHaveAttribute('maxLength', '80')
+    await user.clear(input)
+    await user.type(input, 'Rent for May{Enter}')
+    expect(saveLabelMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      { note: 'Rent for May' }
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Rent for May' })
+    ).toBeInTheDocument()
+  })
+
+  it('Escape cancels an edit without saving', async () => {
+    const user = userEvent.setup()
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+    await user.click(await screen.findByRole('button', { name: /^Edit note/ }))
+    await user.type(screen.getByRole('textbox', { name: 'Note' }), 'x{Escape}')
+    expect(saveLabelMock).not.toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      expect.anything()
+    )
+    expect(
+      screen.getByRole('button', { name: 'Edit note: Split with Ana' })
+    ).toBeInTheDocument()
+  })
+
+  it('clearing the note removes the override and restores the original message', async () => {
+    const user = userEvent.setup()
+    saveLabelMock.mockResolvedValue({ note: null })
+    rememberActivityTx(SETTLED_IN)
+    render(<ActivityDetailScreen paymentHash={HASH} />)
+    await user.click(await screen.findByRole('button', { name: /^Edit note/ }))
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    await user.clear(input)
+    await user.type(input, '{Enter}')
+    expect(saveLabelMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${HASH}/note`,
+      { note: '' }
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Coffee' })
+    ).toBeInTheDocument()
   })
 
   it('loads and edits the private transaction label', async () => {
@@ -214,7 +380,7 @@ describe('ActivityDetailScreen', () => {
     )
     expect(await screen.findByText('Tag removed')).toBeInTheDocument()
     expect(input).toHaveValue('')
-    expect(screen.getByText('Coffee')).toBeInTheDocument()
+    expect(screen.getByText('Split with Ana')).toBeInTheDocument()
   })
 
   it('keeps the draft and allows retry when persistence fails', async () => {
@@ -260,6 +426,7 @@ describe('ActivityDetailScreen', () => {
   })
 
   it('renders a receive-style receipt for an incoming transaction', async () => {
+    privateNote.note = null
     rememberActivityTx(SETTLED_IN)
     render(<ActivityDetailScreen paymentHash={HASH} from="home" />)
 
@@ -275,6 +442,31 @@ describe('ActivityDetailScreen', () => {
       screen.getByRole('button', { name: 'Show preimage' })
     ).toBeInTheDocument()
   })
+
+  it.each([false, true])(
+    'keeps one working send-again action with alias editor=%s',
+    async withAliasEditor => {
+      rememberActivityTx(SETTLED_OUT)
+      if (withAliasEditor)
+        rememberPaymentDestination(HASH, {
+          address: 'satoshi@example.com',
+          name: null,
+          avatarUrl: null,
+          comment: null
+        })
+      render(<ActivityDetailScreen paymentHash={HASH} />)
+      const button = await screen.findByRole('button', {
+        name: 'Send again to satoshi@example.com'
+      })
+      expect(
+        screen.getAllByRole('button', {
+          name: 'Send again to satoshi@example.com'
+        })
+      ).toHaveLength(1)
+      await userEvent.click(button)
+      expect(pushMock).toHaveBeenCalledWith('/wallet/send/amount')
+    }
+  )
 
   it('renders a send-style receipt for an outgoing transaction', async () => {
     rememberActivityTx(SETTLED_OUT)

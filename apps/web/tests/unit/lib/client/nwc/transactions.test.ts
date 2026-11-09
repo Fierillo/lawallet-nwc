@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
+  activityFeeAmountLabel,
   listTransactions,
   lookupTransaction,
   nwcTransactionState,
@@ -26,6 +27,7 @@ function tx(overrides: Partial<NwcTransaction> = {}): NwcTransaction {
     type: 'incoming',
     amountSats: 21,
     feesPaidSats: 0,
+    feesPaidMsats: null,
     description: '',
     paymentHash: HASH,
     preimage: null,
@@ -83,11 +85,13 @@ describe('lookupTransaction', () => {
       type: 'outgoing',
       amountSats: 21_000,
       feesPaidSats: 3,
+      feesPaidMsats: 3_000,
       description: 'Coffee',
       paymentHash: HASH,
       preimage: 'bb'.repeat(32),
       settledAt: 1_700_000_000_000,
       createdAt: 1_699_999_000_000,
+      invoice: null,
       state: 'settled'
     })
   })
@@ -104,6 +108,22 @@ describe('lookupTransaction', () => {
 })
 
 describe('listTransactions', () => {
+  it('keeps the bolt11 invoice when the wallet returns it', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 1000,
+          payment_hash: HASH,
+          created_at: 10,
+          invoice: 'lnbc1...'
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].invoice).toBe('lnbc1...')
+  })
+
   it('drops rows without a payment hash', async () => {
     listTransactionsMock.mockResolvedValue({
       transactions: [
@@ -124,5 +144,87 @@ describe('listTransactions', () => {
     const list = await listTransactions(NWC)
     expect(list).toHaveLength(1)
     expect(list[0].paymentHash).toBe(HASH)
+  })
+})
+
+describe('fees_paid normalization', () => {
+  it('keeps msats when the wallet reports fees_paid', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 21_000,
+          fees_paid: 500,
+          payment_hash: HASH,
+          created_at: 10
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].feesPaidMsats).toBe(500)
+    expect(list[0].feesPaidSats).toBe(0)
+  })
+
+  it('reads negative fees_paid (LNbits list_transactions) as a positive fee', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 21_000,
+          fees_paid: -3_000,
+          payment_hash: HASH,
+          created_at: 10
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].feesPaidMsats).toBe(3_000)
+    expect(list[0].feesPaidSats).toBe(3)
+  })
+
+  it('reads negative fees_paid from lookup_invoice as a positive fee', async () => {
+    lookupInvoice.mockResolvedValue({
+      type: 'outgoing',
+      amount: 21_000,
+      fees_paid: -500,
+      payment_hash: HASH,
+      created_at: 10
+    })
+    const found = await lookupTransaction(NWC, HASH)
+    expect(found?.feesPaidMsats).toBe(500)
+  })
+
+  it('sets feesPaidMsats to null when fees_paid is omitted', async () => {
+    listTransactionsMock.mockResolvedValue({
+      transactions: [
+        {
+          type: 'outgoing',
+          amount: 21_000,
+          payment_hash: HASH,
+          created_at: 10
+        }
+      ]
+    })
+    const list = await listTransactions(NWC)
+    expect(list[0].feesPaidMsats).toBeNull()
+    expect(list[0].feesPaidSats).toBe(0)
+  })
+})
+
+describe('activityFeeAmountLabel', () => {
+  it('returns null when fee is missing or zero', () => {
+    expect(activityFeeAmountLabel(null)).toBeNull()
+    expect(activityFeeAmountLabel(undefined)).toBeNull()
+    expect(activityFeeAmountLabel(0)).toBeNull()
+  })
+
+  it('shows whole sats floored from msats', () => {
+    expect(activityFeeAmountLabel(3_000)).toBe('3')
+    expect(activityFeeAmountLabel(3_999)).toBe('3')
+  })
+
+  it('shows <1 for a positive sub-sat fee', () => {
+    expect(activityFeeAmountLabel(1)).toBe('<1')
+    expect(activityFeeAmountLabel(999)).toBe('<1')
   })
 })

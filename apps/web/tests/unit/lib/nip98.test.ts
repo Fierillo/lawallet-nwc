@@ -308,6 +308,56 @@ describe('validateNip98', () => {
       )
     }
   )
+
+  it('on Vercel Preview also accepts the deployment URL pinned by system metadata', async () => {
+    // Preview deploys share production DB settings (endpoint = prod URL) but
+    // clients sign NIP-98 against a URL pinned by trusted deployment metadata.
+    // Production stays endpoint-only (#364).
+    const prev = process.env.VERCEL_ENV
+    process.env.VERCEL_ENV = 'preview'
+    vi.stubEnv('VERCEL_URL', 'lawalletv2-git-dev-fierillos-projects.vercel.app')
+    try {
+      const { nip98 } = await import('nostr-tools')
+      vi.mocked(nip98.validateEvent).mockImplementationOnce(
+        async (event, url) =>
+          event.tags.find(tag => tag[0] === 'u')?.[1] === url
+      )
+      const { resolveConfiguredApiUrl } = await import('@/lib/public-url')
+      vi.mocked(resolveConfiguredApiUrl).mockResolvedValueOnce(
+        'https://lawalletilla.vercel.app'
+      )
+
+      const previewJwt =
+        'https://lawalletv2-git-dev-fierillos-projects.vercel.app/api/jwt'
+      const event = createNip98Event({
+        tags: [
+          ['u', previewJwt],
+          ['method', 'GET']
+        ]
+      })
+      const request = new Request(previewJwt, {
+        method: 'GET',
+        headers: {
+          Authorization: `Nostr ${btoa(JSON.stringify(event))}`,
+          host: 'lawalletv2-git-dev-fierillos-projects.vercel.app',
+          'x-forwarded-proto': 'https'
+        }
+      })
+
+      const result = await validateNip98(request)
+      expect(result.pubkey).toBe('a'.repeat(64))
+      expect(nip98.validateEvent).toHaveBeenCalledWith(
+        event,
+        previewJwt,
+        'GET',
+        expect.any(String)
+      )
+    } finally {
+      vi.unstubAllEnvs()
+      if (prev === undefined) delete process.env.VERCEL_ENV
+      else process.env.VERCEL_ENV = prev
+    }
+  })
 })
 
 describe('validateNip98QueryToken', () => {

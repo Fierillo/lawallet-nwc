@@ -42,12 +42,17 @@ export const errors = {
   payment: {
     amountRequired: 'Enter an amount',
     zeroAmountInvoice: 'Enter an amount for this zero-amount invoice',
-    npubUnsupported: 'Zaps to npubs are not supported yet'
+    npubUnsupported: 'Zaps to npubs are not supported yet',
+    keysendUnsupported:
+      "Your wallet can't pay a node directly (keysend). Ask for an invoice or a Lightning Address instead."
   },
   nwc: {
     relayOffline:
       "Couldn't reach your wallet. Its relay looks offline — check the wallet connection and try again.",
     timeout: "Your wallet didn't respond in time. Please try again.",
+    noRoute: 'No route found to pay.',
+    noRouteToNode:
+      'No route found to the node. Ask them for an invoice or a Lightning Address if they have one.',
     generic: 'Something went wrong. Please try again.'
   }
 }

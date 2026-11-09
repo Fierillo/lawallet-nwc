@@ -1,15 +1,41 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
+import { __resetRecipientBackfillForTests } from '@/lib/client/recipient-backfill'
+import {
+  __resetPaymentDestinationsForTests,
+  rememberPaymentDestination
+} from '@/lib/client/payment-destinations'
 import { RecipientInput } from '@/components/wallet/send/recipient-input'
+import { renderHook } from '@testing-library/react'
+import { resetAllFlows, useSendFlow } from '@/lib/client/wallet-flow-store'
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() })
+  useRouter: () => ({ push })
+}))
+
+const { apiPut, apiPost, serverRecipients, aliases, push } = vi.hoisted(() => ({
+  aliases: { current: {} as Record<string, string> },
+  push: vi.fn(),
+  apiPut: vi.fn(),
+  apiPost: vi.fn(),
+  serverRecipients: { current: [] as unknown[] | null }
 }))
 
 vi.mock('@/lib/client/hooks/use-api', () => ({
-  useApi: () => ({ data: { lightningAddress: 'me@lawallet.io' } })
+  useApi: (path: string | null) => ({
+    data:
+      path === '/api/wallet/counterparty-aliases'
+        ? { aliases: aliases.current }
+        : path === '/api/wallet/recipients'
+          ? serverRecipients.current && { recipients: serverRecipients.current }
+          : { lightningAddress: 'me@lawallet.io' }
+  })
+}))
+
+vi.mock('@/components/admin/auth-context', () => ({
+  useAuth: () => ({ apiClient: { put: apiPut, post: apiPost } })
 }))
 
 function seedContacts(count: number) {
@@ -27,6 +53,13 @@ describe('RecipientInput', () => {
   beforeEach(() => {
     window.localStorage.clear()
     __resetContactsCacheForTests()
+    serverRecipients.current = []
+    apiPut.mockReset().mockResolvedValue({})
+    aliases.current = {}
+    push.mockReset()
+    apiPost.mockReset().mockResolvedValue({ inserted: 0 })
+    __resetPaymentDestinationsForTests()
+    __resetRecipientBackfillForTests()
     // The list hydrates NIP-05 profiles on mount — keep it off the network.
     vi.stubGlobal(
       'fetch',
@@ -46,7 +79,7 @@ describe('RecipientInput', () => {
     expect(screen.getAllByRole('option')).toHaveLength(10)
   })
 
-  it('hides unmatched recents once the user types a new local-part', async () => {
+  it('shows no generated domain suggestions for an unknown name', async () => {
     const user = userEvent.setup()
     seedContacts(12)
     render(<RecipientInput />)
@@ -54,15 +87,11 @@ describe('RecipientInput', () => {
     await user.type(screen.getByRole('combobox'), 'satoshi')
 
     expect(screen.queryByRole('group', { name: 'Saved' })).toBeNull()
-    expect(
-      screen.getByRole('group', { name: 'Suggestions' })
-    ).toBeInTheDocument()
-    for (const option of screen.getAllByRole('option')) {
-      expect(option.textContent).toContain('satoshi@')
-    }
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
   })
 
-  it('keeps a stored recipient and domain completions when typing its local-part', async () => {
+  it('offers only the stored recipient when typing its local-part', async () => {
     const user = userEvent.setup()
     window.localStorage.setItem(
       'lawallet-contacts',
@@ -80,12 +109,10 @@ describe('RecipientInput', () => {
 
     await user.type(screen.getByRole('combobox'), 'fierillo')
 
-    const saved = screen.getByRole('group', { name: 'Saved' })
-    expect(saved).toHaveTextContent('fierillo@lawallet.io')
-
-    const suggestions = screen.getByRole('group', { name: 'Suggestions' })
-    expect(suggestions).toHaveTextContent('fierillo@lawallet.io')
-    expect(suggestions).toHaveTextContent('fierillo@blink.sv')
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('fierillo@lawallet.io')
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
   })
 
   it('shows a spinner while the next screen loads', async () => {
@@ -99,5 +126,137 @@ describe('RecipientInput', () => {
       screen.getByRole('status', { name: 'Loading next screen' })
     ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+  })
+
+  it('suggests recipients saved on the account from other devices', () => {
+    serverRecipients.current = [
+      {
+        lightningAddress: 'carol@blink.sv',
+        name: 'Carol',
+        avatarUrl: null,
+        lastUsedAt: '2026-11-06T12:00:00.000Z'
+      }
+    ]
+    render(<RecipientInput />)
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'carol@blink.sv'
+    )
+  })
+
+  it('saves a used Lightning Address on the account', async () => {
+    const user = userEvent.setup()
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'satoshi@lawallet.ar')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(apiPut).toHaveBeenCalledWith('/api/wallet/recipients', {
+      lightningAddress: 'satoshi@lawallet.ar',
+      name: 'satoshi',
+      avatarUrl: null
+    })
+  })
+
+  it('keeps going when saving on the account fails', async () => {
+    const user = userEvent.setup()
+    apiPut.mockRejectedValue(new Error('offline'))
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'satoshi@lawallet.ar')
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+
+    expect(
+      screen.getByRole('status', { name: 'Loading next screen' })
+    ).toBeInTheDocument()
+  })
+
+  it('lists past paid addresses as saved recipients and saves them on the account', async () => {
+    const user = userEvent.setup()
+    rememberPaymentDestination('a'.repeat(64), {
+      address: 'ariel@lacrypta.ar',
+      name: 'Ariel',
+      avatarUrl: null,
+      comment: null
+    })
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'ariel')
+
+    const groups = screen.getAllByRole('group')
+    expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Saved'])
+    expect(groups[0]).toHaveTextContent('ariel@lacrypta.ar')
+    expect(apiPost).toHaveBeenCalledTimes(1)
+    expect(apiPost).toHaveBeenCalledWith('/api/wallet/recipients', {
+      recipients: [
+        expect.objectContaining({ lightningAddress: 'ariel@lacrypta.ar' })
+      ]
+    })
+  })
+
+  it('lists past paid addresses even when the account list fails to load', async () => {
+    const user = userEvent.setup()
+    serverRecipients.current = null
+    rememberPaymentDestination('b'.repeat(64), {
+      address: 'fiwi@blink.sv',
+      name: null,
+      avatarUrl: null,
+      comment: null
+    })
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'fiwi@blink.sv'
+    )
+    expect(apiPost).not.toHaveBeenCalled()
+  })
+
+  it('says so when no saved contact matches a typed name', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'zzz')
+
+    expect(screen.getByText('No matching contacts')).toBeInTheDocument()
+  })
+
+  it.each([
+    'satoshi@lawallet.ar',
+    'lnbc10n1pexample',
+    'lnurl1dp68gurn',
+    '02' + 'ab'.repeat(32)
+  ])('shows no hint for a complete destination (%s)', async input => {
+    const user = userEvent.setup()
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), input)
+
+    expect(screen.queryByText('No matching contacts')).toBeNull()
+  })
+
+  it('offers an aliased node and sends it to the amount step as keysend', async () => {
+    const user = userEvent.setup()
+    resetAllFlows()
+    const pubkey = '02' + 'ab'.repeat(32)
+    aliases.current = { [`node:${pubkey}`]: 'fiwi' }
+    render(<RecipientInput />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    const option = screen.getByRole('option', { name: /fiwi/ })
+    expect(option).toHaveTextContent('02abab…abab')
+    await user.click(option)
+
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith('/wallet/send/amount')
+    )
+    const { result } = renderHook(() => useSendFlow())
+    expect(result.current.recipient).toMatchObject({
+      raw: pubkey,
+      destination: { kind: 'keysend', pubkey },
+      profile: { name: 'fiwi' }
+    })
   })
 })

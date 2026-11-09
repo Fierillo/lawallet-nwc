@@ -79,6 +79,191 @@ registry.registerPath({
   }
 })
 
+const transactionNoteResponse = z.object({ note: z.string().nullable() })
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/transactions/{paymentHash}/note',
+  tags: [TAG],
+  summary: 'Read the caller’s private transaction note.',
+  description:
+    'Free-text notes are scoped to the authenticated account and never shared with counterparties. A hash without a note returns null.',
+  operationId: 'wallet.transactions.note.get',
+  security: protectedSecurity,
+  request: { params: schemas.TransactionLabelParam },
+  responses: {
+    200: inlineJsonResponse(
+      'Private note (never publicly cached).',
+      transactionNoteResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/transactions/{paymentHash}/note',
+  tags: [TAG],
+  summary: 'Save or remove the caller’s private transaction note.',
+  description:
+    'Upserts a note for this account and payment hash. Notes are trimmed and limited to 80 characters. Saving an empty note removes it.',
+  operationId: 'wallet.transactions.note.set',
+  security: protectedSecurity,
+  request: {
+    params: schemas.TransactionLabelParam,
+    body: {
+      content: {
+        'application/json': { schema: schemas.TransactionNoteUpdateRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved note, or null if removed.',
+      transactionNoteResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+const counterpartyAliasesResponse = z.object({
+  aliases: z.record(z.string(), z.string())
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/counterparty-aliases',
+  tags: [TAG],
+  summary: 'List the caller’s counterparty aliases.',
+  description:
+    'Returns every Lightning Address / payee-node display alias for the authenticated account as a key→alias map.',
+  operationId: 'wallet.counterpartyAliases.list',
+  security: protectedSecurity,
+  responses: {
+    200: inlineJsonResponse(
+      'Alias map (never publicly cached).',
+      counterpartyAliasesResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/counterparty-aliases',
+  tags: [TAG],
+  summary: 'Save or remove a counterparty alias.',
+  description:
+    'Upserts an alias for `ln:<address>` or `node:<pubkey>`. Empty alias removes it. Aliases apply to every transaction with that counterparty.',
+  operationId: 'wallet.counterpartyAliases.set',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.CounterpartyAliasUpdateRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved alias, or null if removed.',
+      z.object({
+        key: z.string(),
+        alias: z.string().nullable()
+      })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+const savedRecipientsResponse = z.object({
+  recipients: z.array(
+    z.object({
+      lightningAddress: z.string(),
+      name: z.string().nullable(),
+      avatarUrl: z.string().nullable(),
+      lastUsedAt: z.string(),
+      lastFailureReason: z.string().nullable(),
+      lastFailureAt: z.string().nullable()
+    })
+  )
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'get',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'List the caller’s recent Lightning recipients and payment alerts.',
+  description:
+    'Returns up to 50 saved send recipients for the authenticated account, most recently used first.',
+  operationId: 'wallet.recipients.list',
+  security: protectedSecurity,
+  responses: {
+    200: inlineJsonResponse(
+      'Saved recipients (never publicly cached).',
+      savedRecipientsResponse
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'put',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'Save a Lightning Address or keysend node as a recent recipient.',
+  description:
+    'Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar/failure keep stored values. lastFailureReason records an alert (up to 500 characters); null clears it. lastFailureAt is assigned by the server. Alias-only addresses and compressed node public keys are upserted for the caller.',
+  operationId: 'wallet.recipients.save',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.SavedRecipientSaveRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Saved address.',
+      z.object({ lightningAddress: z.string() })
+    ),
+    ...commonErrorResponses
+  }
+})
+
+registry.registerPath({
+  ...withRole('USER'),
+  method: 'post',
+  path: '/api/wallet/recipients',
+  tags: [TAG],
+  summary: 'Backfill recent send recipients from payment history.',
+  description:
+    'Inserts up to 50 Lightning recipients (addresses or keysend nodes) with their own last-used time. Addresses the account already has are left untouched.',
+  operationId: 'wallet.recipients.import',
+  security: protectedSecurity,
+  request: {
+    body: {
+      content: {
+        'application/json': { schema: schemas.SavedRecipientImportRequest }
+      }
+    }
+  },
+  responses: {
+    200: inlineJsonResponse(
+      'Number of new recipients stored.',
+      z.object({ inserted: z.number().int() })
+    ),
+    ...commonErrorResponses
+  }
+})
+
 const walletAddressSchema = z
   .object({
     username: z.string(),

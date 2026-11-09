@@ -26,6 +26,32 @@ export const updateTransactionLabelSchema = z.object({
   label: z.string().trim().max(TRANSACTION_LABEL_MAX_LENGTH)
 })
 
+export const TRANSACTION_NOTE_MAX_LENGTH = 80
+
+export const updateTransactionNoteSchema = z.object({
+  note: z.string().trim().max(TRANSACTION_NOTE_MAX_LENGTH)
+})
+
+export const COUNTERPARTY_ALIAS_MAX_LENGTH = 80
+
+/** `ln:<address>` or `node:<66-hex compressed pubkey>`. */
+export const counterpartyAliasKeySchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .max(80)
+  .refine(
+    value =>
+      /^ln:[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ||
+      /^node:0[23][0-9a-f]{64}$/.test(value),
+    'Invalid counterparty key'
+  )
+
+export const updateCounterpartyAliasSchema = z.object({
+  key: counterpartyAliasKeySchema,
+  alias: z.string().trim().max(COUNTERPARTY_ALIAS_MAX_LENGTH)
+})
+
 /** A Nostr public key in the canonical wire format (lowercase hex, no npub). */
 export const hexPubkeySchema = z
   .string()
@@ -82,6 +108,39 @@ export const imageUrlSchema = z
   .refine(isHttpUrl, {
     message: 'Image URL must be an http:// or https:// URL'
   })
+
+export const SAVED_RECIPIENT_ADDRESS_MAX_LENGTH = 200
+export const SAVED_RECIPIENT_NAME_MAX_LENGTH = 80
+
+/** Lightning Address the caller paid; kept per account as a send suggestion. */
+export const saveRecipientSchema = z.object({
+  lightningAddress: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(SAVED_RECIPIENT_ADDRESS_MAX_LENGTH)
+    .regex(
+      /^(?:[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}|0[23][a-f0-9]{64})$/,
+      'Invalid Lightning Address or node public key'
+    ),
+  name: z.string().trim().max(SAVED_RECIPIENT_NAME_MAX_LENGTH).nullish(),
+  avatarUrl: imageUrlSchema.nullish(),
+  lastFailureReason: z.string().trim().min(1).max(500).nullable().optional()
+})
+
+export const SAVED_RECIPIENTS_IMPORT_MAX = 50
+
+/** Past recipients found in a device's history, uploaded once to the account. */
+export const importRecipientsSchema = z.object({
+  recipients: z
+    .array(
+      saveRecipientSchema.omit({ lastFailureReason: true }).extend({
+        lastUsedAt: z.string().datetime()
+      })
+    )
+    .min(1)
+    .max(SAVED_RECIPIENTS_IMPORT_MAX)
+})
 
 /**
  * A URL accepted from API input and later rendered as a clickable link.
@@ -883,6 +942,7 @@ export const BACKUP_SCHEMA_VERSION = 1
 export const backupTableName = z.enum([
   'users',
   'transactionLabels',
+  'transactionNotes',
   'cardDesigns',
   'ntag424s',
   'remoteWallets',
@@ -904,7 +964,7 @@ export type BackupTableName = z.infer<typeof backupTableName>
  * operational state; the rest are opt-in.
  */
 export const backupCategoryEnum = z.enum([
-  'core', // users, transactionLabels, cardDesigns, ntag424s, remoteWallets, lightningAddresses, cards, cardActivationTokens
+  'core', // users, transactionLabels, transactionNotes, cardDesigns, ntag424s, remoteWallets, lightningAddresses, cards, cardActivationTokens
   'settings',
   'plugins',
   'activityLogs',

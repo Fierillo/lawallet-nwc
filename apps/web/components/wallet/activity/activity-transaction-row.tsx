@@ -11,9 +11,17 @@ import {
 } from '@/lib/client/activity-detail'
 import { rememberActivityTx } from '@/lib/client/activity-detail-store'
 import type { NwcTransaction } from '@/lib/client/nwc/transactions'
+import {
+  splitPaymentDescription,
+  usePaymentDestination
+} from '@/lib/client/payment-destinations'
+import { resolveTransactionCounterparty } from '@/lib/client/transaction-counterparty'
+import { useCounterpartyAliases } from '@/lib/client/hooks/use-counterparty-aliases'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/components/admin/auth-context'
 import { TransactionTagPicker } from './transaction-tag-picker'
+import { TransactionNoteEditor } from './transaction-note-editor'
+import { CounterpartyAliasEditor } from './counterparty-alias-editor'
 
 export function ActivityTransactionRow({
   tx,
@@ -34,21 +42,82 @@ export function ActivityTransactionRow({
       ? `/api/wallet/transactions/${tx.paymentHash.toLowerCase()}/label`
       : null
   const annotation = useApi<{ label: string | null }>(labelPath)
+  const noteResult = useApi<{ note: string | null }>(
+    labelPath ? labelPath.replace(/\/label$/, '/note') : null
+  )
   const currentTag =
     savedTag?.pubkey === pubkey
       ? savedTag?.tag
       : !annotation.loading && !annotation.error
         ? annotation.data?.label
         : undefined
+  const [savedNote, setSavedNote] = useState<{
+    pubkey: string | null
+    note: string | null
+  } | null>(null)
+  const currentNote =
+    savedNote?.pubkey === pubkey
+      ? savedNote.note
+      : !noteResult.error
+        ? noteResult.data?.note
+        : undefined
+  const destination = usePaymentDestination(
+    tx.type === 'incoming' ? null : tx.paymentHash
+  )
+  const described = splitPaymentDescription(tx.description)
+  const originalComment = destination ? destination.comment : described.comment
+  const { get: getAlias } = useCounterpartyAliases()
+  const [savedAlias, setSavedAlias] = useState<{
+    pubkey: string | null
+    key: string
+    alias: string | null
+  } | null>(null)
+  const baseCounterparty = resolveTransactionCounterparty(tx, destination, null)
+  const aliasFromApi = getAlias(baseCounterparty.key)
+  const currentAlias =
+    savedAlias?.pubkey === pubkey && savedAlias.key === baseCounterparty.key
+      ? savedAlias.alias
+      : aliasFromApi
   const panelId = useId()
   const href = tx.paymentHash
     ? activityDetailHref(tx.paymentHash, from)
     : undefined
+  const noteEditor =
+    labelPath != null ? (
+      <TransactionNoteEditor
+        key={`note:${pubkey}:${tx.paymentHash}`}
+        paymentHash={tx.paymentHash.toLowerCase()}
+        note={currentNote}
+        originalComment={originalComment}
+        quoted
+        onSaved={note => setSavedNote({ pubkey, note })}
+      />
+    ) : null
+  const titleEditor =
+    labelPath != null && baseCounterparty.key && baseCounterparty.label ? (
+      <CounterpartyAliasEditor
+        key={`alias:${pubkey}:${baseCounterparty.key}`}
+        counterpartyKey={baseCounterparty.key}
+        alias={currentAlias}
+        defaultLabel={baseCounterparty.label}
+        onSaved={alias =>
+          setSavedAlias({ pubkey, key: baseCounterparty.key!, alias })
+        }
+      />
+    ) : null
 
   return (
     <div>
       <div className="flex items-center">
-        <TransactionRow tx={tx} href={href} className="min-w-0 flex-1" />
+        <TransactionRow
+          tx={tx}
+          href={href}
+          className="min-w-0 flex-1"
+          noteOverride={currentNote}
+          aliasOverride={currentAlias}
+          commentSlot={noteEditor}
+          titleSlot={titleEditor}
+        />
         {!isActivityPreviewRequested() &&
         /^[0-9a-fA-F]{64}$/.test(tx.paymentHash || '') ? (
           <TransactionTagPicker
@@ -81,6 +150,7 @@ export function ActivityTransactionRow({
             tx={tx}
             href={href}
             savedTag={currentTag}
+            message={currentNote || tx.description}
             annotation={annotation}
           />
         ) : null}
@@ -93,11 +163,13 @@ function TransactionInformation({
   tx,
   href,
   savedTag,
+  message,
   annotation
 }: {
   tx: NwcTransaction
   href?: string
   savedTag?: string | null
+  message?: string | null
   annotation: UseApiResult<{ label: string | null }>
 }) {
   const { data, loading, error, refetch } = annotation
@@ -106,7 +178,7 @@ function TransactionInformation({
       <div>
         <dt className="text-xs text-muted-foreground">Message</dt>
         <dd className="mt-1 whitespace-pre-wrap break-words text-foreground">
-          {tx.description || 'No message'}
+          {message || 'No message'}
         </dd>
       </div>
       <div>

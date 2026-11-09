@@ -313,6 +313,9 @@ model User {
   oauthGrants                        OAuthGrant[]
   mcpPayments                        McpPayment[]
   transactionLabels                  TransactionLabel[]
+  transactionNotes                   TransactionNote[]
+  counterpartyAliases                CounterpartyAlias[]
+  savedRecipients                    SavedRecipient[]
   /// Whether a card this account holds may be used to recover the whole
   /// account onto another key (card-manager RECOVER QR). On by default; the
   /// owner turns it off in Security so a lost card can't take the account.
@@ -340,6 +343,50 @@ model TransactionLabel {
   @@id([userId, paymentHash])
 }
 
+/// Private free-text note per transaction. Unlike tags, never listed or reused.
+model TransactionNote {
+  userId      String
+  paymentHash String @db.VarChar(64)
+  note        String @db.VarChar(80)
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, paymentHash])
+}
+
+
+/// User-assigned display name for a Lightning Address or payee node pubkey.
+/// Applies to every transaction that resolves to the same counterparty key.
+model CounterpartyAlias {
+  id        String   @id @default(cuid())
+  userId    String
+  /// `ln:<address>` or `node:<pubkey hex>`
+  key       String   @db.VarChar(200)
+  alias     String   @db.VarChar(80)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+/// Lightning Addresses this account paid, synced across devices as send
+/// suggestions. Profile fields are a display cache only.
+model SavedRecipient {
+  id               String   @id @default(cuid())
+  userId           String
+  lightningAddress String   @db.VarChar(200)
+  name             String?  @db.VarChar(80)
+  avatarUrl        String?  @db.VarChar(2048)
+  lastFailureReason String? @db.VarChar(500)
+  lastFailureAt     DateTime?
+  lastUsedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lightningAddress])
+  @@index([userId, lastUsedAt])
+}
 
 /// One Nostr pubkey belonging to an account. An account owns one or more
 /// identities; exactly one is primary (enforced by a raw partial unique

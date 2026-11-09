@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import b11 from 'bolt11'
 import {
   ExpiredCardPaymentInvoiceError,
+  extractPayeePubkey,
   parseCardPaymentInvoice,
   parseExactPaymentInvoice
 } from '@/lib/invoice-utils'
@@ -171,5 +172,76 @@ describe('parseExactPaymentInvoice', () => {
     expect(() =>
       parseExactPaymentInvoice(invoice.slice(0, -1) + final)
     ).toThrow(/Invalid Lightning invoice/)
+  })
+})
+
+describe('extractPayeePubkey', () => {
+  it('recovers the payee node pubkey from the invoice signature', () => {
+    const priv = crypto.randomBytes(32)
+    const tags = [
+      { tagName: 'payment_hash', data: crypto.randomBytes(32).toString('hex') },
+      {
+        tagName: 'payment_secret',
+        data: crypto.randomBytes(32).toString('hex')
+      },
+      { tagName: 'description', data: 'payee recovery' }
+    ]
+    const encoded = b11.encode({
+      satoshis: 21,
+      timestamp: Math.floor(Date.now() / 1000),
+      tags
+    })
+    const { paymentRequest } = b11.sign(encoded, priv)
+    if (!paymentRequest) throw new Error('failed to sign test invoice')
+    const expected = b11.decode(paymentRequest).payeeNodeKey!.toLowerCase()
+
+    expect(extractPayeePubkey(paymentRequest)).toBe(expected)
+    expect(extractPayeePubkey(paymentRequest)).toMatch(/^0[23][0-9a-f]{64}$/)
+  })
+
+  it('prefers the explicit n/payee_node_key tag when present', () => {
+    const priv = crypto.randomBytes(32)
+    const unsigned = b11.encode({
+      satoshis: 21,
+      timestamp: Math.floor(Date.now() / 1000),
+      tags: [
+        {
+          tagName: 'payment_hash',
+          data: crypto.randomBytes(32).toString('hex')
+        },
+        {
+          tagName: 'payment_secret',
+          data: crypto.randomBytes(32).toString('hex')
+        },
+        { tagName: 'description', data: 'with n tag' }
+      ]
+    })
+    const { paymentRequest: first } = b11.sign(unsigned, priv)
+    const payee = b11.decode(first!).payeeNodeKey!
+    const withTag = b11.encode({
+      satoshis: 21,
+      timestamp: Math.floor(Date.now() / 1000),
+      tags: [
+        {
+          tagName: 'payment_hash',
+          data: crypto.randomBytes(32).toString('hex')
+        },
+        {
+          tagName: 'payment_secret',
+          data: crypto.randomBytes(32).toString('hex')
+        },
+        { tagName: 'description', data: 'with n tag' },
+        { tagName: 'payee_node_key', data: payee }
+      ]
+    })
+    const { paymentRequest } = b11.sign(withTag, priv)
+    if (!paymentRequest) throw new Error('failed to sign test invoice')
+
+    expect(extractPayeePubkey(paymentRequest)).toBe(payee.toLowerCase())
+  })
+
+  it('returns null for garbage input', () => {
+    expect(extractPayeePubkey('not-an-invoice')).toBeNull()
+    expect(extractPayeePubkey('')).toBeNull()
   })
 })

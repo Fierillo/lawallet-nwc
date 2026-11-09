@@ -108,6 +108,9 @@ function seedMergeDefaults() {
   vi.mocked(prismaMock.invoice.updateMany).mockResolvedValue(count as any)
   vi.mocked(prismaMock.activityLog.updateMany).mockResolvedValue(count as any)
   vi.mocked(prismaMock.transactionLabel.findMany).mockResolvedValue([])
+  vi.mocked(prismaMock.transactionNote.findMany).mockResolvedValue([])
+  vi.mocked(prismaMock.counterpartyAlias.findMany).mockResolvedValue([])
+  vi.mocked(prismaMock.savedRecipient.findMany).mockResolvedValue([])
 }
 
 describe('mergeAccounts', () => {
@@ -248,6 +251,61 @@ describe('mergeAccounts', () => {
     }
   })
 
+  it('preserves absorbed aliases and recipients before the shell cascade, with survivor conflicts winning', async () => {
+    seedMergeUsers()
+    seedMergeDefaults()
+    const createdAt = new Date('2026-10-01T00:00:00Z')
+    const updatedAt = new Date('2026-10-02T00:00:00Z')
+    const alias = {
+      key: 'ln:alice@example.com',
+      alias: 'Alice',
+      createdAt,
+      updatedAt
+    }
+    const recipient = {
+      lightningAddress: 'alice@example.com',
+      name: 'Alice',
+      avatarUrl: null,
+      lastUsedAt: updatedAt,
+      createdAt,
+      lastFailureReason: 'No route',
+      lastFailureAt: updatedAt
+    }
+    vi.mocked(prismaMock.counterpartyAlias.findMany).mockResolvedValue([
+      alias
+    ] as any)
+    vi.mocked(prismaMock.savedRecipient.findMany).mockResolvedValue([
+      recipient
+    ] as any)
+
+    await mergeAccounts({ survivorId: A, absorbedId: B, mainPubkey: PK_A })
+
+    expect(prismaMock.counterpartyAlias.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: B } })
+    )
+    expect(prismaMock.savedRecipient.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: B } })
+    )
+    expect(prismaMock.counterpartyAlias.createMany).toHaveBeenCalledWith({
+      data: [{ ...alias, userId: A }],
+      skipDuplicates: true
+    })
+    expect(prismaMock.savedRecipient.createMany).toHaveBeenCalledWith({
+      data: [{ ...recipient, userId: A }],
+      skipDuplicates: true
+    })
+    const deletion = vi.mocked(prismaMock.user.delete).mock
+      .invocationCallOrder[0]
+    expect(
+      vi.mocked(prismaMock.counterpartyAlias.createMany).mock
+        .invocationCallOrder[0]
+    ).toBeLessThan(deletion)
+    expect(
+      vi.mocked(prismaMock.savedRecipient.createMany).mock
+        .invocationCallOrder[0]
+    ).toBeLessThan(deletion)
+  })
+
   it('returns the address and wallet counts reported by the re-parent', async () => {
     seedMergeUsers()
     seedMergeDefaults()
@@ -372,6 +430,28 @@ describe('mergeAccounts', () => {
       skipDuplicates: true
     })
     expect(prismaMock.transactionLabel.deleteMany).toHaveBeenCalledWith({
+      where: { userId: B }
+    })
+  })
+
+  it('moves private transaction notes to the survivor and keeps the survivor note on a shared payment', async () => {
+    seedMergeUsers()
+    seedMergeDefaults()
+    vi.mocked(prismaMock.transactionNote.findMany).mockResolvedValue([
+      { paymentHash: 'shared-payment', note: 'From absorbed' },
+      { paymentHash: 'absorbed-only', note: 'Rent split' }
+    ] as any)
+
+    await mergeAccounts({ survivorId: A, absorbedId: B, mainPubkey: PK_A })
+
+    expect(prismaMock.transactionNote.createMany).toHaveBeenCalledWith({
+      data: [
+        { userId: A, paymentHash: 'shared-payment', note: 'From absorbed' },
+        { userId: A, paymentHash: 'absorbed-only', note: 'Rent split' }
+      ],
+      skipDuplicates: true
+    })
+    expect(prismaMock.transactionNote.deleteMany).toHaveBeenCalledWith({
       where: { userId: B }
     })
   })

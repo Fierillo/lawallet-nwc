@@ -6,10 +6,17 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode
+  type ReactNode,
+  type PointerEvent
 } from 'react'
 import * as PopoverPrimitive from '@radix-ui/react-popover'
+import { AtSign, Network, TriangleAlert, Zap } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from '@/components/ui/popover'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useApi } from '@/lib/client/hooks/use-api'
 import { useDebouncedValue } from '@/lib/client/hooks/use-debounced-value'
@@ -18,22 +25,31 @@ import { readAvatar } from '@/lib/client/cache/avatar-cache'
 import {
   contactsActions,
   useContacts,
+  useContactFailures,
   type Contact
 } from '@/lib/client/contacts-store'
 import {
   buildLightningAddressSuggestions,
   getDomainAvatarUrl,
-  lightningAddressMatchesQuery,
+  recipientMatchesQuery,
   resolveCurrentLightningDomain,
   type LightningAddressSuggestion
 } from '@/lib/client/lightning-address-suggestions'
 import { isLightningAddress } from '@/lib/ln-address'
+import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
+import {
+  abbreviateNodePubkey,
+  counterpartyLnKey
+} from '@/lib/client/transaction-counterparty'
 import { useT } from '@/lib/client/i18n'
 import { cn } from '@/lib/utils'
 
 const RECENT_PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_RECENT_OPTIONS = 10
 const AVATAR_LOOKUP_DEBOUNCE_MS = 400
+const NAME_QUERY_RE = /^[a-z0-9._-]+(@[a-z0-9.-]*)?$/
+const NON_ADDRESS_PREFIX_RE =
+  /^(lnbc|lntb|lnbcrt|lnurl|npub|nprofile|0[23][0-9a-f]{64}$)/
 
 interface UserMeResponse {
   lightningAddress: string | null
@@ -58,6 +74,13 @@ export interface LightningAddressInputProps {
   allowNonAddress?: boolean
   /** Hide the saved-contacts group, showing only generated suggestions. */
   hideContacts?: boolean
+  /** Hide generated `name@domain` completions, showing only saved contacts. */
+  hideSuggestions?: boolean
+  /**
+   * Also offer Lightning nodes the user aliased (picked as their pubkey, for
+   * keysend). Only surfaces that can pay a node should set this.
+   */
+  allowNodes?: boolean
   id?: string
   name?: string
   placeholder?: string
@@ -86,6 +109,8 @@ export function LightningAddressInput({
   variant = 'popover',
   allowNonAddress = false,
   hideContacts = false,
+  hideSuggestions = false,
+  allowNodes = false,
   id,
   name,
   placeholder = 'satoshi@lawallet.ar',
@@ -99,15 +124,27 @@ export function LightningAddressInput({
   ...rest
 }: LightningAddressInputProps) {
   const t = useT()
+  const [openBadgeId, setOpenBadgeId] = useState<string | null>(null)
+  const badgeState: ContactBadgeState = {
+    openId: openBadgeId,
+    onOpenChange: (id, open) =>
+      setOpenBadgeId(current => (open ? id : current === id ? null : current))
+  }
   const contacts = useContacts()
+  const failures = useContactFailures()
   const { data: me } = useApi<UserMeResponse>('/api/users/me')
+  const { data: aliasData } = useApi<{ aliases?: Record<string, string> }>(
+    hideContacts ? null : COUNTERPARTY_ALIASES_PATH
+  )
+  const aliasFor = (address: string): string | null =>
+    aliasData?.aliases?.[counterpartyLnKey(address)] ?? null
   const [open, setOpen] = useState(variant === 'inline')
   const [focused, setFocused] = useState(false)
   const [highlightedOptionIndex, setHighlightedOptionIndex] = useState(-1)
   // The value last picked from the list. While the field still holds it the
   // choice is made, so the list gives way to the field alone.
   const [committedValue, setCommittedValue] = useState<string | null>(null)
-  const optionRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const optionRefs = useRef<Array<HTMLDivElement | null>>([])
   const localInputRef = useRef<HTMLInputElement | null>(null)
   // Unique per instance: the forwarding editor mounts several of these at once,
   // and a shared listbox id would produce duplicate DOM ids and point every
@@ -119,25 +156,61 @@ export function LightningAddressInput({
   const committed = committedValue !== null && committedValue === query
   const currentDomain = resolveCurrentLightningDomain(me?.lightningAddress)
 
+  // Addresses the user aliased in activity are people they know too, even
+  // when this device never saved them. Node-id aliases have no address to
+  // pay, so they stay out.
+  const knownRecipients = useMemo(() => {
+    if (hideContacts) return contacts
+    const saved = new Set(contacts.map(c => c.lightningAddress))
+    const aliasOnly: Contact[] = []
+    for (const key of Object.keys(aliasData?.aliases ?? {})) {
+      if (!key.startsWith('ln:')) continue
+      const lightningAddress = key.slice(3)
+      if (saved.has(lightningAddress) || !isLightningAddress(lightningAddress))
+        continue
+      aliasOnly.push({
+        id: `alias:${lightningAddress}`,
+        name: lightningAddress.split('@')[0] ?? lightningAddress,
+        lightningAddress,
+        createdAt: 0
+      })
+    }
+    return aliasOnly.length > 0 ? [...contacts, ...aliasOnly] : contacts
+  }, [aliasData, contacts, hideContacts])
+
   const recentContacts = useMemo(() => {
     if (hideContacts) return []
+    const aliases = aliasData?.aliases
     const matched = query
-      ? contacts.filter(contact =>
-          lightningAddressMatchesQuery(contact.lightningAddress, query)
+      ? knownRecipients.filter(contact =>
+          recipientMatchesQuery(
+            {
+              lightningAddress: contact.lightningAddress,
+              names: [
+                aliases?.[counterpartyLnKey(contact.lightningAddress)],
+                contact.name,
+                contact.displayName
+              ]
+            },
+            query
+          )
         )
-      : contacts
+      : knownRecipients
     return matched.slice(0, MAX_RECENT_OPTIONS)
-  }, [contacts, hideContacts, query])
+  }, [aliasData, hideContacts, knownRecipients, query])
   const suggestedAddresses = useMemo(
-    () => buildLightningAddressSuggestions(value, currentDomain),
-    [currentDomain, value]
+    () =>
+      hideSuggestions
+        ? []
+        : buildLightningAddressSuggestions(value, currentDomain),
+    [currentDomain, hideSuggestions, value]
   )
 
   // Once the typed value IS one of the options, offering the other domains is
   // noise — the user already settled on one. Collapse to that single row, the
   // saved contact when there is one (it carries the avatar and name).
   const savedContact =
-    contacts.find(contact => contact.lightningAddress === query) ?? null
+    knownRecipients.find(contact => contact.lightningAddress === query) ?? null
   const exactContact = hideContacts ? null : savedContact
   const exactSuggestion =
     suggestedAddresses.find(
@@ -153,17 +226,39 @@ export function LightningAddressInput({
     : exactMatch
       ? exactContacts
       : recentContacts
+  const visibleNodes = useMemo(() => {
+    if (!allowNodes || hideContacts || committed) return []
+    const nodes: Array<{ pubkey: string; alias: string }> = []
+    for (const [key, alias] of Object.entries(aliasData?.aliases ?? {})) {
+      if (!key.startsWith('node:')) continue
+      const pubkey = key.slice(5)
+      if (
+        query &&
+        !recipientMatchesQuery(
+          { lightningAddress: pubkey, names: [alias] },
+          query
+        )
+      )
+        continue
+      nodes.push({ pubkey, alias })
+    }
+    return nodes.slice(0, MAX_RECENT_OPTIONS)
+  }, [aliasData, allowNodes, committed, hideContacts, query])
   const visibleSuggestions = committed
     ? []
     : exactMatch
       ? exactSuggestions
       : suggestedAddresses
 
-  const hasOptions = visibleContacts.length > 0 || visibleSuggestions.length > 0
+  const hasOptions =
+    visibleContacts.length > 0 ||
+    visibleNodes.length > 0 ||
+    visibleSuggestions.length > 0
   const listVisible = hasOptions && (variant === 'inline' || open)
 
   const optionValues = [
     ...visibleContacts.map(contact => contact.lightningAddress),
+    ...visibleNodes.map(node => node.pubkey),
     ...visibleSuggestions.map(suggestion => suggestion.lightningAddress)
   ]
   const activeOptionIndex =
@@ -277,13 +372,19 @@ export function LightningAddressInput({
             : 'flex flex-col gap-2'
         }
       >
-        {visibleContacts.length > 0 && (
+        {(visibleContacts.length > 0 || visibleNodes.length > 0) && (
           <LightningAddressOptionGroup title={t.shared.addressInput.saved}>
             {visibleContacts.map((contact, index) => (
               <LightningAddressOptionButton
+                badgeState={badgeState}
                 key={contact.id}
                 id={optionId(listboxId, index)}
+                hasLightningAddress={isLightningAddress(
+                  contact.lightningAddress
+                )}
+                failureReason={failures[contact.lightningAddress.toLowerCase()]}
                 name={contact.lightningAddress}
+                label={aliasFor(contact.lightningAddress)}
                 avatarUrl={
                   contact.avatarUrl ??
                   getAvatarFallbackForAddress(contact.lightningAddress)
@@ -297,6 +398,28 @@ export function LightningAddressInput({
                 disabled={disabled}
               />
             ))}
+            {visibleNodes.map((node, nodeIndex) => {
+              const index = visibleContacts.length + nodeIndex
+              return (
+                <LightningAddressOptionButton
+                  badgeState={badgeState}
+                  key={`node:${node.pubkey}`}
+                  id={optionId(listboxId, index)}
+                  name={abbreviateNodePubkey(node.pubkey)}
+                  label={node.alias}
+                  isLightningNode
+                  failureReason={failures[node.pubkey.toLowerCase()]}
+                  icon={<Zap className="size-3.5" aria-hidden />}
+                  active={activeOptionIndex === index}
+                  buttonRef={el => {
+                    optionRefs.current[index] = el
+                  }}
+                  onHighlight={() => setHighlightedOptionIndex(index)}
+                  onSelect={() => commit(node.pubkey)}
+                  disabled={disabled}
+                />
+              )
+            })}
           </LightningAddressOptionGroup>
         )}
 
@@ -305,7 +428,8 @@ export function LightningAddressInput({
             title={t.shared.addressInput.suggestions}
           >
             {visibleSuggestions.map((suggestion, index) => {
-              const optionIndex = visibleContacts.length + index
+              const optionIndex =
+                visibleContacts.length + visibleNodes.length + index
               // The exact typed address is the only one worth a real avatar.
               const resolved =
                 typedAvatar.avatarUrl &&
@@ -315,6 +439,7 @@ export function LightningAddressInput({
                     suggestion.avatarUrl)
               return (
                 <LightningAddressOptionButton
+                  badgeState={badgeState}
                   key={suggestion.lightningAddress}
                   id={optionId(listboxId, optionIndex)}
                   name={suggestion.lightningAddress}
@@ -367,6 +492,7 @@ export function LightningAddressInput({
       role="combobox"
       value={value}
       onChange={e => {
+        setOpenBadgeId(null)
         // One place decides casing, so every surface agrees.
         onChange(e.target.value.toLowerCase())
         setHighlightedOptionIndex(-1)
@@ -464,11 +590,30 @@ export function LightningAddressInput({
     </div>
   )
 
+  // Contacts-only lists (send) would otherwise go silently blank on a name
+  // that matches nobody. Not for a bolt11/LNURL/npub or a full address.
+  const showNoMatches =
+    hideSuggestions &&
+    !hideContacts &&
+    !hasOptions &&
+    !committed &&
+    NAME_QUERY_RE.test(query) &&
+    !NON_ADDRESS_PREFIX_RE.test(query) &&
+    !isLightningAddress(query)
+
   if (variant === 'inline') {
     return (
       <>
         {fieldWithAffordances}
-        {optionList ?? <div className="min-h-0 flex-1" />}
+        {optionList ?? (
+          <div className="min-h-0 flex-1">
+            {showNoMatches && (
+              <p className="px-0.5 text-sm text-muted-foreground">
+                {t.shared.addressInput.noMatches}
+              </p>
+            )}
+          </div>
+        )}
       </>
     )
   }
@@ -518,60 +663,260 @@ export function LightningAddressOptionGroup({
   )
 }
 
+interface ContactBadgeState {
+  openId: string | null
+  onOpenChange: (id: string, open: boolean) => void
+}
+
 export function LightningAddressOptionButton({
+  badgeState,
   id,
   name,
+  label,
+  icon,
   avatarUrl,
+  failureReason,
+  hasLightningAddress = false,
+  isLightningNode = false,
   active,
   buttonRef,
   onHighlight,
   onSelect,
   disabled
 }: {
+  badgeState: ContactBadgeState
   id: string
   name: string
+  /** The user's private alias, shown above the address when set. */
+  label?: string | null
+  /** Replaces the avatar, for options that aren't people (e.g. nodes). */
+  icon?: ReactNode
   avatarUrl?: string | null
+  failureReason?: string
+  hasLightningAddress?: boolean
+  isLightningNode?: boolean
   active: boolean
-  buttonRef: (node: HTMLButtonElement | null) => void
+  buttonRef: (node: HTMLDivElement | null) => void
   onHighlight: () => void
   onSelect: () => void
   disabled?: boolean
 }) {
+  const hasDestinationBadge = hasLightningAddress || isLightningNode
+  const destinationBadgeLabel = isLightningNode
+    ? 'Este contacto es un nodo Lightning'
+    : 'Este contacto tiene Lightning Address'
+
   return (
-    <button
+    <div
       ref={buttonRef}
       id={id}
-      type="button"
       role="option"
       tabIndex={-1}
       aria-selected={active}
       // mousedown, not click: the input's blur would close the list first.
       onMouseDown={e => e.preventDefault()}
-      onClick={onSelect}
+      onClick={event => {
+        // Let clicks reach Radix's outside-dismiss listener, but never pay a badge.
+        if ((event.target as Element).closest('[data-contact-badge]')) return
+        if (!disabled) onSelect()
+      }}
+      onKeyDown={event => {
+        if (event.target !== event.currentTarget || disabled) return
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelect()
+        }
+      }}
       onMouseEnter={onHighlight}
-      disabled={disabled}
+      aria-disabled={disabled || undefined}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
-        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-70',
+        'relative flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-1.5 text-left transition-colors',
+        (failureReason || hasDestinationBadge) && 'pr-7',
+        failureReason && hasDestinationBadge && 'pr-12',
+        'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
+        disabled && 'pointer-events-none opacity-70',
         active
           ? 'border-(--theme-300) bg-accent/80'
           : 'border-border/70 bg-card/80 hover:border-border hover:bg-card'
       )}
     >
-      <Avatar className="size-7 border border-border/70">
-        {avatarUrl && (
-          <AvatarImage src={avatarUrl} alt="" className="object-cover" />
-        )}
-        <AvatarFallback className="text-[10px]">
-          {initialsFor(name)}
-        </AvatarFallback>
-      </Avatar>
+      {icon ? (
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full border border-border/70 bg-muted text-muted-foreground">
+          {icon}
+        </span>
+      ) : (
+        <Avatar className="size-7 border border-border/70">
+          {avatarUrl && (
+            <AvatarImage src={avatarUrl} alt="" className="object-cover" />
+          )}
+          <AvatarFallback className="text-[10px]">
+            {initialsFor(name)}
+          </AvatarFallback>
+        </Avatar>
+      )}
+      {hasDestinationBadge && (
+        <ContactBadge
+          badgeId={`${id}-destination`}
+          state={badgeState}
+          reason={destinationBadgeLabel}
+          disabled={disabled}
+          className={cn(
+            'absolute top-1',
+            isLightningNode ? 'text-violet-500' : 'text-green-500',
+            failureReason ? 'right-6' : 'right-1'
+          )}
+        >
+          {isLightningNode ? (
+            <Network className="size-3.5" aria-hidden />
+          ) : (
+            <AtSign className="size-3.5" aria-hidden />
+          )}
+        </ContactBadge>
+      )}
+      {failureReason && (
+        <ContactBadge
+          badgeId={`${id}-failure`}
+          state={badgeState}
+          reason={failureReason}
+          disabled={disabled}
+          className="absolute right-1 top-1 text-amber-500"
+        >
+          <TriangleAlert className="size-3.5" aria-hidden />
+        </ContactBadge>
+      )}
       {/* One line only: the address already contains the username, and the
-      domain was repeating what the address ends with. */}
-      <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-        {name}
-      </span>
-    </button>
+      domain was repeating what the address ends with. An alias is the one
+      thing the address can't say, so it gets a line of its own. */}
+      {label ? (
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-sm font-medium text-foreground">
+            {label}
+          </span>
+          <span className="truncate text-xs text-muted-foreground">{name}</span>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+          {name}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** A real button, outside any button row, so touch never selects a recipient. */
+function ContactBadge({
+  badgeId,
+  state,
+  reason,
+  className,
+  disabled,
+  children
+}: {
+  badgeId: string
+  state: ContactBadgeState
+  reason: string
+  className: string
+  disabled?: boolean
+  children: ReactNode
+}) {
+  const isOpen = state.openId === badgeId
+  const pinned = useRef(false)
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function clearHoverTimer() {
+    if (hoverTimer.current !== null) clearTimeout(hoverTimer.current)
+    hoverTimer.current = null
+  }
+
+  useEffect(() => {
+    if (!isOpen) {
+      pinned.current = false
+      clearHoverTimer()
+    }
+  }, [isOpen])
+  useEffect(() => () => clearHoverTimer(), [])
+
+  function isFineMouse(event: PointerEvent) {
+    return (
+      event.pointerType === 'mouse' &&
+      window.matchMedia?.('(hover: hover) and (pointer: fine)').matches
+    )
+  }
+
+  function hoverEnter(event: PointerEvent) {
+    if (disabled || !isFineMouse(event)) return
+    clearHoverTimer()
+    if (!isOpen) {
+      hoverTimer.current = setTimeout(
+        () => state.onOpenChange(badgeId, true),
+        200
+      )
+    }
+  }
+
+  function hoverLeave(event: PointerEvent) {
+    if (!isFineMouse(event) || pinned.current) return
+    clearHoverTimer()
+    hoverTimer.current = setTimeout(
+      () => state.onOpenChange(badgeId, false),
+      150
+    )
+  }
+
+  return (
+    <Popover
+      open={isOpen}
+      onOpenChange={open => {
+        clearHoverTimer()
+        pinned.current = open
+        state.onOpenChange(badgeId, open)
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-contact-badge
+          aria-label={reason}
+          disabled={disabled}
+          className={cn(
+            className,
+            'rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring'
+          )}
+          onPointerEnter={hoverEnter}
+          onPointerLeave={hoverLeave}
+          onClick={event => {
+            clearHoverTimer()
+            if (isOpen && !pinned.current) {
+              // A click pins a hover-open explanation instead of toggling it shut.
+              pinned.current = true
+              event.preventDefault()
+            }
+          }}
+          onMouseDown={event => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ')
+              event.stopPropagation()
+          }}
+        >
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        data-contact-badge
+        aria-label={reason}
+        side="top"
+        onPointerEnter={hoverEnter}
+        onPointerLeave={hoverLeave}
+        className="w-auto max-w-64 px-3 py-2 text-xs"
+        onOpenAutoFocus={event => event.preventDefault()}
+        onCloseAutoFocus={event => event.preventDefault()}
+      >
+        {reason}
+      </PopoverContent>
+    </Popover>
   )
 }
 

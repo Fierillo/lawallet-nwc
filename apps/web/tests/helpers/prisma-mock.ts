@@ -64,6 +64,9 @@ function createPrismaMock(): PrismaClient {
     oAuthGrant: createModelMock(),
     mcpPayment: createModelMock(),
     transactionLabel: createModelMock(),
+    transactionNote: createModelMock(),
+    counterpartyAlias: createModelMock(),
+    savedRecipient: createModelMock(),
     accountRecovery: createModelMock(),
     $transaction: vi.fn(fn => {
       if (typeof fn === 'function') {
@@ -131,6 +134,9 @@ export function resetPrismaMock() {
     'oAuthGrant',
     'mcpPayment',
     'transactionLabel',
+    'transactionNote',
+    'counterpartyAlias',
+    'savedRecipient',
     'accountRecovery'
   ] as const
   for (const model of models) {

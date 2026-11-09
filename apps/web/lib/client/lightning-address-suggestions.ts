@@ -75,6 +75,33 @@ export function lightningAddressMatchesQuery(
   return localPart.startsWith(normalizedQuery)
 }
 
+/** Case- and accent-insensitive form for matching names typed by hand. */
+function foldText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * A saved recipient matches by its address (prefix, like any address) or by
+ * any of the names the user knows it by: their private alias, or the
+ * contact's profile name (substring).
+ */
+export function recipientMatchesQuery(
+  recipient: {
+    lightningAddress: string
+    names: Array<string | null | undefined>
+  },
+  query: string
+): boolean {
+  if (lightningAddressMatchesQuery(recipient.lightningAddress, query))
+    return true
+  const needle = foldText(query)
+  return recipient.names.some(name => !!name && foldText(name).includes(needle))
+}
+
 export function buildLightningAddressSuggestions(
   input: string,
   currentDomain: string,

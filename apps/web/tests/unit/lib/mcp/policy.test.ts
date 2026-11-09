@@ -40,7 +40,14 @@ describe('exposure policy vs the live OpenAPI document', () => {
     for (const id of [
       'wallet.transactions.label.get',
       'wallet.transactions.label.set',
-      'wallet.transactions.tags.list'
+      'wallet.transactions.tags.list',
+      'wallet.transactions.note.get',
+      'wallet.transactions.note.set',
+      'wallet.counterpartyAliases.list',
+      'wallet.counterpartyAliases.set',
+      'wallet.recipients.list',
+      'wallet.recipients.save',
+      'wallet.recipients.import'
     ]) {
       expect(policyFor(findOperation(id)!)).toHaveProperty('excluded')
     }

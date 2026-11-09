@@ -12,6 +12,7 @@ import type { NwcTransaction } from '@/lib/client/nwc/transactions'
 
 const labelState = vi.hoisted(() => ({
   label: 'Groceries' as string | null,
+  note: null as string | null,
   loading: false,
   error: null as Error | null
 }))
@@ -44,12 +45,26 @@ vi.mock('@/lib/client/hooks/use-api', () => ({
             error: null,
             refetch: refetchMock
           }
-        : {
-            data: path ? { label: labelState.label } : null,
-            loading: labelState.loading,
-            error: labelState.error,
-            refetch: refetchMock
-          }
+        : path?.endsWith('/note')
+          ? {
+              data: { note: labelState.note },
+              loading: false,
+              error: null,
+              refetch: refetchMock
+            }
+          : path === '/api/wallet/counterparty-aliases'
+            ? {
+                data: { aliases: {} },
+                loading: false,
+                error: null,
+                refetch: refetchMock
+              }
+            : {
+                data: path ? { label: labelState.label } : null,
+                loading: labelState.loading,
+                error: labelState.error,
+                refetch: refetchMock
+              }
   )
 }))
 vi.mock('@/components/wallet/nwc-provider', () => ({
@@ -114,6 +129,7 @@ beforeEach(() => {
   __resetActivityDetailStoreForTests()
   window.history.replaceState({}, '', '/wallet/activity')
   labelState.label = 'Groceries'
+  labelState.note = null
   labelState.loading = false
   labelState.error = null
   listMock.mockResolvedValue([tx])
@@ -165,7 +181,7 @@ describe('ActivityScreen quick transaction information', () => {
   it('shows the persisted tag in the closed transaction row without opening anything', async () => {
     render(<ActivityScreen />)
     const row = await screen.findByRole('link', {
-      name: /A long payment message/
+      name: /Received/
     })
     expect(within(row).queryByText('Groceries')).not.toBeInTheDocument()
     expect(
@@ -412,10 +428,90 @@ describe('ActivityScreen quick transaction information', () => {
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByText('Groceries')).toBeInTheDocument()
-    const rowLink = screen.getByRole('link', { name: /A long payment message/ })
+    const rowLink = screen.getByRole('link', { name: /Received/ })
     expect(rowLink).toHaveAttribute('href', `/wallet/activity/${hash}`)
     expect(rowLink.contains(toggle)).toBe(false)
     await user.click(rowLink)
     expect(recallActivityTx(hash)?.paymentHash).toBe(hash)
+  })
+
+  it('shows the note as the comment line, outside the row link', async () => {
+    labelState.note = 'Split with Ana'
+    render(<ActivityScreen />)
+    const row = await screen.findByRole('link', {
+      name: /Received/
+    })
+    const note = screen.getByRole('button', {
+      name: 'Edit note: Split with Ana'
+    })
+    expect(note).toHaveTextContent('“Split with Ana”')
+    expect(row.contains(note)).toBe(false)
+    expect(note.closest('a')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add note' })).toBeNull()
+    expect(vi.mocked(useApi)).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${hash}/note`
+    )
+  })
+
+  it('tapping the note edits it inline without navigating; the row still navigates', async () => {
+    const user = userEvent.setup()
+    labelState.note = 'Split with Ana'
+    saveTagMock.mockResolvedValue({ note: 'Dinner' })
+    render(<ActivityScreen />)
+    const row = await screen.findByRole('link', {
+      name: /Received/
+    })
+    await user.click(screen.getByRole('button', { name: /^Edit note/ }))
+    expect(recallActivityTx(hash)).toBeNull()
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(input.closest('a')).toBeNull()
+    await user.clear(input)
+    await user.type(input, 'Dinner{Enter}')
+    expect(saveTagMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${hash}/note`,
+      { note: 'Dinner' }
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Dinner' })
+    ).toBeInTheDocument()
+    expect(recallActivityTx(hash)).toBeNull()
+    await user.click(row)
+    expect(recallActivityTx(hash)?.paymentHash).toBe(hash)
+  })
+
+  it('shows a round + when there is no comment and adds a note on blur', async () => {
+    const user = userEvent.setup()
+    saveTagMock.mockResolvedValue({ note: 'Dinner' })
+    render(<ActivityScreen />)
+    const row = await screen.findByRole('link', {
+      name: /Received/
+    })
+    const plus = screen.getByRole('button', { name: 'Add note' })
+    expect(plus).toHaveClass('rounded-full')
+    expect(row.contains(plus)).toBe(false)
+    await user.click(plus)
+    expect(recallActivityTx(hash)).toBeNull()
+    const input = screen.getByRole('textbox', { name: 'Note' })
+    expect(input).toHaveAttribute('maxLength', '80')
+    await user.type(input, 'Dinner')
+    await user.tab()
+    expect(saveTagMock).toHaveBeenCalledWith(
+      `/api/wallet/transactions/${hash}/note`,
+      { note: 'Dinner' }
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Edit note: Dinner' })
+    ).toBeInTheDocument()
+  })
+
+  it('does not fetch private notes for preview transactions', async () => {
+    window.history.replaceState({}, '', '/wallet/activity?preview=1')
+    render(<ActivityScreen />)
+    await screen.findAllByRole('button', {
+      name: /Expand transaction information/
+    })
+    expect(
+      vi.mocked(useApi).mock.calls.some(([path]) => path?.endsWith('/note'))
+    ).toBe(false)
   })
 })

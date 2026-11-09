@@ -2,13 +2,22 @@
 
 import { useSyncExternalStore } from 'react'
 import {
+  isHttpUrl,
+  MEDIA_URL_MAX_LENGTH,
+  SAVED_RECIPIENT_NAME_MAX_LENGTH
+} from '@lawallet-nwc/shared'
+import {
   DEFAULT_NOSTR_RELAYS,
   normalizeNostrPubkey,
   parseKind0Content
 } from '@/lib/nostr/profile'
 
 const STORAGE_KEY = 'lawallet-contacts'
-const MAX_RECENT_CONTACTS = 12
+const FAILURES_KEY = 'lawallet-contact-failures'
+const EMPTY_FAILURES: Record<string, string> = {}
+let failuresCache: Record<string, string> | null = null
+/** Matches the server cap in `/api/wallet/recipients`. */
+const MAX_RECENT_CONTACTS = 50
 const PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LN_ADDRESS_RE = /^([a-z0-9._-]+)@([a-z0-9.-]+\.[a-z]{2,})$/i
 
@@ -85,7 +94,7 @@ function contactIdentityKeys(contact: Contact): string[] {
   return keys
 }
 
-function normalizeLightningAddress(address: string): string | null {
+export function normalizeLightningAddress(address: string): string | null {
   const normalized = address.trim().toLowerCase()
   return LN_ADDRESS_RE.test(normalized) ? normalized : null
 }
@@ -103,9 +112,50 @@ function subscribe(listener: () => void) {
   }
 }
 
+/** Account alerts cached on this device, including alias-only contacts and nodes. */
+export function readContactFailures(): Record<string, string> {
+  if (typeof window === 'undefined') return EMPTY_FAILURES
+  if (failuresCache) return failuresCache
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(FAILURES_KEY) ?? '{}'
+    )
+    failuresCache =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? Object.fromEntries(
+            Object.entries(parsed)
+              .filter(([, reason]) => typeof reason === 'string')
+              .slice(0, MAX_RECENT_CONTACTS)
+          )
+        : {}
+  } catch {
+    failuresCache = {}
+  }
+  return failuresCache
+}
+
+export function useContactFailures() {
+  return useSyncExternalStore(
+    subscribe,
+    readContactFailures,
+    () => EMPTY_FAILURES
+  )
+}
+
+function writeContactFailures(next: Record<string, string>) {
+  failuresCache = next
+  try {
+    window.localStorage.setItem(FAILURES_KEY, JSON.stringify(next))
+  } catch {
+    // Best effort, like the contact cache; payment results must never depend on storage.
+  }
+  for (const listener of listeners) listener()
+}
+
 function onStorage(e: StorageEvent) {
-  if (e.key !== STORAGE_KEY) return
+  if (e.key !== STORAGE_KEY && e.key !== FAILURES_KEY && e.key !== null) return
   cache = null
+  failuresCache = null
   for (const listener of listeners) listener()
 }
 
@@ -132,9 +182,48 @@ function needsProfileRefresh(contact: Contact): boolean {
   )
 }
 
+/** Current contacts, outside React. Empty during SSR. */
+export function readContacts(): Contact[] {
+  return read()
+}
+
+/** Row returned by `GET /api/wallet/recipients`. */
+export interface SavedRecipient {
+  lightningAddress: string
+  name: string | null
+  avatarUrl: string | null
+  lastUsedAt: string
+  lastFailureReason?: string | null
+  lastFailureAt?: string | null
+}
+
+export const SAVED_RECIPIENTS_PATH = '/api/wallet/recipients'
+
+/**
+ * Body for `PUT /api/wallet/recipients`. Drops what the API would reject
+ * (LUD-06 `data:` images, oversized URLs) and truncates long names, so the
+ * best-effort sync never fails on profile noise.
+ */
+export function savedRecipientPayload(
+  contact: Pick<Contact, 'lightningAddress' | 'name' | 'avatarUrl'>
+) {
+  const avatarUrl = contact.avatarUrl?.trim()
+  return {
+    lightningAddress: contact.lightningAddress,
+    name:
+      contact.name?.trim().slice(0, SAVED_RECIPIENT_NAME_MAX_LENGTH) || null,
+    avatarUrl:
+      avatarUrl &&
+      avatarUrl.length <= MEDIA_URL_MAX_LENGTH &&
+      isHttpUrl(avatarUrl)
+        ? avatarUrl
+        : null
+  }
+}
+
 /**
  * Subscribes to the contacts list. Returns the most-recently-added entries
- * first. Empty during SSR — the data is localStorage-only on purpose.
+ * first. Empty during SSR; localStorage caches the account recipients.
  */
 export function useContacts(): Contact[] {
   return useSyncExternalStore(subscribe, read, () => [])
@@ -142,6 +231,44 @@ export function useContacts(): Contact[] {
 
 /** Mutation surface for the contacts store — all writes notify subscribers. */
 export const contactsActions = {
+  async syncPaymentFailure(
+    destination: string,
+    reason: string | null,
+    save: (body: {
+      lightningAddress: string
+      lastFailureReason: string | null
+    }) => Promise<unknown>
+  ): Promise<void> {
+    contactsActions.setPaymentFailure(destination, reason)
+    const lightningAddress = destination.trim().toLowerCase()
+    if (
+      !normalizeLightningAddress(lightningAddress) &&
+      !/^0[23][a-f0-9]{64}$/.test(lightningAddress)
+    )
+      return
+    try {
+      await save({
+        lightningAddress,
+        lastFailureReason: reason?.slice(0, 500) ?? null
+      })
+    } catch {
+      // Best effort: a sync failure must never change the payment result.
+    }
+  },
+  setPaymentFailure(destination: string, reason: string | null) {
+    const key = destination.trim().toLowerCase()
+    if (!key || key.length > 2048) return
+    const next = { ...readContactFailures() }
+    delete next[key]
+    writeContactFailures(
+      Object.fromEntries(
+        [
+          ...(reason ? [[key, reason.slice(0, 500)]] : []),
+          ...Object.entries(next)
+        ].slice(0, MAX_RECENT_CONTACTS)
+      )
+    )
+  },
   add(input: Omit<Contact, 'id' | 'createdAt'>): Contact {
     const contact: Contact = {
       id: genId(),
@@ -219,6 +346,60 @@ export const contactsActions = {
       touch: false
     })
   },
+  /**
+   * Folds the account's server-side recipients into this device's cache.
+   * Local entries win; the server only adds unknown addresses and fills a
+   * missing avatar. Order is most recent use across both sources.
+   */
+  mergeRemote(recipients: SavedRecipient[]) {
+    // The account is authoritative; null clears stale device-local alerts.
+    writeContactFailures(
+      Object.fromEntries(
+        recipients.flatMap(recipient =>
+          recipient.lastFailureReason
+            ? [
+                [
+                  recipient.lightningAddress.toLowerCase(),
+                  recipient.lastFailureReason
+                ]
+              ]
+            : []
+        )
+      )
+    )
+    contactsActions.mergeRecipients(recipients)
+  },
+  /** Merges recipient metadata without replacing authoritative payment alerts. */
+  mergeRecipients(recipients: SavedRecipient[]) {
+    const contacts = [...read()]
+    for (const recipient of recipients) {
+      const lightningAddress = normalizeLightningAddress(
+        recipient.lightningAddress
+      )
+      if (!lightningAddress) continue
+      const usedAt = Date.parse(recipient.lastUsedAt) || 0
+      const index = contacts.findIndex(
+        c => c.lightningAddress === lightningAddress
+      )
+      if (index >= 0) {
+        const existing = contacts[index]
+        contacts[index] = {
+          ...existing,
+          avatarUrl: existing.avatarUrl ?? recipient.avatarUrl,
+          createdAt: Math.max(existing.createdAt, usedAt)
+        }
+        continue
+      }
+      contacts.push({
+        id: genId(),
+        createdAt: usedAt,
+        name: recipient.name?.trim() || displayNameFor(lightningAddress),
+        lightningAddress,
+        avatarUrl: recipient.avatarUrl
+      })
+    }
+    write(contacts.sort((a, b) => b.createdAt - a.createdAt))
+  },
   update(id: string, patch: Partial<Omit<Contact, 'id' | 'createdAt'>>) {
     write(read().map(c => (c.id === id ? { ...c, ...patch } : c)))
   },
@@ -226,6 +407,7 @@ export const contactsActions = {
     write(read().filter(c => c.id !== id))
   },
   clear() {
+    writeContactFailures({})
     write([])
   }
 }
@@ -237,9 +419,11 @@ export const contactsActions = {
  */
 export function clearContactsCache(): void {
   cache = []
+  failuresCache = {}
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.removeItem(STORAGE_KEY)
+      window.localStorage.removeItem(FAILURES_KEY)
     } catch {
       // ignore unavailable storage
     }
@@ -376,5 +560,6 @@ function isNostrEvent(event: unknown): event is NostrEvent {
 
 /** Test-only hook to reset the module-level cache between cases. */
 export function __resetContactsCacheForTests() {
+  failuresCache = null
   cache = null
 }

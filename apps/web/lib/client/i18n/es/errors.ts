@@ -43,12 +43,17 @@ export const errors: typeof En = {
   payment: {
     amountRequired: 'Ingresa un monto',
     zeroAmountInvoice: 'Ingresa un monto para esta factura sin monto',
-    npubUnsupported: 'Todavía no se pueden enviar zaps a npubs'
+    npubUnsupported: 'Todavía no se pueden enviar zaps a npubs',
+    keysendUnsupported:
+      'Tu billetera no puede pagar directamente a un nodo (keysend). Pide una factura o una Lightning Address.'
   },
   nwc: {
     relayOffline:
       'No se pudo conectar con tu billetera. Su relay parece estar desconectado — revisa la conexión de la billetera e inténtalo de nuevo.',
     timeout: 'Tu billetera no respondió a tiempo. Inténtalo de nuevo.',
+    noRoute: 'No se encontró ruta para pagar.',
+    noRouteToNode:
+      'No se encontró ruta hasta el nodo. Pedile un invoice o una LN address si tiene.',
     generic: 'Algo salió mal. Inténtalo de nuevo.'
   }
 }

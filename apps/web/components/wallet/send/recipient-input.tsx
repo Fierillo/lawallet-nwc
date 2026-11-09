@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,7 +12,20 @@ import {
   sendActions,
   type ResolvedRecipient
 } from '@/lib/client/wallet-flow-store'
-import { contactsActions } from '@/lib/client/contacts-store'
+import { useAuth } from '@/components/admin/auth-context'
+import { invalidateApiPath, useApi } from '@/lib/client/hooks/use-api'
+import { COUNTERPARTY_ALIASES_PATH } from '@/lib/client/hooks/use-counterparty-aliases'
+import { counterpartyNodeKey } from '@/lib/client/transaction-counterparty'
+import {
+  contactsActions,
+  savedRecipientPayload,
+  SAVED_RECIPIENTS_PATH,
+  type SavedRecipient
+} from '@/lib/client/contacts-store'
+import {
+  backfillSavedRecipients,
+  seedContactsFromHistory
+} from '@/lib/client/recipient-backfill'
 import { useT } from '@/lib/client/i18n'
 import { errorText } from '@/lib/client/i18n/errors'
 
@@ -28,6 +41,26 @@ export function RecipientInput() {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const { apiClient } = useAuth()
+  const { data: aliasData } = useApi<{ aliases?: Record<string, string> }>(
+    COUNTERPARTY_ALIASES_PATH
+  )
+  // Recipients used on other devices, folded into this device's list.
+  const { data: saved } = useApi<{ recipients: SavedRecipient[] }>(
+    SAVED_RECIPIENTS_PATH
+  )
+  // This device's past payments count even if the account list never loads.
+  useEffect(() => {
+    seedContactsFromHistory()
+  }, [])
+  // Then this device's past recipients go up once, so the others get them.
+  useEffect(() => {
+    if (!saved?.recipients) return
+    contactsActions.mergeRemote(saved.recipients)
+    void backfillSavedRecipients(saved.recipients, body =>
+      apiClient.post(SAVED_RECIPIENTS_PATH, body)
+    )
+  }, [apiClient, saved])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -83,14 +116,27 @@ export function RecipientInput() {
         }
       }
 
+      // A node has no profile to fetch; the user's alias is its name.
+      if (destination.kind === 'keysend') {
+        const alias =
+          aliasData?.aliases?.[counterpartyNodeKey(destination.pubkey)]
+        if (alias) recipient.profile = { name: alias, image: null }
+      }
+
       sendActions.setRecipient(recipient)
 
       if (destination.kind === 'lnurl-pay' && destination.address) {
-        contactsActions.upsertRecent({
+        const contact = contactsActions.upsertRecent({
           lightningAddress: destination.address,
           name: recipient.profile?.name ?? destination.username,
           avatarUrl: recipient.profile?.image ?? undefined
         })
+        // Best effort: the account copy must never block a payment.
+        if (contact) {
+          apiClient
+            .put(SAVED_RECIPIENTS_PATH, savedRecipientPayload(contact))
+            .catch(() => {})
+        }
         void contactsActions.hydrateNip05Profile(destination.address)
       }
 
@@ -108,6 +154,11 @@ export function RecipientInput() {
       // Leave the spinner up — this screen unmounts when the next one loads.
     } catch (err) {
       const message = errorText(t, err, t.send.invalidRecipient)
+      void contactsActions.syncPaymentFailure(trimmedValue, message, body =>
+        apiClient
+          .put(SAVED_RECIPIENTS_PATH, body)
+          .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+      )
       setError(message)
       toast.error(message)
       setLoading(false)
@@ -130,6 +181,8 @@ export function RecipientInput() {
           id="recipient"
           variant="inline"
           allowNonAddress
+          hideSuggestions
+          allowNodes
           value={value}
           onChange={next => {
             setValue(next)

@@ -13,7 +13,8 @@ export const send: typeof En = {
     invoice: 'Factura Lightning',
     address: 'Dirección Lightning',
     nostrProfile: 'Perfil de Nostr',
-    nostrZap: 'Zap de Nostr'
+    nostrZap: 'Zap de Nostr',
+    node: 'Nodo Lightning'
   },
   amount: {
     notePlaceholder: 'Agrega una nota (opcional)',

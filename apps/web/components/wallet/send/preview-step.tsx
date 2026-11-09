@@ -14,6 +14,7 @@ import {
 } from '@/lib/client/wallet-flow-store'
 import {
   contactsActions,
+  SAVED_RECIPIENTS_PATH,
   useContacts,
   type Contact
 } from '@/lib/client/contacts-store'
@@ -164,22 +165,40 @@ export function SendPreviewStep() {
     void quotePayment(
       flow.recipient.destination,
       flow.amountSats,
-      flow.comment || undefined
+      flow.comment || undefined,
+      effectiveNwc
     ).then(
       quote => {
         if (!cancelled) setQuoteState({ key: quoteKey, status: 'ready', quote })
       },
       err => {
         const message = errorText(t, err, t.send.preview.quoteFailed)
-        if (!cancelled)
+        if (!cancelled) {
+          void contactsActions.syncPaymentFailure(
+            flow.recipient!.raw,
+            message,
+            body =>
+              apiClient
+                .put(SAVED_RECIPIENTS_PATH, body)
+                .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+          )
           setQuoteState({ key: quoteKey, status: 'error', message })
+        }
       }
     )
 
     return () => {
       cancelled = true
     }
-  }, [quoteKey, flow.recipient, flow.amountSats, flow.comment, t])
+  }, [
+    quoteKey,
+    flow.recipient,
+    flow.amountSats,
+    flow.comment,
+    effectiveNwc,
+    t,
+    apiClient
+  ])
 
   const typedNote = flow.comment.trim()
   const acceptedNote =
@@ -228,9 +247,14 @@ export function SendPreviewStep() {
         return
       }
       const result = await payQuotedInvoice(nwc, currentQuote.quote)
-      const paymentHash = paymentHashFromBolt11(
-        currentQuote.quote.paymentRequest
+      void contactsActions.syncPaymentFailure(flow.recipient!.raw, null, body =>
+        apiClient
+          .put(SAVED_RECIPIENTS_PATH, body)
+          .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
       )
+      const paymentHash =
+        result.paymentHash ??
+        paymentHashFromBolt11(currentQuote.quote.paymentRequest)
       if (lightningAddress) {
         rememberPaymentDestination(paymentHash, {
           address: lightningAddress,
@@ -251,7 +275,17 @@ export function SendPreviewStep() {
       })
       router.replace('/wallet/send/summary')
     } catch (err) {
-      const message = nwcErrorText(t, err, t.send.preview.paymentFailed)
+      const message = nwcErrorText(t, err, t.send.preview.paymentFailed, {
+        keysend: Boolean(currentQuote.quote.keysendPubkey)
+      })
+      void contactsActions.syncPaymentFailure(
+        flow.recipient!.raw,
+        message,
+        body =>
+          apiClient
+            .put(SAVED_RECIPIENTS_PATH, body)
+            .then(() => invalidateApiPath(SAVED_RECIPIENTS_PATH))
+      )
       sendActions.setError(message)
       toast.error(message)
       setPaying(false)
@@ -667,6 +701,8 @@ function labelForRecipient(recipient: ResolvedRecipient, t: Dict): string {
       return t.send.kind.address
     case 'npub':
       return t.send.kind.nostrProfile
+    case 'keysend':
+      return t.send.kind.node
     default:
       return recipient.raw
   }
@@ -690,6 +726,8 @@ function labelForKind(kind: string, t: Dict): string {
       return t.send.kind.address
     case 'npub':
       return t.send.kind.nostrZap
+    case 'keysend':
+      return t.send.kind.node
     default:
       return kind
   }

@@ -54,6 +54,7 @@ export const DEMO_ACTIVITY_OUTGOING: NwcTransaction = {
   type: 'outgoing',
   amountSats: 21000,
   feesPaidSats: 3,
+  feesPaidMsats: 3_000,
   description: 'satoshi@example.com',
   paymentHash:
     'b591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e',

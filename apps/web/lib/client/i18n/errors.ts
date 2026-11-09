@@ -54,8 +54,11 @@ export function errorText(t: Dict, err: unknown, fallback: string): string {
 export function nwcErrorText(
   t: Dict,
   err: unknown,
-  fallback = t.errors.nwc.generic
+  fallback = t.errors.nwc.generic,
+  /** Keysend pays a node, so a missing route reads differently. */
+  options: { keysend?: boolean } = {}
 ): string {
   const kind = nwcErrorKind(err)
+  if (kind === 'noRoute' && options.keysend) return t.errors.nwc.noRouteToNode
   return kind ? t.errors.nwc[kind] : errorText(t, err, fallback)
 }

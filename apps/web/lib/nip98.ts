@@ -34,23 +34,45 @@ function decodeNip98Token(base64Event: string): NostrEvent {
  *
  * NIP-98 requires the `u` tag to equal the absolute request URL. When the
  * admin has configured `endpoint` (this instance's true public URL) that is
- * the **only** accepted origin: `Host` / `X-Forwarded-*` are client-supplied
- * wherever the app is reachable without a header-rewriting proxy, so trusting
- * them would accept a token the user signed for another site.
+ * the **only** accepted origin outside Vercel Preview: `Host` /
+ * `X-Forwarded-*` are client-supplied wherever the app is reachable without a
+ * header-rewriting proxy, so trusting them would accept a token the user
+ * signed for another site.
  *
- * Without a configured endpoint the instance has no other notion of its own
- * URL, so the request headers are used — the fresh-install / local-dev path.
+ * On Vercel Preview, also accept the deployment and branch URLs supplied by
+ * Vercel's server-side system metadata. Never derive Preview trust from request
+ * headers: a signature for an unrelated site must not authenticate here.
+ *
+ * Outside Preview, without a configured endpoint the request headers are used
+ * as the fresh-install / local-dev fallback.
  */
 async function resolveCandidateOrigins(request: Request): Promise<Set<string>> {
+  let configured: string | null = null
   try {
-    const configured = await resolveConfiguredApiUrl()
-    if (configured) return new Set([configured])
+    configured = await resolveConfiguredApiUrl()
   } catch {
-    // Settings unavailable (e.g. fresh install or unit context) — fall back to
-    // the request headers below.
+    // Settings unavailable: Preview still requires pinned metadata; only the
+    // non-Preview fresh-install path may fall back to request headers.
   }
 
   const origins = new Set<string>()
+  if (configured) origins.add(configured)
+
+  if (process.env.VERCEL_ENV === 'preview') {
+    for (const host of [
+      process.env.VERCEL_URL,
+      process.env.VERCEL_BRANCH_URL
+    ]) {
+      if (host) origins.add(`https://${host}`)
+    }
+    if (origins.size === 0) {
+      throw new Error('No trusted Preview origin is configured')
+    }
+    return origins
+  }
+
+  // Outside Preview, a configured endpoint remains the only trusted origin.
+  if (configured) return origins
 
   const forwardedHost = request.headers.get('x-forwarded-host')
   const forwardedProto = request.headers.get('x-forwarded-proto')

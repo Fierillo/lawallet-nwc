@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   contactsActions,
+  readContactFailures,
+  savedRecipientPayload,
   __resetContactsCacheForTests
 } from '@/lib/client/contacts-store'
 
@@ -171,5 +173,172 @@ describe('contacts-store', () => {
     expect(
       JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
     ).toHaveLength(0)
+  })
+
+  it('merges server recipients into the local cache by last use', () => {
+    contactsActions.add({
+      name: 'Local Bob',
+      lightningAddress: 'bob@example.com'
+    })
+    const local = JSON.parse(
+      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+    )[0]
+
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'carol@example.com',
+        name: 'Carol',
+        avatarUrl: 'https://example.com/carol.png',
+        lastUsedAt: new Date(local.createdAt + 60_000).toISOString()
+      },
+      {
+        lightningAddress: 'bob@example.com',
+        name: 'Server Bob',
+        avatarUrl: 'https://example.com/bob.png',
+        lastUsedAt: new Date(local.createdAt - 60_000).toISOString()
+      },
+      {
+        lightningAddress: 'dave@example.com',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date(local.createdAt - 120_000).toISOString()
+      }
+    ])
+
+    const stored = JSON.parse(
+      window.localStorage.getItem('lawallet-contacts') ?? '[]'
+    )
+    expect(
+      stored.map((c: { lightningAddress: string }) => c.lightningAddress)
+    ).toEqual(['carol@example.com', 'bob@example.com', 'dave@example.com'])
+    // Local data wins; the server only fills what the device is missing.
+    expect(stored[1]).toMatchObject({
+      id: local.id,
+      name: 'Local Bob',
+      avatarUrl: 'https://example.com/bob.png',
+      createdAt: local.createdAt
+    })
+    expect(stored[2].name).toBe('dave')
+  })
+
+  it('ignores malformed server addresses', () => {
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'not-an-address',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString()
+      }
+    ])
+    expect(
+      JSON.parse(window.localStorage.getItem('lawallet-contacts') ?? '[]')
+    ).toHaveLength(0)
+  })
+
+  it('builds a server payload that the API accepts', () => {
+    expect(
+      savedRecipientPayload({
+        lightningAddress: 'alice@example.com',
+        name: ' Alice ',
+        avatarUrl: 'https://example.com/a.png'
+      })
+    ).toEqual({
+      lightningAddress: 'alice@example.com',
+      name: 'Alice',
+      avatarUrl: 'https://example.com/a.png'
+    })
+    // LUD-06 inline images and oversized names are dropped, not rejected.
+    expect(
+      savedRecipientPayload({
+        lightningAddress: 'alice@example.com',
+        name: 'x'.repeat(200),
+        avatarUrl: 'data:image/png;base64,AAAA'
+      })
+    ).toEqual({
+      lightningAddress: 'alice@example.com',
+      name: 'x'.repeat(80),
+      avatarUrl: null
+    })
+  })
+})
+
+describe('contact payment alerts', () => {
+  beforeEach(() => contactsActions.clear())
+
+  it('persists failures for addresses and nodes and clears only a successful recipient', () => {
+    const node = '02' + 'ab'.repeat(32)
+    contactsActions.setPaymentFailure(
+      ' Alice@Example.com ',
+      'Pedile un invoice.'
+    )
+    contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+    __resetContactsCacheForTests()
+    expect(readContactFailures()['alice@example.com']).toBe(
+      'Pedile un invoice.'
+    )
+    contactsActions.setPaymentFailure('alice@example.com', null)
+    __resetContactsCacheForTests()
+    expect(readContactFailures()['alice@example.com']).toBeUndefined()
+    expect(readContactFailures()[node]).toBe('No se encontró ruta.')
+  })
+})
+
+describe('account recipient alerts', () => {
+  it('uses the account state as authoritative, including cleared flags and alias-only nodes', () => {
+    const node = '02' + 'ab'.repeat(32)
+    contactsActions.clear()
+    contactsActions.setPaymentFailure(
+      'alice@example.com',
+      'stale local failure'
+    )
+    contactsActions.mergeRemote([
+      {
+        lightningAddress: 'alice@example.com',
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString(),
+        lastFailureReason: null,
+        lastFailureAt: null
+      },
+      {
+        lightningAddress: node,
+        name: null,
+        avatarUrl: null,
+        lastUsedAt: new Date().toISOString(),
+        lastFailureReason: 'Pedile un invoice.',
+        lastFailureAt: new Date().toISOString()
+      }
+    ])
+    expect(readContactFailures()['alice@example.com']).toBeUndefined()
+    expect(readContactFailures()[node]).toBe('Pedile un invoice.')
+  })
+})
+
+describe('syncing account failures', () => {
+  it('sends failure and success to the account without blocking local alerts on network errors', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    await contactsActions.syncPaymentFailure(
+      'ALICE@example.com',
+      'Pedile un invoice.',
+      save
+    )
+    expect(save).toHaveBeenLastCalledWith({
+      lightningAddress: 'alice@example.com',
+      lastFailureReason: 'Pedile un invoice.'
+    })
+    await contactsActions.syncPaymentFailure('alice@example.com', null, save)
+    expect(save).toHaveBeenLastCalledWith({
+      lightningAddress: 'alice@example.com',
+      lastFailureReason: null
+    })
+    save.mockRejectedValue(new Error('offline'))
+    await expect(
+      contactsActions.syncPaymentFailure(
+        'alice@example.com',
+        'Reintentá.',
+        save
+      )
+    ).resolves.toBeUndefined()
+    expect(readContactFailures()['alice@example.com']).toBe('Reintentá.')
   })
 })

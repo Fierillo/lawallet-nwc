@@ -215,6 +215,121 @@
           "label"
         ]
       },
+      "TransactionNoteUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "note"
+        ]
+      },
+      "CounterpartyAliasKey": {
+        "type": "string",
+        "maxLength": 80
+      },
+      "CounterpartyAliasUpdateRequest": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "alias": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "key",
+          "alias"
+        ]
+      },
+      "SavedRecipientSaveRequest": {
+        "type": "object",
+        "properties": {
+          "lightningAddress": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(?:[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}|0[23][a-f0-9]{64})$"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 80
+          },
+          "avatarUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 2048,
+            "format": "uri"
+          },
+          "lastFailureReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "lightningAddress"
+        ]
+      },
+      "SavedRecipientImportRequest": {
+        "type": "object",
+        "properties": {
+          "recipients": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "lightningAddress": {
+                  "type": "string",
+                  "maxLength": 200,
+                  "pattern": "^(?:[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}|0[23][a-f0-9]{64})$"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 80
+                },
+                "avatarUrl": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "maxLength": 2048,
+                  "format": "uri"
+                },
+                "lastUsedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "lightningAddress",
+                "lastUsedAt"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "recipients"
+        ]
+      },
       "CardCreateRequest": {
         "type": "object",
         "properties": {
@@ -10062,6 +10177,668 @@
                   },
                   "required": [
                     "label"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/transactions/{paymentHash}/note": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Read the caller’s private transaction note.",
+        "description": "Free-text notes are scoped to the authenticated account and never shared with counterparties. A hash without a note returns null.",
+        "operationId": "wallet.transactions.note.get",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            },
+            "required": true,
+            "name": "paymentHash",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Private note (never publicly cached).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "note"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Save or remove the caller’s private transaction note.",
+        "description": "Upserts a note for this account and payment hash. Notes are trimmed and limited to 80 characters. Saving an empty note removes it.",
+        "operationId": "wallet.transactions.note.set",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{64}$"
+            },
+            "required": true,
+            "name": "paymentHash",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransactionNoteUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved note, or null if removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "note": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "note"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/counterparty-aliases": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "List the caller’s counterparty aliases.",
+        "description": "Returns every Lightning Address / payee-node display alias for the authenticated account as a key→alias map.",
+        "operationId": "wallet.counterpartyAliases.list",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alias map (never publicly cached).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "aliases": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "aliases"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Save or remove a counterparty alias.",
+        "description": "Upserts an alias for `ln:<address>` or `node:<pubkey>`. Empty alias removes it. Aliases apply to every transaction with that counterparty.",
+        "operationId": "wallet.counterpartyAliases.set",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CounterpartyAliasUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved alias, or null if removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "alias": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "alias"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/wallet/recipients": {
+      "get": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "List the caller’s recent Lightning recipients and payment alerts.",
+        "description": "Returns up to 50 saved send recipients for the authenticated account, most recently used first.",
+        "operationId": "wallet.recipients.list",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved recipients (never publicly cached).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recipients": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lightningAddress": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "avatarUrl": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastUsedAt": {
+                            "type": "string"
+                          },
+                          "lastFailureReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastFailureAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "lightningAddress",
+                          "name",
+                          "avatarUrl",
+                          "lastUsedAt",
+                          "lastFailureReason",
+                          "lastFailureAt"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "recipients"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Save a Lightning Address or keysend node as a recent recipient.",
+        "description": "Upserts the address for the authenticated account and bumps its last-used time. Omitted name/avatar/failure keep stored values. lastFailureReason records an alert (up to 500 characters); null clears it. lastFailureAt is assigned by the server. Alias-only addresses and compressed node public keys are upserted for the caller.",
+        "operationId": "wallet.recipients.save",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedRecipientSaveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved address.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lightningAddress": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "lightningAddress"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request payload failed Zod validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Caller is authenticated but lacks the required role or permission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unhandled server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "x-required-role": "USER",
+        "tags": [
+          "Wallet"
+        ],
+        "summary": "Backfill recent send recipients from payment history.",
+        "description": "Inserts up to 50 Lightning recipients (addresses or keysend nodes) with their own last-used time. Addresses the account already has are left untouched.",
+        "operationId": "wallet.recipients.import",
+        "security": [
+          {
+            "BearerJWT": []
+          },
+          {
+            "NIP98": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedRecipientImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number of new recipients stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "inserted": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "inserted"
                   ]
                 }
               }

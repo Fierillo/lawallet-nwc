@@ -7,6 +7,8 @@ import { requestLnurlInvoice } from '@/lib/client/lnurl-invoice'
 export interface PayResult {
   preimage: string
   feesPaidSats: number
+  /** Set for keysend, where there is no invoice to read the hash from. */
+  paymentHash?: string | null
 }
 
 export interface PaymentQuote {
@@ -19,12 +21,15 @@ export interface PaymentQuote {
   feeQuoteMessage: string
   /** LUD-12 comment embedded in this invoice. Null when none was sent. */
   comment: string | null
+  /** Node to pay with `pay_keysend`; `paymentRequest` is empty then. */
+  keysendPubkey?: string
 }
 
 export type PaymentInputErrorCode =
   | 'amountRequired'
   | 'zeroAmountInvoice'
   | 'npubUnsupported'
+  | 'keysendUnsupported'
 
 /** Bad pay/quote input. `code` lets the wallet localize the message. */
 export class PaymentInputError extends Error {
@@ -66,6 +71,54 @@ export async function payInvoice(
   }
 }
 
+const walletMethods = new Map<string, Promise<string[] | null>>()
+
+/**
+ * The NIP-47 methods this connection advertises, asked once per connection.
+ * Null when the wallet can't say (offline, timeout): callers then let the
+ * payment try rather than block on a probe.
+ */
+function getWalletMethods(nwcString: string): Promise<string[] | null> {
+  let methods = walletMethods.get(nwcString)
+  if (!methods) {
+    methods = getNwcClient(nwcString)
+      .then(client => client.getInfo())
+      .then(info =>
+        Array.isArray(info.methods) ? info.methods.map(String) : []
+      )
+      .catch(() => {
+        walletMethods.delete(nwcString)
+        return null
+      })
+    walletMethods.set(nwcString, methods)
+  }
+  return methods
+}
+
+async function sha256Hex(hex: string): Promise<string | null> {
+  if (!/^([0-9a-f]{2})+$/i.test(hex)) return null
+  const bytes = new Uint8Array(hex.match(/../g)!.map(b => parseInt(b, 16)))
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  return Array.from(new Uint8Array(digest), b =>
+    b.toString(16).padStart(2, '0')
+  ).join('')
+}
+
+/** Pays a node directly with NIP-47 `pay_keysend` (no invoice). */
+export async function payKeysend(
+  nwcString: string,
+  pubkey: string,
+  amountSats: number
+): Promise<PayResult> {
+  const client = await getNwcClient(nwcString)
+  const res = await client.payKeysend({ amount: amountSats * 1000, pubkey })
+  return {
+    preimage: res.preimage,
+    feesPaidSats: Math.floor((res.fees_paid ?? 0) / 1000),
+    paymentHash: await sha256Hex(res.preimage)
+  }
+}
+
 /**
  * Resolves a LUD-16 / LNURL-pay destination to a bolt11 invoice for the
  * requested amount, then pays it. Returns the preimage on success.
@@ -92,8 +145,32 @@ export async function payLnurl(
 export async function quotePayment(
   destination: ParsedDestination,
   amountSats: number | null,
-  comment?: string
+  comment?: string,
+  /** Needed for keysend, to check the wallet offers `pay_keysend`. */
+  nwcString?: string | null
 ): Promise<PaymentQuote> {
+  if (destination.kind === 'keysend') {
+    if (amountSats === null || amountSats <= 0)
+      throw new PaymentInputError('amountRequired', 'Enter an amount')
+    const methods = nwcString ? await getWalletMethods(nwcString) : null
+    if (methods && !methods.includes('pay_keysend')) {
+      throw new PaymentInputError(
+        'keysendUnsupported',
+        'Your wallet cannot pay a node directly (pay_keysend)'
+      )
+    }
+    return {
+      paymentRequest: '',
+      keysendPubkey: destination.pubkey,
+      amountSats,
+      expiresAt: null,
+      feeSats: null,
+      feeQuoteStatus: 'unavailable',
+      feeQuoteMessage: NWC_FEE_QUOTE_UNAVAILABLE,
+      comment: null
+    }
+  }
+
   if (destination.kind === 'invoice') {
     if (
       destination.amountSats === null &&
@@ -153,6 +230,9 @@ export async function payQuotedInvoice(
   nwcString: string,
   quote: PaymentQuote
 ): Promise<PayResult> {
+  if (quote.keysendPubkey) {
+    return payKeysend(nwcString, quote.keysendPubkey, quote.amountSats)
+  }
   return payInvoice(nwcString, quote.paymentRequest, quote.payAmountSats)
 }
 
@@ -183,6 +263,12 @@ export async function pay(
     )
   }
 
+  if (destination.kind === 'keysend') {
+    if (amountSats === null || amountSats <= 0)
+      throw new PaymentInputError('amountRequired', 'Enter an amount')
+    return payKeysend(nwcString, destination.pubkey, amountSats)
+  }
+
   if (destination.kind === 'lnurl-pay') {
     if (amountSats === null || amountSats <= 0)
       throw new PaymentInputError('amountRequired', 'Enter an amount')
@@ -201,4 +287,9 @@ export async function pay(
     'npubUnsupported',
     'Zaps to npubs are not supported yet'
   )
+}
+
+/** Test-only. */
+export function __resetWalletMethodsForTests(): void {
+  walletMethods.clear()
 }

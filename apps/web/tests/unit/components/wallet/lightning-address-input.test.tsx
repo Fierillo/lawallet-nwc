@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { __resetContactsCacheForTests } from '@/lib/client/contacts-store'
+import {
+  contactsActions,
+  __resetContactsCacheForTests
+} from '@/lib/client/contacts-store'
 import {
   LightningAddressInput,
   knownAvatarFor
@@ -10,8 +13,17 @@ import {
 import { writeAvatar } from '@/lib/client/cache/avatar-cache'
 import type { Contact } from '@/lib/client/contacts-store'
 
+const { aliases } = vi.hoisted(() => ({
+  aliases: { current: {} as Record<string, string> }
+}))
+
 vi.mock('@/lib/client/hooks/use-api', () => ({
-  useApi: () => ({ data: { lightningAddress: 'me@lawallet.io' } })
+  useApi: (path: string | null) => ({
+    data:
+      path === '/api/wallet/counterparty-aliases'
+        ? { aliases: aliases.current }
+        : { lightningAddress: 'me@lawallet.io' }
+  })
 }))
 
 function seedContacts(count: number) {
@@ -37,10 +49,377 @@ describe('LightningAddressInput', () => {
   beforeEach(() => {
     window.localStorage.clear()
     __resetContactsCacheForTests()
+    aliases.current = {}
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(null, { status: 404 }))
     )
+  })
+
+  it('shows a corner warning with its reason on saved addresses and aliased nodes', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    aliases.current = { [`node:${node}`]: 'Fiwind' }
+    contactsActions.setPaymentFailure(
+      'user0@lawallet.io',
+      'Pedile una LN address.'
+    )
+    contactsActions.setPaymentFailure(
+      node,
+      'No se encontró ruta hasta el nodo.'
+    )
+    render(<Harness variant="inline" hideSuggestions allowNodes />)
+    expect(screen.getByLabelText('Pedile una LN address.')).toHaveAttribute(
+      'aria-label',
+      'Pedile una LN address.'
+    )
+    expect(
+      screen.getByLabelText('No se encontró ruta hasta el nodo.')
+    ).toHaveClass('absolute', 'right-1', 'top-1')
+    expect(screen.getAllByRole('option')).toHaveLength(2)
+  })
+
+  it('marks saved Lightning Addresses with a green @ beside any warning, but not keysend nodes', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    aliases.current = {
+      [`node:${node}`]: 'Fiwind',
+      'ln:alice@example.com': 'Alice'
+    }
+    contactsActions.setPaymentFailure('user0@lawallet.io', 'Pedile un invoice.')
+    render(<Harness variant="inline" allowNodes />)
+
+    const saved = screen.getByRole('group', { name: 'Saved' })
+    const addressOption = within(saved).getByRole('option', {
+      name: /user0@lawallet.io/
+    })
+    const badge = within(addressOption).getByLabelText(
+      'Este contacto tiene Lightning Address'
+    )
+    expect(badge).toHaveAttribute(
+      'aria-label',
+      'Este contacto tiene Lightning Address'
+    )
+    expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-green-500')
+    expect(badge.querySelector('svg')).toHaveClass('size-3.5')
+    expect(
+      within(addressOption).getByLabelText('Pedile un invoice.')
+    ).toHaveClass('right-1', 'top-1')
+    expect(addressOption).toHaveClass('pr-12')
+
+    const aliasOption = within(saved).getByRole('option', { name: /Alice/ })
+    expect(
+      within(aliasOption).getByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
+    ).toHaveClass('right-1')
+    const nodeOption = within(saved).getByRole('option', { name: /Fiwind/ })
+    expect(
+      within(nodeOption).queryByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
+    ).toBeNull()
+    expect(
+      screen.getAllByLabelText('Este contacto tiene Lightning Address')
+    ).toHaveLength(2)
+  })
+
+  it('marks Lightning nodes with a violet network badge before any warning, without an @', () => {
+    seedContacts(1)
+    const node = '02' + 'ab'.repeat(32)
+    const otherNode = '03' + 'cd'.repeat(32)
+    aliases.current = {
+      [`node:${node}`]: 'Fiwind',
+      [`node:${otherNode}`]: 'Otro nodo'
+    }
+    contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+    render(<Harness variant="inline" hideSuggestions allowNodes />)
+
+    const failedOption = screen.getByRole('option', { name: /Fiwind/ })
+    const badge = within(failedOption).getByLabelText(
+      'Este contacto es un nodo Lightning'
+    )
+    expect(badge).toHaveAttribute(
+      'aria-label',
+      'Este contacto es un nodo Lightning'
+    )
+    expect(badge).toHaveClass('absolute', 'top-1', 'right-6', 'text-violet-500')
+    expect(badge.querySelector('svg')).toHaveClass('size-3.5', 'lucide-network')
+    expect(
+      within(failedOption).getByLabelText('No se encontró ruta.')
+    ).toHaveClass('right-1', 'top-1')
+    expect(failedOption).toHaveClass('pr-12')
+    expect(
+      within(failedOption).queryByLabelText(
+        'Este contacto tiene Lightning Address'
+      )
+    ).toBeNull()
+
+    const normalOption = screen.getByRole('option', { name: /Otro nodo/ })
+    expect(
+      within(normalOption).getByLabelText('Este contacto es un nodo Lightning')
+    ).toHaveClass('right-1')
+    const addressOption = screen.getByRole('option', {
+      name: /user0@lawallet.io/
+    })
+    expect(
+      within(addressOption).queryByLabelText(
+        'Este contacto es un nodo Lightning'
+      )
+    ).toBeNull()
+    expect(
+      screen.getAllByLabelText('Este contacto es un nodo Lightning')
+    ).toHaveLength(2)
+  })
+
+  it.each([
+    ['Este contacto tiene Lightning Address', 'user0@lawallet.io'],
+    ['Este contacto es un nodo Lightning', 'Fiwind'],
+    ['No se encontró ruta.', 'Fiwind']
+  ])(
+    'opens %s on touch without choosing the contact, toggles and dismisses outside',
+    async (reason, recipientLabel) => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      seedContacts(1)
+      const node = '02' + 'ab'.repeat(32)
+      aliases.current = { [`node:${node}`]: 'Fiwind' }
+      contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+      render(
+        <>
+          <Harness
+            variant="inline"
+            hideSuggestions
+            allowNodes
+            onSelect={onSelect}
+          />
+          <button type="button">Fuera</button>
+        </>
+      )
+      const badge = screen.getByLabelText(reason)
+      expect(badge.tagName).toBe('BUTTON')
+      expect(badge.closest('[role="option"]')?.tagName).not.toBe('BUTTON')
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      const explanation = await screen.findByRole('dialog', { name: reason })
+      expect(explanation).toHaveTextContent(reason)
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.click(explanation)
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      await user.pointer({ keys: '[TouchA]', target: badge })
+      await screen.findByRole('dialog', { name: reason })
+      await user.pointer({
+        keys: '[TouchA]',
+        target: screen.getByRole('button', { name: 'Fuera' })
+      })
+      expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      expect(onSelect).not.toHaveBeenCalled()
+      await user.pointer({
+        keys: '[TouchA]',
+        target: screen.getByText(recipientLabel)
+      })
+      expect(onSelect).toHaveBeenCalledWith(
+        recipientLabel === 'Fiwind' ? node : recipientLabel
+      )
+    }
+  )
+
+  it('dismisses an explanation when another badge is tapped', async () => {
+    const user = userEvent.setup()
+    seedContacts(1)
+    contactsActions.setPaymentFailure('user0@lawallet.io', 'Pedile un invoice.')
+    render(<Harness variant="inline" hideSuggestions />)
+    await user.pointer({
+      keys: '[TouchA]',
+      target: screen.getByLabelText('Este contacto tiene Lightning Address')
+    })
+    await screen.findByRole('dialog', {
+      name: 'Este contacto tiene Lightning Address'
+    })
+    await user.pointer({
+      keys: '[TouchA]',
+      target: screen.getByLabelText('Pedile un invoice.')
+    })
+    expect(
+      await screen.findByRole('dialog', { name: 'Pedile un invoice.' })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('dialog', {
+        name: 'Este contacto tiene Lightning Address'
+      })
+    ).toBeNull()
+  })
+
+  it.each([
+    'Este contacto tiene Lightning Address',
+    'Este contacto es un nodo Lightning',
+    'No se encontró ruta.'
+  ])(
+    'uses the same popover for fine-pointer hover and pinned clicks: %s',
+    reason => {
+      vi.useFakeTimers()
+      vi.stubGlobal(
+        'matchMedia',
+        vi.fn(() => ({ matches: true }))
+      )
+      try {
+        const onSelect = vi.fn()
+        seedContacts(1)
+        const node = '02' + 'ab'.repeat(32)
+        aliases.current = { [`node:${node}`]: 'Fiwind' }
+        contactsActions.setPaymentFailure(node, 'No se encontró ruta.')
+        render(
+          <Harness
+            variant="inline"
+            hideSuggestions
+            allowNodes
+            onSelect={onSelect}
+          />
+        )
+        const badge = screen.getByRole('button', { name: reason })
+        expect(badge).not.toHaveAttribute('title')
+        fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        const explanation = screen.getByRole('dialog', { name: reason })
+        expect(explanation).toHaveTextContent(reason)
+        fireEvent.pointerLeave(badge, { pointerType: 'mouse' })
+        fireEvent.pointerEnter(explanation, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(explanation).toBeInTheDocument()
+        fireEvent.pointerLeave(explanation, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+        fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.getByRole('dialog', { name: reason })).toHaveClass(
+          'px-3',
+          'py-2',
+          'text-xs'
+        )
+        fireEvent.click(badge)
+        fireEvent.pointerLeave(badge, { pointerType: 'mouse' })
+        act(() => {
+          vi.advanceTimersByTime(250)
+        })
+        expect(screen.getByRole('dialog', { name: reason })).toBeInTheDocument()
+        expect(onSelect).not.toHaveBeenCalled()
+        fireEvent.click(badge)
+        expect(screen.queryByRole('dialog', { name: reason })).toBeNull()
+      } finally {
+        vi.useRealTimers()
+      }
+    }
+  )
+
+  it('ignores touch hover and coarse-pointer compatibility hover', () => {
+    vi.useFakeTimers()
+    const media = vi.fn(() => ({ matches: true }))
+    vi.stubGlobal('matchMedia', media)
+    try {
+      seedContacts(1)
+      render(<Harness variant="inline" hideSuggestions />)
+      const badge = screen.getByRole('button', {
+        name: 'Este contacto tiene Lightning Address'
+      })
+      fireEvent.pointerEnter(badge, { pointerType: 'touch' })
+      act(() => vi.advanceTimersByTime(250))
+      expect(screen.queryByRole('dialog')).toBeNull()
+      media.mockReturnValue({ matches: false })
+      fireEvent.pointerEnter(badge, { pointerType: 'mouse' })
+      act(() => vi.advanceTimersByTime(250))
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('finds a saved recipient by the alias the user gave it', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    aliases.current = { 'ln:user1@lawallet.io': 'Mamá' }
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'MAM')
+
+    const saved = screen.getByRole('group', { name: 'Saved' })
+    const options = within(saved).getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('Mamá')
+    expect(options[0]).toHaveTextContent('user1@lawallet.io')
+  })
+
+  it('finds a saved recipient by its contact name', async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(
+      'lawallet-contacts',
+      JSON.stringify([
+        {
+          id: 'c1',
+          name: 'Satoshi Nakamoto',
+          lightningAddress: 'sn@example.com',
+          createdAt: 1
+        }
+      ])
+    )
+    __resetContactsCacheForTests()
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'naka')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toHaveTextContent(
+      'sn@example.com'
+    )
+  })
+
+  it('can hide generated domain suggestions and keep saved contacts', async () => {
+    const user = userEvent.setup()
+    seedContacts(3)
+    render(<Harness variant="inline" hideSuggestions />)
+
+    await user.type(screen.getByRole('combobox'), 'user')
+
+    expect(screen.getByRole('group', { name: 'Saved' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Suggestions' })).toBeNull()
+  })
+
+  it('still generates domain suggestions by default', async () => {
+    const user = userEvent.setup()
+    render(<Harness variant="inline" />)
+
+    await user.type(screen.getByRole('combobox'), 'ariel')
+
+    expect(
+      screen.getByRole('group', { name: 'Suggestions' })
+    ).toHaveTextContent('ariel@')
+  })
+
+  it('offers an aliased Lightning Address even when it is not a saved contact', async () => {
+    const user = userEvent.setup()
+    aliases.current = {
+      'ln:juan@blink.sv': 'fiwi',
+      ['node:02' + 'ab'.repeat(32)]: 'fiwi node'
+    }
+    render(<Harness variant="inline" hideSuggestions />)
+
+    await user.type(screen.getByRole('combobox'), 'fiwi')
+
+    const options = within(
+      screen.getByRole('group', { name: 'Saved' })
+    ).getAllByRole('option')
+    // The node alias has no address to pay, so only the address one shows.
+    expect(options).toHaveLength(1)
+    expect(options[0]).toHaveTextContent('fiwi')
+    expect(options[0]).toHaveTextContent('juan@blink.sv')
   })
 
   it('keeps the list closed until the popover field is focused', async () => {
